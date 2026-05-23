@@ -1,0 +1,233 @@
+/**
+ * Stage 7 — pipeline adapter for tool implementation.
+ *
+ *   1. Reads the Stage 6 `ToolDesignResult` (`.compile/tool-design.json`).
+ *   2. Synthesizes the four default `ToolManifest`s via
+ *      `synthesizeAllDefaultManifests` and concatenates them with the
+ *      design's `customTools` (defaults first, then customs).
+ *   3. Drives the per-tool implementation loop with `runToolImplementation`,
+ *      registering only `TemplateImplementer` for v0.1. Custom tools without
+ *      a matching implementer are recorded as `disabled` (the orchestrator's
+ *      built-in fallback for `NoImplementerForToolError`).
+ *   4. Persists per-tool final manifests as `tools/<name>.json` and the
+ *      aggregate Stage 7 output as `.compile/stage07-output.json`.
+ *
+ * `outputHash` = sha256 of the canonical Stage 7 output JSON.
+ *
+ * NOTE: This runner accepts an optional `customToolImplementer` so a future
+ * `LlmImplementer` can be wired in without changing the runner. When omitted,
+ * only the four template tools land successfully — that is the intended
+ * minimum-e2e shape for v0.1.
+ */
+
+import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { dirname, join } from "node:path";
+
+import {
+  ToolDesignResultSchema,
+  type Stage07Output,
+  type ToolDesignResult,
+  type ToolManifest,
+} from "../../core/types.ts";
+import { sha256Hex, type StageRunner } from "../pipeline.ts";
+import { toolDesignPath } from "./s06-tool-design.ts";
+import { writeFinalManifest, writeToolFiles } from "./s07/file-writer.ts";
+import {
+  TemplateImplementer,
+  synthesizeAllDefaultManifests,
+} from "./s07/template-implementer.ts";
+import {
+  runToolImplementation,
+  type ImplementationContext,
+  type LlmCodeWriter,
+  type SmokeTestRunner,
+  type ToolImplementer,
+  type TscRunner,
+} from "./s07-tool-impl.ts";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Paths + constants
+// ──────────────────────────────────────────────────────────────────────────────
+
+export const STAGE07_OUTPUT_REL_PATH = ".compile/stage07-output.json";
+
+export function stage07OutputPath(almanacDir: string): string {
+  return join(almanacDir, STAGE07_OUTPUT_REL_PATH);
+}
+
+/** Default per-tool retry budget. Templates always succeed in 1 attempt. */
+export const STAGE7_DEFAULT_MAX_ATTEMPTS = 3;
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Errors
+// ──────────────────────────────────────────────────────────────────────────────
+
+export class MissingToolDesignError extends Error {
+  constructor(public readonly path: string, public readonly cause?: unknown) {
+    super(
+      `Stage 7 requires the Stage 6 ToolDesignResult at ${path}; ` +
+        "run Stage 6 first or restore the file",
+    );
+    this.name = "MissingToolDesignError";
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Factory
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface CreateToolImplRunnerOptions {
+  /**
+   * Implementer for domain-specific custom tools. When omitted, custom tools
+   * are recorded as `disabled` with a `no implementer matched` reason — the
+   * intended v0.1 behavior until `LlmImplementer` lands.
+   */
+  customToolImplementer?: ToolImplementer;
+  /** Override `STAGE7_DEFAULT_MAX_ATTEMPTS`. */
+  maxAttempts?: number;
+  /** Test seam: read Stage 6 output. */
+  readToolDesign?: (almanacDir: string) => Promise<ToolDesignResult>;
+  /** Test seam: skip default tools (used by tests that want only customs). */
+  skipDefaults?: boolean;
+}
+
+/**
+ * Build the Stage 7 `StageRunner`. Deterministic from the runner's POV
+ * (`promptVersion = null`); the underlying templates are pure code generation.
+ */
+export function createToolImplRunner(
+  opts: CreateToolImplRunnerOptions = {},
+): StageRunner {
+  const readToolDesign = opts.readToolDesign ?? defaultReadToolDesign;
+  const maxAttempts = opts.maxAttempts ?? STAGE7_DEFAULT_MAX_ATTEMPTS;
+  const skipDefaults = opts.skipDefaults ?? false;
+
+  const implementers: ToolImplementer[] = [new TemplateImplementer()];
+  if (opts.customToolImplementer) {
+    implementers.push(opts.customToolImplementer);
+  }
+
+  return {
+    promptVersion: null,
+    async run(ctx) {
+      const design = await readToolDesign(ctx.almanacDir);
+
+      const manifests: ToolManifest[] = [];
+      if (!skipDefaults) {
+        manifests.push(...synthesizeAllDefaultManifests());
+      }
+      manifests.push(...design.customTools);
+
+      if (manifests.length === 0) {
+        // The schema requires ≥1 result; with no manifests there's nothing to
+        // write. Skip the stage rather than failing.
+        ctx.log({ event: "stage7:skipped", reason: "no-manifests" });
+        return { kind: "skipped", reason: "no-manifests" };
+      }
+
+      const implementationCtx: ImplementationContext = {
+        almanacDir: ctx.almanacDir,
+        llm: stubLlmCodeWriter,
+        tsc: stubTscRunner,
+        smoke: stubSmokeTestRunner,
+        writeToolFiles: (input) =>
+          writeToolFiles({ almanacDir: ctx.almanacDir, ...input }),
+        now: ctx.now,
+        log: ctx.log,
+      };
+
+      ctx.log({
+        event: "stage7:start",
+        defaults: skipDefaults ? 0 : manifests.length - design.customTools.length,
+        customs: design.customTools.length,
+      });
+
+      const output = await runToolImplementation({
+        manifests,
+        almanacDir: ctx.almanacDir,
+        ctx: implementationCtx,
+        implementers,
+        maxAttempts,
+      });
+
+      // Persist each tool's final manifest under tools/<name>.json so the
+      // runtime can discover them.
+      for (const r of output.results) {
+        await writeFinalManifest({
+          almanacDir: ctx.almanacDir,
+          manifest: r.finalManifest,
+        });
+      }
+
+      const canonicalText = JSON.stringify(output, null, 2);
+      const outPath = stage07OutputPath(ctx.almanacDir);
+      await mkdir(dirname(outPath), { recursive: true });
+      await writeFile(outPath, canonicalText + "\n", "utf8");
+
+      const outputHash = sha256Hex(canonicalText);
+      ctx.log({
+        event: "stage7:done",
+        outputHash,
+        implemented: output.summary.implemented,
+        disabled: output.summary.disabled,
+      });
+
+      return {
+        kind: "success",
+        outputHash,
+      };
+    },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Helpers
+// ──────────────────────────────────────────────────────────────────────────────
+
+async function defaultReadToolDesign(
+  almanacDir: string,
+): Promise<ToolDesignResult> {
+  const path = toolDesignPath(almanacDir);
+  let body: string;
+  try {
+    body = await readFile(path, "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") {
+      throw new MissingToolDesignError(path, cause);
+    }
+    throw cause;
+  }
+  return ToolDesignResultSchema.parse(JSON.parse(body));
+}
+
+// Stubs for `ImplementationContext` sub-runners that `TemplateImplementer`
+// never touches. They throw if invoked so a future regression is loud.
+
+const stubLlmCodeWriter: LlmCodeWriter = {
+  model: "stub",
+  promptVersion: "stub",
+  async generate() {
+    throw new Error(
+      "Stage 7 runner: LlmCodeWriter is unwired in v0.1 (custom tools are not implemented yet)",
+    );
+  },
+};
+
+const stubTscRunner: TscRunner = {
+  async check() {
+    throw new Error(
+      "Stage 7 runner: TscRunner is unwired in v0.1 (custom tools are not implemented yet)",
+    );
+  },
+};
+
+const stubSmokeTestRunner: SmokeTestRunner = {
+  async test() {
+    throw new Error(
+      "Stage 7 runner: SmokeTestRunner is unwired in v0.1 (custom tools are not implemented yet)",
+    );
+  },
+};
+
+// Re-export for tests that want a single import path.
+export type { Stage07Output };

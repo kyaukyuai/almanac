@@ -1,0 +1,40 @@
+# Dependencies
+node_modules/
+
+# Build outputs
+dist/
+build/
+*.tsbuildinfo
+
+# Bun
+.bun/
+
+# Runtime / compiled almanacs (default location: ~/.almanac, but a local
+# .almanac/ may appear when running with --root .)
+.almanac/
+
+# Test scratch
+coverage/
+.nyc_output/
+
+# Editor / OS
+.DS_Store
+.vscode/
+.idea/
+*.swp
+
+# Env / secrets
+.env
+.env.local
+.env.*.local
+
+# Stage scratch (pipeline writes intermediates here when targeting a workspace)
+.compile/
+
+# Logs
+*.log
+
+# Temporary files left by editors or tools
+*.tmp
+*.tmp.*
+*~

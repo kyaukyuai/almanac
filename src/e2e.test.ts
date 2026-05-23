@@ -1,0 +1,501 @@
+/**
+ * End-to-end integration test.
+ *
+ * Walks the entire compile pipeline (Stages 0–10) in-process using a mocked
+ * LLM, stub discovery, and stub fetcher. Then opens an `AlmanacRuntime` over
+ * the resulting on-disk artifacts and exercises the `query_facts` default
+ * tool to prove that real facts flow all the way from the extractor through
+ * the SQLite + FTS5 index into the runtime.
+ *
+ * No network, no real LLM: every external surface is stubbed. Cost = 0.
+ *
+ * If this test breaks, e2e is broken.
+ */
+import { afterAll, describe, expect, test } from "bun:test";
+import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
+import { mkdir } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+
+import {
+  type AlmanacManifest,
+  type ApprovedSource,
+  type CompileState,
+  type DomainSpec,
+  type ExtractionResult,
+  type SourceDiscoveryPlan,
+  type SourceFetchEntry,
+  type SourcesFile,
+  type StageId,
+  type ToolDesignResult,
+} from "./core/types.ts";
+import { AlmanacManifestSchema, CompileStateSchema } from "./core/types.ts";
+import type {
+  FetchContext,
+  Fetcher,
+} from "./compile/fetchers/types.ts";
+import { createMockProvider } from "./llm/mock.ts";
+import { runPipeline } from "./compile/pipeline.ts";
+import {
+  ensureAlmanacLayout,
+  writeCompileState,
+  writeManifest,
+} from "./compile/storage.ts";
+import { bootstrapAlmanac } from "./compile/stages/s00-bootstrap.ts";
+import { createDomainAnalysisRunner } from "./compile/stages/s01-domain-analysis.ts";
+import { createSourceDiscoveryPlannerRunner } from "./compile/stages/s02a-source-discovery-planner.ts";
+import { createSourceDiscoveryExecutorRunner } from "./compile/stages/s02x-source-discovery-executor.ts";
+import { createSourceDiscoveryEvaluatorRunner } from "./compile/stages/s02b-source-discovery-evaluator.ts";
+import { createApproveRunner } from "./compile/stages/s03-approve-runner.ts";
+import { createSourceFetchRunner } from "./compile/stages/s04-source-fetch-runner.ts";
+import { createFactExtractionRunner } from "./compile/stages/s05-fact-extraction.ts";
+import { createToolDesignRunner } from "./compile/stages/s06-tool-design.ts";
+import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
+import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
+import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
+import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
+import { markStageCompleted, sha256Hex } from "./compile/pipeline.ts";
+import type {
+  GithubSearcher,
+  UrlProber,
+  WebSearcher,
+} from "./compile/discovery/types.ts";
+import { createAlmanacRuntimeAsync } from "./serve/runtime.ts";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Cleanup
+// ──────────────────────────────────────────────────────────────────────────────
+
+const cleanup: string[] = [];
+afterAll(() => {
+  for (const dir of cleanup) {
+    try {
+      rmSync(dir, { recursive: true, force: true });
+    } catch {
+      /* ignore */
+    }
+  }
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Canned LLM outputs
+// ──────────────────────────────────────────────────────────────────────────────
+
+const DOMAIN_SPEC: DomainSpec = {
+  domain: "kubernetes",
+  canonicalSlug: "kubernetes",
+  displayName: "Kubernetes",
+  summary: "Container orchestration platform for declaratively running workloads.",
+  subareas: ["core api", "scheduling", "networking"],
+  intents: [
+    { kind: "howto", example: "how do I write a controller?" },
+    { kind: "lookup", example: "what is a pod?" },
+  ],
+  verbs: ["explain", "diagnose", "lookup-spec"],
+  entityTypes: ["resource", "controller", "version"],
+  freshnessProfile: {
+    profileId: "mixed",
+    defaultClass: "fast",
+    classes: {
+      static: { examples: ["controller pattern"] },
+      slow: { examples: ["RBAC patterns"], maxAgeDays: 30 },
+      fast: { examples: ["latest features"], maxAgeHours: 24 },
+      live: { examples: [] },
+    },
+  },
+  suggestedSources: [
+    { hint: "https://kubernetes.io/docs/", kind: "docs" },
+    { hint: "https://kubernetes.io/blog/", kind: "news" },
+    { hint: "https://github.com/kubernetes/kubernetes", kind: "repo" },
+  ],
+  suggestedTools: [],
+  cautions: [],
+};
+
+const DISCOVERY_PLAN: SourceDiscoveryPlan = {
+  schemaVersion: "0.1.0",
+  domain: { canonicalSlug: "kubernetes", displayName: "Kubernetes" },
+  budgets: {
+    maxWebSearchQueries: 0,
+    maxGithubQueries: 0,
+    maxUrlProbes: 4,
+    maxCandidatesPerKind: 4,
+    targetAcceptedSources: 1,
+  },
+  directProbes: [
+    {
+      hint: "https://kubernetes.io/docs/",
+      kind: "docs",
+      rationale: "Authoritative documentation home.",
+    },
+  ],
+  webSearchQueries: [],
+  githubQueries: [],
+  coverageGoals: {
+    docs: { min: 1, max: 3 },
+    repo: { min: 0, max: 0 },
+    news: { min: 0, max: 0 },
+    community: { min: 0, max: 0 },
+    academic: { min: 0, max: 0 },
+    data: { min: 0, max: 0 },
+    file: { min: 0, max: 0 },
+    essay: { min: 0, max: 0 },
+    book: { min: 0, max: 0 },
+    talk: { min: 0, max: 0 },
+  },
+};
+
+const DRAFT_SOURCES: SourcesFile = {
+  schemaVersion: "0.1.0",
+  status: "draft",
+  generatedAt: "2026-05-08T12:00:00.000Z",
+  generatedBy: {
+    stage: "02-source-discovery",
+    evaluatorPromptVersion: "evaluator-v1",
+    candidateCount: 1,
+    acceptedCount: 1,
+  },
+  coverage: {
+    docs: 1,
+    repo: 0,
+    news: 0,
+    community: 0,
+    academic: 0,
+    data: 0,
+    file: 0,
+    essay: 0,
+    book: 0,
+    talk: 0,
+  },
+  warnings: [],
+  sources: [
+    {
+      id: "k8s-docs",
+      url: "https://kubernetes.io/docs/",
+      kind: "docs",
+      trust: 0.95,
+      volatility: "fast",
+      rationale: "Authoritative documentation.",
+      ingestion: {
+        mode: "snapshot",
+        scope: ["/"],
+        refreshIntervalHours: 168,
+      },
+      notes: null,
+    },
+  ],
+  rejected: [],
+};
+
+const EXTRACTION_RESULT: ExtractionResult = {
+  schemaVersion: "0.1.0",
+  status: "extracted",
+  skipReason: null,
+  coverage: {
+    extractable: "Pod definition.",
+    nonExtractable: "n/a",
+  },
+  facts: [
+    {
+      text: "A Pod is the smallest deployable unit in Kubernetes.",
+      type: "definition",
+      entities: ["pod", "resource"],
+      excerpt: "A Pod is the smallest deployable unit in Kubernetes.",
+      freshnessClass: "static",
+      validUntilRelative: null,
+      confidence: 0.95,
+    },
+    {
+      text: "A Pod represents one or more containers that share storage and network.",
+      type: "fact",
+      entities: ["pod", "container"],
+      excerpt:
+        "A Pod represents one or more containers that share storage and network.",
+      freshnessClass: "static",
+      validUntilRelative: null,
+      confidence: 0.92,
+    },
+  ],
+};
+
+const TOOL_DESIGN: ToolDesignResult = {
+  schemaVersion: "0.1.0",
+  customTools: [],
+  rationale: "The four default tools fully cover Kubernetes for this almanac.",
+};
+
+const DOC_BODY =
+  "A Pod is the smallest deployable unit in Kubernetes. " +
+  "A Pod represents one or more containers that share storage and network.";
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Stubs
+// ──────────────────────────────────────────────────────────────────────────────
+
+function stubProber(): UrlProber {
+  return {
+    name: "stub-prober",
+    async probe(url: string) {
+      return {
+        url,
+        fetchStatus: "ok",
+        title: "Kubernetes Documentation",
+        snippet: "Production-ready container orchestration",
+        preview: "Kubernetes is an open-source container orchestrator…",
+        meta: { httpStatusCode: 200, contentType: "text/html" },
+      };
+    },
+  };
+}
+
+function nullWebSearcher(): WebSearcher {
+  return {
+    name: "null-web",
+    async search() {
+      return [];
+    },
+  };
+}
+
+function nullGithubSearcher(): GithubSearcher {
+  return {
+    name: "null-github",
+    async search() {
+      return [];
+    },
+  };
+}
+
+function stubFetcher(): Fetcher {
+  return {
+    name: "stub-fetcher",
+    canHandle(_source: ApprovedSource): boolean {
+      return true;
+    },
+    async fetch(
+      source: ApprovedSource,
+      ctx: FetchContext,
+    ): Promise<SourceFetchEntry> {
+      const bytes = new TextEncoder().encode(DOC_BODY);
+      const meta = await ctx.writeRaw({
+        bytes,
+        mediaType: "text/html",
+        extension: "html",
+      });
+      return {
+        sourceId: source.id,
+        status: "fetched",
+        fetchedAt: ctx.now().toISOString(),
+        finalUrl: source.url,
+        fetcher: "stub-fetcher",
+        documents: [
+          {
+            url: source.url,
+            fetchedAt: ctx.now().toISOString(),
+            mediaType: "text/html",
+            byteLength: meta.byteLength,
+            contentHash: meta.contentHash,
+            relPath: meta.relPath,
+            title: "Kubernetes Documentation",
+          },
+        ],
+      };
+    },
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Setup
+// ──────────────────────────────────────────────────────────────────────────────
+
+async function freshAlmanac(): Promise<{
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  state: CompileState;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "almanac-e2e-"));
+  cleanup.push(root);
+  const almanacDir = join(root, "kubernetes");
+  const { manifest, compileState } = bootstrapAlmanac({
+    almanacId: "kubernetes",
+    domain: "kubernetes",
+    displayName: "Kubernetes",
+    freshnessProfileId: "mixed",
+    runId: "run-e2e",
+    forgerVersion: "0.0.0",
+    options: {
+      depth: "standard",
+      sourcesHint: [],
+      target: "both",
+      autoApprove: true,
+      language: "ts",
+    },
+    now: new Date("2026-05-08T12:00:00.000Z"),
+  });
+  await ensureAlmanacLayout(almanacDir);
+  await writeManifest(almanacDir, manifest);
+
+  const stage0Hash = sha256Hex(
+    JSON.stringify(manifest) + "\n" + JSON.stringify(compileState),
+  );
+  const stage0Done = markStageCompleted(
+    compileState,
+    "00-bootstrap",
+    new Date("2026-05-08T12:00:00.500Z"),
+    { outputHash: stage0Hash },
+  );
+  await writeCompileState(almanacDir, stage0Done);
+
+  return {
+    almanacDir,
+    manifest: AlmanacManifestSchema.parse(manifest),
+    state: CompileStateSchema.parse(stage0Done),
+  };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// The test
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
+  test(
+    "compiles 0–10 then serves query_facts against real facts",
+    async () => {
+      const fx = await freshAlmanac();
+
+      const provider = createMockProvider({
+        responses: {
+          "01-domain-analysis@v2": JSON.stringify(DOMAIN_SPEC),
+          "02-source-discovery@planner-v1": JSON.stringify(DISCOVERY_PLAN),
+          "02-source-discovery@evaluator-v1": JSON.stringify(DRAFT_SOURCES),
+          "05-fact-extraction@v1": JSON.stringify(EXTRACTION_RESULT),
+          "06-tool-design@v1": JSON.stringify(TOOL_DESIGN),
+        },
+      });
+
+      const runners = {
+        "01-domain-analysis": createDomainAnalysisRunner({ provider }),
+        "02a-source-discovery-planner": createSourceDiscoveryPlannerRunner({
+          provider,
+        }),
+        "02x-source-discovery-executor": createSourceDiscoveryExecutorRunner({
+          prober: stubProber(),
+          webSearcher: nullWebSearcher(),
+          githubSearcher: nullGithubSearcher(),
+        }),
+        "02b-source-discovery-evaluator": createSourceDiscoveryEvaluatorRunner({
+          provider,
+        }),
+        "03-source-approve": createApproveRunner(),
+        "04-source-fetch": createSourceFetchRunner({
+          fetchers: [stubFetcher()],
+        }),
+        "05-fact-extraction": createFactExtractionRunner({ provider }),
+        "06-tool-design": createToolDesignRunner({ provider }),
+        "07-tool-impl": createToolImplRunner(),
+        "08-knowledge-index": createKnowledgeIndexRunner(),
+        "09-contract-files": createContractFilesRunner(),
+        "10-adapter-generation": createSkillAdapterRunner(),
+      };
+
+      const events: object[] = [];
+      const result = await runPipeline({
+        almanacDir: fx.almanacDir,
+        state: fx.state,
+        manifest: fx.manifest,
+        runners,
+        persistState: (s) => writeCompileState(fx.almanacDir, s),
+        persistManifest: (m) => writeManifest(fx.almanacDir, m),
+        log: (e) => events.push(e),
+        now: () => new Date("2026-05-08T12:00:01.000Z"),
+      });
+
+      // Every stage 0–10 must succeed (or be already-completed for 00).
+      const expected: StageId[] = [
+        "00-bootstrap",
+        "01-domain-analysis",
+        "02a-source-discovery-planner",
+        "02x-source-discovery-executor",
+        "02b-source-discovery-evaluator",
+        "03-source-approve",
+        "04-source-fetch",
+        "05-fact-extraction",
+        "06-tool-design",
+        "07-tool-impl",
+        "08-knowledge-index",
+        "09-contract-files",
+        "10-adapter-generation",
+      ];
+      for (const id of expected) {
+        if (!result.succeeded.includes(id)) {
+          throw new Error(
+            `stage ${id} did not succeed; failed=${result.failed.join(",")} skipped=${result.skipped.join(",")} notReached=${result.notReached.join(",")}`,
+          );
+        }
+      }
+
+      // Key on-disk artifacts must exist.
+      const must = [
+        ".compile/domain-spec.json",
+        ".compile/source-discovery-plan.json",
+        ".compile/candidates.json",
+        ".compile/sources.draft.json",
+        "sources/sources.json",
+        "sources/manifest.summary.json",
+        "extracted/facts.jsonl",
+        ".compile/tool-design.json",
+        ".compile/stage07-output.json",
+        "tools/query_facts.json",
+        "tools/query_facts.ts",
+        "knowledge/almanac.sqlite",
+        "knowledge/index-manifest.json",
+        "DOMAIN.md",
+        "AGENTS.md",
+        "SKILLS.md",
+        "adapters/skill/SKILL.md",
+      ];
+      for (const rel of must) {
+        if (!existsSync(join(fx.almanacDir, rel))) {
+          throw new Error(`expected artifact missing: ${rel}`);
+        }
+      }
+
+      // facts.jsonl actually has the two facts the LLM "extracted".
+      const jsonl = readFileSync(
+        join(fx.almanacDir, "extracted/facts.jsonl"),
+        "utf8",
+      );
+      expect(jsonl.split("\n").filter((l) => l.length > 0).length).toBe(2);
+
+      // Now spin up the runtime and prove the facts are reachable.
+      const runtime = await createAlmanacRuntimeAsync({
+        almanacDir: fx.almanacDir,
+        log: () => {},
+      });
+
+      const tools = await runtime.listTools();
+      expect(tools.map((t) => t.name).sort()).toEqual([
+        "fetch_official_docs",
+        "latest_releases",
+        "query_facts",
+        "web_search_recent",
+      ]);
+
+      const out = await runtime.execTool("query_facts", { q: "Pod" });
+      if (!out.ok) {
+        throw new Error(
+          `query_facts returned an error: ${JSON.stringify(out.error)}`,
+        );
+      }
+      const data = out.data as { hits?: Array<{ text: string }> };
+      expect(Array.isArray(data.hits)).toBe(true);
+      expect(data.hits!.length).toBeGreaterThanOrEqual(1);
+      expect(data.hits![0]!.text.toLowerCase()).toContain("pod");
+    },
+    30_000,
+  );
+});
+
+// Ensure mkdir import is used somewhere (silences unused-import lints in
+// strict configs); also gives a single place to add per-suite setup later.
+void mkdir;

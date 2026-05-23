@@ -1,0 +1,27 @@
+{
+  "name": "almanac",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Compile a domain almanac. Always-fresh. Consumed via MCP and Claude Code Skill.",
+  "engines": {
+    "bun": ">=1.1.0"
+  },
+  "bin": {
+    "almanac": "src/cli.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "dependencies": {
+    "@anthropic-ai/sdk": "^0.95.1",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "commander": "^12.1.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "typescript": "^5.5.4",
+    "@types/bun": "latest"
+  }
+}
