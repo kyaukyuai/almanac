@@ -36,9 +36,9 @@ orchestrator. End-user "use" of an almanac happens through the host LLM.
 
 ### Design pillars
 
-1. **Headless runtime + adapters** (from [`ai-clone`](https://github.com/kyaukyuai/ai-clone)
-   ADR-0004): the operation contract is the source of truth; MCP server and
-   Skill are derived from it.
+1. **Headless runtime + adapters**: the operation contract is the source of
+   truth; MCP server and Skill are derived from it. A single generic
+   `almanac serve` binary serves any compiled almanac.
 2. **Always fresh**: every fact carries a `freshnessClass` and `fetchedAt`;
    stale data is surfaced, not masked. (Inspired by
    [`last30days-skill`](https://github.com/mvanhorn/last30days-skill).)
@@ -141,21 +141,6 @@ health check) is implemented as a tool.
 Source-of-truth flow: `sources/raw/` → `extracted/facts.jsonl` →
 `knowledge/almanac.sqlite`. Any `adapters/`, `knowledge/`, or derived files
 can be regenerated from the SoT layer without loss.
-
-### Naming map (vs `ai-clone`)
-
-| ai-clone                          | almanac                                |
-|-----------------------------------|----------------------------------------|
-| `cloneId` (`d-kanazawa`)          | `almanacId` (`cooking`)                |
-| `runtime/clones/<id>/`            | `~/.almanac/almanacs/<id>/`            |
-| `runtime/sources/<id>/`           | `<almanac>/sources/raw/`               |
-| `clone-generator create/update`   | `almanac new` / `almanac update`       |
-| `clone-knowledge-core`            | `almanac-core`                         |
-| `clone-knowledge-mcp`             | `almanac serve` (generic)              |
-| `SOUL.md` (persona)               | `DOMAIN.md` (definition + freshness)   |
-| `AGENTS.md`                       | `AGENTS.md`                            |
-| `SKILLS.md`                       | `SKILLS.md`                            |
-| `extracted/facts.jsonl`           | `extracted/facts.jsonl`                |
 
 ---
 

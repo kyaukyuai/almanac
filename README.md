@@ -24,9 +24,10 @@ live), and stale data is surfaced rather than masked.
 
 ## Design pillars
 
-1. **Headless runtime + adapters** — same operation contract across CLI / MCP /
-   Skill. Inspired by [`ai-clone`](https://github.com/kyaukyuai/ai-clone)
-   ADR-0004.
+1. **Headless runtime + adapters** — one operation contract (`listTools` /
+   `execTool` / `listResources` / `readResource`) is the source of truth;
+   the MCP server and the Claude Code Skill are derived from it. A single
+   generic `almanac serve` binary serves any compiled almanac.
 2. **Always fresh** — every artifact knows its volatility class and TTL.
    `update` is a first-class command, not an afterthought. Inspired by
    [`last30days-skill`](https://github.com/mvanhorn/last30days-skill).
