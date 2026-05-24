@@ -6,9 +6,10 @@
  * delegates to the existing `runSourceFetch` orchestrator with a default
  * fetcher chain:
  *
- *   1. `GithubRepoFetcher`   — `kind: repo`
- *   2. `LocalFileFetcher`    — `kind: file` / `file://` URLs
- *   3. `GenericHttpFetcher`  — everything else over HTTP(S)
+ *   1. `GithubRepoFetcher`     — `kind: repo`
+ *   2. `LocalFileFetcher`      — `kind: file` / `file://` URLs
+ *   3. `HttpIndexOnlyFetcher`  — HTTP source with `mode: "index-only"`
+ *   4. `GenericHttpFetcher`    — everything else over HTTP(S) (snapshot)
  *
  * Persists the resulting `SourceFetchManifest` to
  * `<almanacDir>/sources/manifest.summary.json`. Per-document raw bytes are
@@ -28,6 +29,7 @@ import {
 } from "../../core/types.ts";
 import { GenericHttpFetcher } from "../fetchers/generic-http.ts";
 import { GithubRepoFetcher } from "../fetchers/github-repo.ts";
+import { HttpIndexOnlyFetcher } from "../fetchers/http-index-only.ts";
 import { LocalFileFetcher } from "../fetchers/local-file.ts";
 import { createWriteRaw } from "../fetchers/raw-writer.ts";
 import type { FetchContext, Fetcher } from "../fetchers/types.ts";
@@ -155,7 +157,12 @@ export function createSourceFetchRunner(
  * the catch-all `GenericHttpFetcher`.
  */
 export function defaultFetchers(): Fetcher[] {
-  return [new GithubRepoFetcher(), new LocalFileFetcher(), new GenericHttpFetcher()];
+  return [
+    new GithubRepoFetcher(),
+    new LocalFileFetcher(),
+    new HttpIndexOnlyFetcher(),
+    new GenericHttpFetcher(),
+  ];
 }
 
 function hashBytes(bytes: Uint8Array): string {

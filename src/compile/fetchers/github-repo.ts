@@ -1,6 +1,5 @@
 /**
- * GitHub repository fetcher — handles `kind: repo` with
- * `ingestion.mode = "index-only"`.
+ * GitHub repository fetcher — handles `kind: repo`.
  *
  * Strategy:
  *   - Parse `https://github.com/<owner>/<repo>` from `source.url`.
@@ -10,8 +9,12 @@
  *     the HEAD commit SHA + author timestamp.
  *   - Returns an `index-only` entry whose `indexMeta` carries the SHA.
  *
- * No raw bytes are written — this is `index-only`. A future fetcher can
- * download a tarball or specific files; that's out of scope here.
+ * No raw bytes are written. v0.1 supports the `index-only` mode end-to-end;
+ * when the evaluator picks `mode: "snapshot"` for a permissively-licensed
+ * repo (per `evaluator-v1.md`), this fetcher still produces only the
+ * index-only metadata above and emits a `degraded-to-index-only` log event.
+ * Implementing real repo snapshot — walking `ingestion.scope` globs via the
+ * GitHub Trees / Contents API — is tracked for v0.2.
  *
  * Authentication: if `process.env.GITHUB_TOKEN` is set, it is forwarded as a
  * `Bearer` header. The orchestrator does not inject secrets per source for
@@ -36,7 +39,8 @@ export class GithubRepoFetcher implements Fetcher {
   canHandle(source: ApprovedSource): boolean {
     return (
       source.kind === "repo" &&
-      source.ingestion.mode === "index-only" &&
+      (source.ingestion.mode === "index-only" ||
+        source.ingestion.mode === "snapshot") &&
       REPO_URL_RE.test(source.url)
     );
   }
@@ -47,6 +51,14 @@ export class GithubRepoFetcher implements Fetcher {
   ): Promise<SourceFetchEntry> {
     if (!this.canHandle(source)) {
       throw new FetcherMisroutedError(this.name, source.id);
+    }
+    if (source.ingestion.mode === "snapshot") {
+      ctx.log({
+        event: "fetcher:github:degraded-to-index-only",
+        sourceId: source.id,
+        reason:
+          "snapshot mode not implemented for repos in v0.1; emitting index-only metadata",
+      });
     }
     const m = REPO_URL_RE.exec(source.url)!;
     const owner = m[1]!;

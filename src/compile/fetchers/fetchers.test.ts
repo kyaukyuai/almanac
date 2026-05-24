@@ -26,6 +26,7 @@ import {
   parseHttpDate,
 } from "./generic-http.ts";
 import { GithubRepoFetcher } from "./github-repo.ts";
+import { HttpIndexOnlyFetcher } from "./http-index-only.ts";
 import { LocalFileFetcher } from "./local-file.ts";
 import type { ApprovedSource } from "../../core/types.ts";
 import type { FetchContext } from "./types.ts";
@@ -272,11 +273,52 @@ describe("GenericHttpFetcher", () => {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe("GithubRepoFetcher", () => {
-  test("canHandle: only kind=repo + index-only + github.com URLs", () => {
+  test("canHandle: kind=repo + (index-only OR snapshot) + github.com URLs", () => {
     const f = new GithubRepoFetcher();
+    // index-only — the historical default
     expect(f.canHandle(repoSource("a", "https://github.com/x/y"))).toBe(true);
+    // snapshot — accepted post-fix, degraded to index-only behavior at runtime
+    const snap: ApprovedSource = {
+      ...repoSource("b", "https://github.com/x/y"),
+      ingestion: { mode: "snapshot", scope: ["docs/**"], refreshIntervalHours: 24 },
+    };
+    expect(f.canHandle(snap)).toBe(true);
     expect(f.canHandle(repoSource("a", "https://gitlab.com/x/y"))).toBe(false);
     expect(f.canHandle(docsSource("a", "https://github.com/x/y"))).toBe(false);
+  });
+
+  test("snapshot-mode repo emits a degraded-to-index-only log event (regression)", async () => {
+    const events: object[] = [];
+    const dir = makeTmpDir("gh-snap-");
+    const ctx = makeCtx(
+      dir,
+      asFetch((url) => {
+        if (url.endsWith("/repos/octo/repo")) {
+          return new Response(
+            JSON.stringify({ full_name: "octo/repo", default_branch: "main", pushed_at: "2026-04-01T00:00:00Z" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/commits/main")) {
+          return new Response(
+            JSON.stringify({ sha: "abc123".padEnd(40, "0"), commit: { author: { date: "2026-04-15T10:00:00Z" } } }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("", { status: 404 });
+      }),
+      { log: (e) => events.push(e) },
+    );
+    const snap: ApprovedSource = {
+      ...repoSource("octo-repo", "https://github.com/octo/repo"),
+      ingestion: { mode: "snapshot", scope: ["docs/**"], refreshIntervalHours: 24 },
+    };
+    const entry = await new GithubRepoFetcher().fetch(snap, ctx);
+    expect(entry.status).toBe("index-only");
+    const degraded = events.find(
+      (e) => (e as { event?: string }).event === "fetcher:github:degraded-to-index-only",
+    );
+    expect(degraded).toBeDefined();
   });
 
   test("produces an index-only entry from /repos and /commits", async () => {
@@ -344,6 +386,135 @@ describe("GithubRepoFetcher", () => {
     if (entry.status === "failed") {
       expect(entry.error.code).toBe("rate-limited");
       expect(entry.error.retryable).toBe(true);
+    }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// HttpIndexOnlyFetcher
+// ──────────────────────────────────────────────────────────────────────────────
+
+function indexOnlySource(
+  id: string,
+  url: string,
+  kind: ApprovedSource["kind"] = "essay",
+): ApprovedSource {
+  return {
+    id,
+    url,
+    kind,
+    trust: 0.85,
+    volatility: "slow",
+    rationale: "test fixture",
+    ingestion: { mode: "index-only", scope: [], refreshIntervalHours: 24 },
+    notes: null,
+  };
+}
+
+describe("HttpIndexOnlyFetcher", () => {
+  test("canHandle: HTTP url + index-only + non-repo/non-file kinds", () => {
+    const f = new HttpIndexOnlyFetcher();
+    expect(
+      f.canHandle(indexOnlySource("a", "https://example.com", "essay")),
+    ).toBe(true);
+    expect(
+      f.canHandle(indexOnlySource("b", "https://example.com", "community")),
+    ).toBe(true);
+    expect(
+      f.canHandle(indexOnlySource("c", "https://example.com", "academic")),
+    ).toBe(true);
+    // wrong mode
+    expect(f.canHandle(docsSource("d", "https://example.com"))).toBe(false);
+    // wrong kind
+    const repoIndexOnly = {
+      ...indexOnlySource("e", "https://github.com/x/y", "essay"),
+      kind: "repo" as const,
+    };
+    expect(f.canHandle(repoIndexOnly)).toBe(false);
+    // non-http
+    expect(
+      f.canHandle(indexOnlySource("f", "file:///tmp/x", "essay")),
+    ).toBe(false);
+  });
+
+  test("HEAD 200 → status: index-only with finalUrl + lastUpdatedAt label", async () => {
+    const dir = makeTmpDir("hio-head-");
+    let sawMethod = "";
+    const ctx = makeCtx(
+      dir,
+      asFetch((_url, init) => {
+        sawMethod = (init.method ?? "GET").toUpperCase();
+        return new Response("", {
+          status: 200,
+          headers: { "last-modified": "Wed, 21 Oct 2026 07:28:00 GMT" },
+        });
+      }),
+    );
+    const entry = await new HttpIndexOnlyFetcher().fetch(
+      indexOnlySource("openai-research", "https://openai.com/research/"),
+      ctx,
+    );
+    expect(sawMethod).toBe("HEAD");
+    expect(entry.status).toBe("index-only");
+    if (entry.status === "index-only") {
+      expect(entry.finalUrl).toBe("https://openai.com/research/");
+      expect(entry.indexMeta.lastUpdatedAt).toBe("2026-10-21T07:28:00.000Z");
+      expect(entry.indexMeta.label).toBe("https://openai.com/research/");
+    }
+  });
+
+  test("HEAD 405 → falls back to ranged GET", async () => {
+    const dir = makeTmpDir("hio-405-");
+    const methods: string[] = [];
+    const ctx = makeCtx(
+      dir,
+      asFetch((_url, init) => {
+        const m = (init.method ?? "GET").toUpperCase();
+        methods.push(m);
+        if (m === "HEAD") return new Response("", { status: 405 });
+        return new Response("partial", { status: 206 });
+      }),
+    );
+    const entry = await new HttpIndexOnlyFetcher().fetch(
+      indexOnlySource("a16z", "https://a16z.com/ai/"),
+      ctx,
+    );
+    expect(methods).toEqual(["HEAD", "GET"]);
+    expect(entry.status).toBe("index-only");
+  });
+
+  test("HEAD 404 → status: failed (no fallback, http-error)", async () => {
+    const dir = makeTmpDir("hio-404-");
+    const ctx = makeCtx(
+      dir,
+      asFetch(() => new Response("", { status: 404 })),
+    );
+    const entry = await new HttpIndexOnlyFetcher().fetch(
+      indexOnlySource("missing", "https://example.com/missing"),
+      ctx,
+    );
+    expect(entry.status).toBe("failed");
+    if (entry.status === "failed") {
+      expect(entry.error.code).toBe("http-error");
+      expect(entry.error.httpStatusCode).toBe(404);
+    }
+  });
+
+  test("network error → status: failed with network-error code", async () => {
+    const dir = makeTmpDir("hio-net-");
+    const ctx = makeCtx(
+      dir,
+      (async () => {
+        throw new Error("ENOTFOUND");
+      }) as unknown as typeof fetch,
+    );
+    const entry = await new HttpIndexOnlyFetcher().fetch(
+      indexOnlySource("nope", "https://nope.example.com"),
+      ctx,
+    );
+    expect(entry.status).toBe("failed");
+    if (entry.status === "failed") {
+      expect(entry.error.code).toBe("network-error");
     }
   });
 });

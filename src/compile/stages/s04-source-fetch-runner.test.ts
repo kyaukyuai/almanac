@@ -226,11 +226,12 @@ describe("createSourceFetchRunner", () => {
     await expect(runner.run(makeCtx(fx))).rejects.toBeInstanceOf(Error);
   });
 
-  test("defaultFetchers returns github-repo, local-file, generic-http in priority order", () => {
+  test("defaultFetchers returns github-repo, local-file, http-index-only, generic-http in priority order", () => {
     const fs = defaultFetchers();
     expect(fs.map((f) => f.name)).toEqual([
       "github-repo",
       "local-file",
+      "http-index-only",
       "generic-http",
     ]);
   });
