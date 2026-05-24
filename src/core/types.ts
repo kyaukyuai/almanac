@@ -621,15 +621,73 @@ export type SourcesFile = z.infer<typeof SourcesFileSchema>;
 /**
  * Parse the evaluator's raw JSON output into a validated `SourcesFile`.
  * Stage 2b emits `status: "draft"`; the function asserts that.
+ *
+ * Counts that are mechanically derivable from `sources[]`
+ * (`generatedBy.acceptedCount` and `coverage[kind]`) are normalized BEFORE
+ * schema validation: a real-LLM smoke run produced an off-by-one count
+ * (LLM emitted `acceptedCount: 12` for a `sources` array of length 11) and
+ * the strict schema rejected the otherwise-valid output. We don't want a
+ * stage to crash on the model's arithmetic — we recompute and trust the
+ * sources list. The schema invariants still catch real consistency bugs in
+ * our own code.
  */
 export function parseDraftSourcesFile(raw: unknown): SourcesFile {
-  const file = SourcesFileSchema.parse(raw);
+  const normalized = normalizeDerivableCounts(raw);
+  const file = SourcesFileSchema.parse(normalized);
   if (file.status !== "draft") {
     throw new Error(
       `Stage 2b evaluator must emit status="draft", got "${file.status}"`,
     );
   }
   return file;
+}
+
+/**
+ * Recompute `generatedBy.acceptedCount` and `coverage[kind]` from `sources[]`
+ * before schema validation. Returns a shallow-copy with the two derived
+ * fields overwritten; all other fields are passed through unchanged. Non-
+ * object inputs are returned as-is (the schema parse will then reject them
+ * with the appropriate error).
+ *
+ * Exported for unit tests; not part of the canonical API surface.
+ */
+export function normalizeDerivableCounts(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return raw;
+  }
+  const r = raw as Record<string, unknown>;
+  const sources = Array.isArray(r.sources) ? r.sources : [];
+
+  const coverage: CoverageMap = {
+    docs: 0,
+    repo: 0,
+    news: 0,
+    community: 0,
+    academic: 0,
+    data: 0,
+    file: 0,
+    essay: 0,
+    book: 0,
+    talk: 0,
+  };
+  for (const s of sources) {
+    if (typeof s !== "object" || s === null) continue;
+    const kind = (s as Record<string, unknown>).kind;
+    if (
+      typeof kind === "string" &&
+      (SOURCE_KINDS as readonly string[]).includes(kind)
+    ) {
+      coverage[kind as SourceKind] += 1;
+    }
+  }
+
+  const generatedBy =
+    typeof r.generatedBy === "object" && r.generatedBy !== null
+      ? { ...(r.generatedBy as Record<string, unknown>) }
+      : ({} as Record<string, unknown>);
+  generatedBy.acceptedCount = sources.length;
+
+  return { ...r, generatedBy, coverage };
 }
 
 // ── Candidate (input to Stage 2b) ────────────────────────────────────────────

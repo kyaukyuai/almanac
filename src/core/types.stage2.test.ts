@@ -384,6 +384,31 @@ describe("SourcesFile — evaluator-v1 worked example", () => {
       /must emit status="draft"/,
     );
   });
+
+  test("parseDraftSourcesFile normalizes a wrong acceptedCount (regression)", () => {
+    // Real smoke run: LLM emitted acceptedCount=12 for a sources array of
+    // length 11. The parser should now recompute from sources.length rather
+    // than crash on the schema invariant.
+    const raw = structuredClone(EVALUATOR_KUBERNETES) as SourcesFile;
+    raw.generatedBy.acceptedCount = 999;
+    const file = parseDraftSourcesFile(raw);
+    expect(file.generatedBy.acceptedCount).toBe(file.sources.length);
+  });
+
+  test("parseDraftSourcesFile normalizes wrong coverage counts (regression)", () => {
+    const raw = structuredClone(EVALUATOR_KUBERNETES) as SourcesFile;
+    raw.coverage.docs = 99;
+    raw.coverage.repo = 77;
+    const file = parseDraftSourcesFile(raw);
+    let actualDocs = 0;
+    let actualRepo = 0;
+    for (const s of file.sources) {
+      if (s.kind === "docs") actualDocs += 1;
+      if (s.kind === "repo") actualRepo += 1;
+    }
+    expect(file.coverage.docs).toBe(actualDocs);
+    expect(file.coverage.repo).toBe(actualRepo);
+  });
 });
 
 describe("SourcesFile — validation rejections", () => {
