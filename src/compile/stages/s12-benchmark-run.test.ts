@@ -1,11 +1,10 @@
 /**
- * Tests for Stage 11 + Stage 12.
+ * Tests for Stage 12.
  *
  *   - Schema validation: BenchmarkSet uniqueness, summary derivation
  *   - Pure evaluation: positive / negative pass + fail paths
  *   - Runner with mock AlmanacRuntime: collects results, builds report,
  *     handles thrown errors as `errored`
- *   - Stage 11 skeleton refuses with clear "not implemented"
  */
 
 import { describe, expect, test } from "bun:test";
@@ -21,7 +20,6 @@ import {
   type ToolResult,
 } from "../../core/types.ts";
 import type { AlmanacRuntime } from "../../core/runtime.ts";
-import { runBenchmarkGen } from "./s11-benchmark-gen.ts";
 import {
   evaluateNegative,
   evaluatePositive,
@@ -323,22 +321,3 @@ describe("runBenchmark", () => {
   });
 });
 
-// ──────────────────────────────────────────────────────────────────────────────
-// Stage 11 skeleton
-// ──────────────────────────────────────────────────────────────────────────────
-
-describe("runBenchmarkGen (skeleton)", () => {
-  test("throws 'not implemented'", async () => {
-    await expect(
-      runBenchmarkGen({
-        domainSpec: {} as never,
-        manifests: [],
-        generator: {
-          model: "claude-sonnet-4",
-          promptVersion: "11-benchmark-gen/v1",
-          generate: async () => ({}),
-        },
-      }),
-    ).rejects.toThrow(/not implemented/i);
-  });
-});
