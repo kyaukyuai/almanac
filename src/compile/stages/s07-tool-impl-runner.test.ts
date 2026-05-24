@@ -24,6 +24,7 @@ import { toolDesignPath } from "./s06-tool-design.ts";
 import {
   MissingToolDesignError,
   createToolImplRunner,
+  removeStaleToolFiles,
   stage07OutputPath,
 } from "./s07-tool-impl-runner.ts";
 import type { StageContext } from "../pipeline.ts";
@@ -242,5 +243,55 @@ describe("createToolImplRunner", () => {
       (e) => (e as { event?: string }).event === "stage7:skipped",
     );
     expect(skip).toBeDefined();
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// removeStaleToolFiles
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("removeStaleToolFiles", () => {
+  test("removes triplets for tools not in the expected set", async () => {
+    const root = mkdtempSync(join(tmpdir(), "almanac-stale-"));
+    cleanup.push(root);
+    const toolsDir = join(root, "tools");
+    await mkdir(toolsDir, { recursive: true });
+    for (const name of ["alive", "ghost"]) {
+      writeFileSync(join(toolsDir, `${name}.json`), "{}", "utf8");
+      writeFileSync(join(toolsDir, `${name}.ts`), "export default () => {}", "utf8");
+      writeFileSync(join(toolsDir, `${name}.test.ts`), "// test", "utf8");
+    }
+
+    const removed = await removeStaleToolFiles(root, new Set(["alive"]));
+    expect(removed).toEqual(["ghost"]);
+    expect(existsSync(join(toolsDir, "alive.json"))).toBe(true);
+    expect(existsSync(join(toolsDir, "alive.ts"))).toBe(true);
+    expect(existsSync(join(toolsDir, "alive.test.ts"))).toBe(true);
+    expect(existsSync(join(toolsDir, "ghost.json"))).toBe(false);
+    expect(existsSync(join(toolsDir, "ghost.ts"))).toBe(false);
+    expect(existsSync(join(toolsDir, "ghost.test.ts"))).toBe(false);
+  });
+
+  test("missing tools/ dir → returns empty (no throw)", async () => {
+    const root = mkdtempSync(join(tmpdir(), "almanac-stale-nodir-"));
+    cleanup.push(root);
+    expect(await removeStaleToolFiles(root, new Set())).toEqual([]);
+  });
+
+  test("ignores files outside the .{json,ts,test.ts} triplet shape", async () => {
+    const root = mkdtempSync(join(tmpdir(), "almanac-stale-extra-"));
+    cleanup.push(root);
+    const toolsDir = join(root, "tools");
+    await mkdir(toolsDir, { recursive: true });
+    writeFileSync(join(toolsDir, "alive.json"), "{}", "utf8");
+    writeFileSync(join(toolsDir, "alive.ts"), "// noop", "utf8");
+    // Files we should not touch:
+    writeFileSync(join(toolsDir, "scratch.md"), "# notes", "utf8");
+    writeFileSync(join(toolsDir, "tsconfig.toml"), "[x]", "utf8");
+
+    const removed = await removeStaleToolFiles(root, new Set(["alive"]));
+    expect(removed).toEqual([]);
+    expect(existsSync(join(toolsDir, "scratch.md"))).toBe(true);
+    expect(existsSync(join(toolsDir, "tsconfig.toml"))).toBe(true);
   });
 });

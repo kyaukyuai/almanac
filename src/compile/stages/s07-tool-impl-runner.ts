@@ -20,7 +20,8 @@
  * minimum-e2e shape for v0.1.
  */
 
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { existsSync } from "node:fs";
+import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
@@ -154,6 +155,23 @@ export function createToolImplRunner(
         return { kind: "skipped", reason: "no-manifests" };
       }
 
+      // Remove stale tool files from prior runs. Without this, an `update
+      // --from-stage=...` that re-designs Stage 6 with a different custom-
+      // tool set leaves orphan `tools/<old-name>.{json,ts,test.ts}` on
+      // disk. The runtime tool-loader then picks them up and the next
+      // Stage 11 / 12 / runtime call dispatches to a dead manifest.
+      const expectedNames = new Set(manifests.map((m) => m.name));
+      const removed = await removeStaleToolFiles(
+        ctx.almanacDir,
+        expectedNames,
+      );
+      if (removed.length > 0) {
+        ctx.log({
+          event: "stage7:stale-tools-removed",
+          names: removed,
+        });
+      }
+
       const implementationCtx: ImplementationContext = {
         almanacDir: ctx.almanacDir,
         llm: opts.llm ?? stubLlmCodeWriter,
@@ -227,6 +245,72 @@ async function defaultReadToolDesign(
     throw cause;
   }
   return ToolDesignResultSchema.parse(JSON.parse(body));
+}
+
+/**
+ * Remove `<almanacDir>/tools/<name>.{json,ts,test.ts}` triplets for every
+ * tool name NOT in `expectedNames`. Used to garbage-collect stale tool
+ * files left over from a prior Stage 7 run whose custom-tool set differed.
+ *
+ * Returns the list of unique tool names that were removed (handy for
+ * structured logging + tests).
+ *
+ * Files that are NOT part of a `(json, ts, test.ts)` triplet are left
+ * alone — the runtime tool-loader ignores them anyway, and we don't want
+ * to remove user-authored scratch files that might land in the dir.
+ */
+export async function removeStaleToolFiles(
+  almanacDir: string,
+  expectedNames: ReadonlySet<string>,
+): Promise<string[]> {
+  const dir = join(almanacDir, "tools");
+  if (!existsSync(dir)) return [];
+  const entries = await readdir(dir);
+  const namesPresent = new Map<string, string[]>();
+  for (const e of entries) {
+    const parsed = parseToolFilename(e);
+    if (parsed === null) continue;
+    const existing = namesPresent.get(parsed) ?? [];
+    existing.push(e);
+    namesPresent.set(parsed, existing);
+  }
+  const removed: string[] = [];
+  for (const [name, files] of namesPresent) {
+    if (expectedNames.has(name)) continue;
+    for (const f of files) {
+      try {
+        await unlink(join(dir, f));
+      } catch {
+        /* ignore — best-effort cleanup */
+      }
+    }
+    removed.push(name);
+  }
+  removed.sort();
+  return removed;
+}
+
+/**
+ * Extract the tool base-name from a `tools/` filename, or return null if
+ * the file isn't part of the tool triplet shape.
+ *
+ *   `query_facts.json`       → "query_facts"
+ *   `query_facts.ts`         → "query_facts"
+ *   `query_facts.test.ts`    → "query_facts"
+ *   `tsconfig.json`          → null  (not a tool name shape; here for safety)
+ *   `README.md`              → null
+ */
+function parseToolFilename(filename: string): string | null {
+  if (filename.endsWith(".test.ts")) {
+    return filename.slice(0, -".test.ts".length);
+  }
+  if (filename.endsWith(".ts")) {
+    return filename.slice(0, -".ts".length);
+  }
+  if (filename.endsWith(".json")) {
+    return filename.slice(0, -".json".length);
+  }
+  return null;
 }
 
 // Stubs for `ImplementationContext` sub-runners that `TemplateImplementer`
