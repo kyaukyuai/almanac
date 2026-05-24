@@ -46,6 +46,17 @@ import {
 } from "./s07-tool-impl.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
+// Re-exports
+// ──────────────────────────────────────────────────────────────────────────────
+// Surface the implementer-context sub-interfaces here so callers that build a
+// runner (cli.ts) don't need to dip into `s07-tool-impl.ts` directly.
+export type {
+  LlmCodeWriter,
+  TscRunner,
+  SmokeTestRunner,
+} from "./s07-tool-impl.ts";
+
+// ──────────────────────────────────────────────────────────────────────────────
 // Paths + constants
 // ──────────────────────────────────────────────────────────────────────────────
 
@@ -78,11 +89,29 @@ export class MissingToolDesignError extends Error {
 
 export interface CreateToolImplRunnerOptions {
   /**
-   * Implementer for domain-specific custom tools. When omitted, custom tools
-   * are recorded as `disabled` with a `no implementer matched` reason — the
-   * intended v0.1 behavior until `LlmImplementer` lands.
+   * Implementer for domain-specific custom tools. Defaults to no second
+   * implementer (in which case custom tools are recorded as `disabled` with
+   * a `no implementer matched` reason). Wire in an `LlmImplementer` here to
+   * enable LLM-driven generation for non-default tool names.
    */
   customToolImplementer?: ToolImplementer;
+  /**
+   * Code-generator service to inject into `ImplementationContext.llm`. When
+   * omitted a stub that throws is used — appropriate for runs that only
+   * have a `TemplateImplementer` registered (the four defaults never touch
+   * `ctx.llm`).
+   */
+  llm?: LlmCodeWriter;
+  /**
+   * Type-checker to inject into `ImplementationContext.tsc`. Same stub-by-
+   * default pattern as `llm`.
+   */
+  tsc?: TscRunner;
+  /**
+   * Smoke-test runner to inject into `ImplementationContext.smoke`. Same
+   * stub-by-default pattern as `llm`.
+   */
+  smoke?: SmokeTestRunner;
   /** Override `STAGE7_DEFAULT_MAX_ATTEMPTS`. */
   maxAttempts?: number;
   /** Test seam: read Stage 6 output. */
@@ -127,9 +156,9 @@ export function createToolImplRunner(
 
       const implementationCtx: ImplementationContext = {
         almanacDir: ctx.almanacDir,
-        llm: stubLlmCodeWriter,
-        tsc: stubTscRunner,
-        smoke: stubSmokeTestRunner,
+        llm: opts.llm ?? stubLlmCodeWriter,
+        tsc: opts.tsc ?? stubTscRunner,
+        smoke: opts.smoke ?? stubSmokeTestRunner,
         writeToolFiles: (input) =>
           writeToolFiles({ almanacDir: ctx.almanacDir, ...input }),
         now: ctx.now,

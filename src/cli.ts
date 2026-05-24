@@ -49,6 +49,10 @@ import { createSourceFetchRunner } from "./compile/stages/s04-source-fetch-runne
 import { createFactExtractionRunner } from "./compile/stages/s05-fact-extraction.ts";
 import { createToolDesignRunner } from "./compile/stages/s06-tool-design.ts";
 import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
+import { createLlmCodeWriter } from "./compile/stages/s07/code-writer.ts";
+import { createBunxTscRunner } from "./compile/stages/s07/tsc-runner.ts";
+import { createBunSmokeRunner } from "./compile/stages/s07/smoke-runner.ts";
+import { LlmImplementer } from "./compile/stages/s07/llm-implementer.ts";
 import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
 import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
 import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
@@ -286,6 +290,8 @@ function buildRunners(): {
     }),
     "03-source-approve": createApproveRunner(),
     "04-source-fetch": createSourceFetchRunner(),
+    // Stage 7 is template-only by default; if a provider is available it
+    // gets re-registered below with an LlmImplementer for custom tools.
     "07-tool-impl": createToolImplRunner(),
     "08-knowledge-index": createKnowledgeIndexRunner(),
     "09-contract-files": createContractFilesRunner(),
@@ -301,6 +307,15 @@ function buildRunners(): {
     runners["05-fact-extraction"] = createFactExtractionRunner({ provider });
     runners["06-tool-design"] = createToolDesignRunner({ provider });
     runners["11-benchmark-gen"] = createBenchmarkGenRunner({ provider });
+    // Stage 7 with LLM-driven custom-tool generation: re-register the runner
+    // with a real LlmCodeWriter + TscRunner + SmokeTestRunner so custom
+    // tools designed in Stage 6 actually get implemented.
+    runners["07-tool-impl"] = createToolImplRunner({
+      customToolImplementer: new LlmImplementer(),
+      llm: createLlmCodeWriter({ provider }),
+      tsc: createBunxTscRunner(),
+      smoke: createBunSmokeRunner(),
+    });
   }
   return { runners, providerAvailable: provider !== null };
 }
@@ -432,7 +447,8 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
   const { runners, providerAvailable } = buildRunners();
   if (!providerAvailable) {
     process.stdout.write(
-      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped.\n",
+      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped " +
+        "and Stage 7 will implement only the four default tools (custom tools disabled).\n",
     );
   }
 
@@ -671,7 +687,8 @@ async function cmdUpdate(id: string, opts: UpdateOptions): Promise<void> {
   const { runners, providerAvailable } = buildRunners();
   if (!providerAvailable) {
     process.stdout.write(
-      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped.\n",
+      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped " +
+        "and Stage 7 will implement only the four default tools (custom tools disabled).\n",
     );
   }
   process.stdout.write("▶ running pipeline (stages 01–12)\n");
