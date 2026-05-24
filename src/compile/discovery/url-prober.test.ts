@@ -125,6 +125,64 @@ describe("createHttpUrlProber", () => {
     expect(r.title).toBeNull();
   });
 
+  test("redirect chain ending at 200 → fetchStatus=redirect + finalUrl set", async () => {
+    const prober = createHttpUrlProber({
+      fetchImpl: (async (input: string | URL | Request) => {
+        const requested = typeof input === "string" ? input : input.toString();
+        const res = new Response(
+          `<html><head><title>Canonical</title></head><body>ok</body></html>`,
+          {
+            status: 200,
+            headers: { "content-type": "text/html; charset=utf-8" },
+          },
+        );
+        // Simulate `fetch` having transparently followed a redirect chain.
+        Object.defineProperty(res, "url", {
+          value: requested + "/canonical",
+          writable: false,
+        });
+        return res;
+      }) as unknown as typeof fetch,
+    });
+    const r = await prober.probe("https://example.com/old");
+    expect(r.fetchStatus).toBe("redirect");
+    expect(r.finalUrl).toBe("https://example.com/old/canonical");
+  });
+
+  test("redirect chain ending at 404 → fetchStatus=client-error + finalUrl omitted (regression)", async () => {
+    const prober = createHttpUrlProber({
+      fetchImpl: (async (input: string | URL | Request) => {
+        const requested = typeof input === "string" ? input : input.toString();
+        const res = new Response("not found", { status: 404 });
+        Object.defineProperty(res, "url", {
+          value: requested + "/redirected-to-404",
+          writable: false,
+        });
+        return res;
+      }) as unknown as typeof fetch,
+    });
+    const r = await prober.probe("https://example.com/old");
+    expect(r.fetchStatus).toBe("client-error");
+    expect(r.finalUrl).toBeUndefined();
+  });
+
+  test("redirect chain ending at 500 → fetchStatus=server-error + finalUrl omitted", async () => {
+    const prober = createHttpUrlProber({
+      fetchImpl: (async (input: string | URL | Request) => {
+        const requested = typeof input === "string" ? input : input.toString();
+        const res = new Response("oops", { status: 500 });
+        Object.defineProperty(res, "url", {
+          value: requested + "/redirected-to-500",
+          writable: false,
+        });
+        return res;
+      }) as unknown as typeof fetch,
+    });
+    const r = await prober.probe("https://example.com/old");
+    expect(r.fetchStatus).toBe("server-error");
+    expect(r.finalUrl).toBeUndefined();
+  });
+
   test("aborted (timeout) → timeout category", async () => {
     const prober = createHttpUrlProber({
       timeoutMs: 1,

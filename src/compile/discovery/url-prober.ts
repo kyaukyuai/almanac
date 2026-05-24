@@ -77,11 +77,17 @@ export function createHttpUrlProber(
       clearTimeout(timeout);
 
       const fetchStatus = classifyStatus(httpStatusCode);
-      const finalUrl = res.url && res.url !== url ? res.url : undefined;
-      // The fetch spec resolves redirect chains transparently; if the final
-      // URL differs we surface that as `redirect`.
+      // `fetch` follows redirects transparently; if the final URL differs we
+      // surface that as `redirect`, but ONLY when the final response was ok.
+      // A redirect chain that ends at a 4xx/5xx page reports the terminal
+      // status (client-error / server-error / blocked) and MUST NOT set
+      // `finalUrl` — `CandidateSchema` requires `finalUrl` to be present iff
+      // `fetchStatus === "redirect"`.
+      const redirected = Boolean(res.url) && res.url !== url;
       const effectiveStatus: FetchStatus =
-        finalUrl !== undefined && fetchStatus === "ok" ? "redirect" : fetchStatus;
+        redirected && fetchStatus === "ok" ? "redirect" : fetchStatus;
+      const finalUrl =
+        effectiveStatus === "redirect" ? res.url : undefined;
 
       const meta: CandidateMeta = {
         ...(contentType !== undefined ? { contentType } : {}),

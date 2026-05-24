@@ -56,6 +56,52 @@ describe("createGithubSearcher", () => {
     expect(calls[0]).toContain("q=topic%3Ak8s");
   });
 
+  test("clamps oversized repo description to 500 chars (regression)", async () => {
+    const oversized = "x".repeat(800);
+    const searcher = createGithubSearcher({
+      fetchImpl: jsonFetch({
+        items: [
+          {
+            full_name: "foo/big-desc",
+            html_url: "https://github.com/foo/big-desc",
+            description: oversized,
+            stargazers_count: 1,
+            pushed_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }),
+    });
+    const hits = await searcher.search({
+      query: "anything",
+      type: "repos",
+      maxResults: 1,
+    });
+    expect(hits[0]!.description).not.toBeNull();
+    expect(hits[0]!.description!.length).toBe(500);
+  });
+
+  test("empty-string description normalizes to null", async () => {
+    const searcher = createGithubSearcher({
+      fetchImpl: jsonFetch({
+        items: [
+          {
+            full_name: "foo/empty-desc",
+            html_url: "https://github.com/foo/empty-desc",
+            description: "",
+            stargazers_count: 1,
+            pushed_at: "2026-01-01T00:00:00Z",
+          },
+        ],
+      }),
+    });
+    const hits = await searcher.search({
+      query: "anything",
+      type: "repos",
+      maxResults: 1,
+    });
+    expect(hits[0]!.description).toBeNull();
+  });
+
   test("non-2xx → empty array", async () => {
     const searcher = createGithubSearcher({ fetchImpl: jsonFetch({}, 422) });
     const hits = await searcher.search({

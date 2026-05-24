@@ -127,10 +127,19 @@ export function createGithubSearcher(
       const hits: GithubSearchHit[] = [];
       for (const it of items.slice(0, input.maxResults)) {
         if (!it.html_url || !it.full_name) continue;
+        // GitHub's repo `description` is informally capped around 350 chars
+        // but the API occasionally returns longer strings (legacy data,
+        // generated repos, etc). `CandidateSchema.snippet` caps at 500, so
+        // clamp here at the trust boundary rather than letting an oversized
+        // value tank the executor downstream.
+        const description =
+          typeof it.description === "string" && it.description.length > 0
+            ? it.description.slice(0, 500)
+            : null;
         hits.push({
           url: it.html_url,
           fullName: it.full_name,
-          description: it.description ?? null,
+          description,
           stars: typeof it.stargazers_count === "number" ? it.stargazers_count : 0,
           license: it.license?.spdx_id ?? null,
           lastCommitAt: it.pushed_at ?? null,
