@@ -26,10 +26,15 @@ import {
   type SourceDiscoveryPlan,
   type SourceFetchEntry,
   type SourcesFile,
+  type Stage11Output,
   type StageId,
   type ToolDesignResult,
 } from "./core/types.ts";
-import { AlmanacManifestSchema, CompileStateSchema } from "./core/types.ts";
+import {
+  AlmanacManifestSchema,
+  BenchmarkReportSchema,
+  CompileStateSchema,
+} from "./core/types.ts";
 import type {
   FetchContext,
   Fetcher,
@@ -54,6 +59,8 @@ import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
 import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
 import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
 import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
+import { createBenchmarkGenRunner } from "./compile/stages/s11-benchmark-gen.ts";
+import { createBenchmarkRunRunner } from "./compile/stages/s12-benchmark-run-runner.ts";
 import { markStageCompleted, sha256Hex } from "./compile/pipeline.ts";
 import type {
   GithubSearcher,
@@ -224,6 +231,42 @@ const TOOL_DESIGN: ToolDesignResult = {
   rationale: "The four default tools fully cover Kubernetes for this almanac.",
 };
 
+const BENCHMARK_SET: Stage11Output = {
+  schemaVersion: "0.1.0",
+  set: {
+    schemaVersion: "0.1.0",
+    almanacId: "kubernetes",
+    positive: [
+      {
+        id: "k8s-pos-pod-definition",
+        query: "what is a Pod in Kubernetes?",
+        intent: "lookup",
+        rationale:
+          "Stable Pod definition lookup over query_facts; should return ≥1 citation.",
+        invocation: { tool: "query_facts", input: { q: "Pod" } },
+        expected: {
+          minCitations: 1,
+          contains: ["Pod"],
+          acceptableStaleness: ["fresh"],
+        },
+      },
+    ],
+    negative: [
+      {
+        id: "k8s-neg-stock-price",
+        query: "what is today's apple stock price?",
+        rationale:
+          "Out of scope: stock prices are not in the Kubernetes almanac.",
+        invocation: { tool: "query_facts", input: { q: "apple stock price" } },
+        refusalReason: "out-of-scope",
+        expected: { maxCitations: 0 },
+      },
+    ],
+  },
+  rationale:
+    "Tiny e2e benchmark: one positive (Pod definition over query_facts) and one negative (out-of-scope query) to prove Stages 11 + 12 wire together end-to-end.",
+};
+
 const DOC_BODY =
   "A Pod is the smallest deployable unit in Kubernetes. " +
   "A Pod represents one or more containers that share storage and network.";
@@ -359,7 +402,7 @@ async function freshAlmanac(): Promise<{
 
 describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
   test(
-    "compiles 0–10 then serves query_facts against real facts",
+    "compiles 0–12 then serves query_facts against real facts",
     async () => {
       const fx = await freshAlmanac();
 
@@ -370,6 +413,7 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
           "02-source-discovery@evaluator-v1": JSON.stringify(DRAFT_SOURCES),
           "05-fact-extraction@v1": JSON.stringify(EXTRACTION_RESULT),
           "06-tool-design@v1": JSON.stringify(TOOL_DESIGN),
+          "11-benchmark-gen@v1": JSON.stringify(BENCHMARK_SET),
         },
       });
 
@@ -396,6 +440,8 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
         "08-knowledge-index": createKnowledgeIndexRunner(),
         "09-contract-files": createContractFilesRunner(),
         "10-adapter-generation": createSkillAdapterRunner(),
+        "11-benchmark-gen": createBenchmarkGenRunner({ provider }),
+        "12-benchmark-run": createBenchmarkRunRunner(),
       };
 
       const events: object[] = [];
@@ -410,7 +456,7 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
         now: () => new Date("2026-05-08T12:00:01.000Z"),
       });
 
-      // Every stage 0–10 must succeed (or be already-completed for 00).
+      // Every stage 0–12 must succeed (or be already-completed for 00).
       const expected: StageId[] = [
         "00-bootstrap",
         "01-domain-analysis",
@@ -425,6 +471,8 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
         "08-knowledge-index",
         "09-contract-files",
         "10-adapter-generation",
+        "11-benchmark-gen",
+        "12-benchmark-run",
       ];
       for (const id of expected) {
         if (!result.succeeded.includes(id)) {
@@ -453,6 +501,10 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
         "AGENTS.md",
         "SKILLS.md",
         "adapters/skill/SKILL.md",
+        ".compile/stage11-output.json",
+        "tests/positive.jsonl",
+        "tests/negative.jsonl",
+        ".compile/benchmark-result.json",
       ];
       for (const rel of must) {
         if (!existsSync(join(fx.almanacDir, rel))) {
@@ -491,6 +543,19 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
       expect(Array.isArray(data.hits)).toBe(true);
       expect(data.hits!.length).toBeGreaterThanOrEqual(1);
       expect(data.hits![0]!.text.toLowerCase()).toContain("pod");
+
+      // Stage 12 benchmark report: both fixtures must have passed against the
+      // real runtime.
+      const reportBody = readFileSync(
+        join(fx.almanacDir, ".compile/benchmark-result.json"),
+        "utf8",
+      );
+      const report = BenchmarkReportSchema.parse(JSON.parse(reportBody));
+      expect(report.summary.total).toBe(2);
+      expect(report.summary.passed).toBe(2);
+      expect(report.summary.failed).toBe(0);
+      expect(report.summary.errored).toBe(0);
+      expect(report.summary.citationRate).toBe(1);
     },
     30_000,
   );

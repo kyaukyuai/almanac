@@ -17,9 +17,11 @@
  *                                          into a downstream client config
  *                                          (currently: --client=claude-code)
  *
- * Stages 0–10 are fully implemented and exercised by `src/e2e.test.ts`.
- * Stages 11–12 (benchmark generation + execution) remain skeletons and are
- * recorded as `skipped: no-runner-registered` by `runPipeline`.
+ * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
+ * Stage 11 (benchmark generation) is LLM-driven and is skipped when no
+ * `LlmProvider` is available; Stage 12 (benchmark run) is deterministic and
+ * always registered. Together they emit `tests/{positive,negative}.jsonl`
+ * and `.compile/benchmark-result.json`.
  */
 
 import { spawnSync } from "node:child_process";
@@ -50,6 +52,8 @@ import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
 import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
 import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
 import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
+import { createBenchmarkGenRunner } from "./compile/stages/s11-benchmark-gen.ts";
+import { createBenchmarkRunRunner } from "./compile/stages/s12-benchmark-run-runner.ts";
 import { createGithubSearcher } from "./compile/discovery/github-searcher.ts";
 import { createHttpUrlProber } from "./compile/discovery/url-prober.ts";
 import {
@@ -286,6 +290,7 @@ function buildRunners(): {
     "08-knowledge-index": createKnowledgeIndexRunner(),
     "09-contract-files": createContractFilesRunner(),
     "10-adapter-generation": createSkillAdapterRunner(),
+    "12-benchmark-run": createBenchmarkRunRunner(),
   };
   if (provider !== null) {
     runners["01-domain-analysis"] = createDomainAnalysisRunner({ provider });
@@ -295,6 +300,7 @@ function buildRunners(): {
       createSourceDiscoveryEvaluatorRunner({ provider });
     runners["05-fact-extraction"] = createFactExtractionRunner({ provider });
     runners["06-tool-design"] = createToolDesignRunner({ provider });
+    runners["11-benchmark-gen"] = createBenchmarkGenRunner({ provider });
   }
   return { runners, providerAvailable: provider !== null };
 }
@@ -426,7 +432,7 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
   const { runners, providerAvailable } = buildRunners();
   if (!providerAvailable) {
     process.stdout.write(
-      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06) will be skipped.\n",
+      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped.\n",
     );
   }
 
@@ -665,7 +671,7 @@ async function cmdUpdate(id: string, opts: UpdateOptions): Promise<void> {
   const { runners, providerAvailable } = buildRunners();
   if (!providerAvailable) {
     process.stdout.write(
-      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06) will be skipped.\n",
+      "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped.\n",
     );
   }
   process.stdout.write("▶ running pipeline (stages 01–12)\n");
