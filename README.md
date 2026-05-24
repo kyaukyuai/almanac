@@ -8,11 +8,14 @@ self-contained, always-fresh knowledge surface — exposed simultaneously as a
 
 ```bash
 almanac new cooking
-# → ~/.almanac/almanacs/cooking/ is compiled
-# → CLI:  almanac run cooking "ブイヤベースの本場のレシピ"
-# → MCP:  almanac serve cooking
-# → Skill: almanac register cooking --client=claude-code
+# → ~/.almanac/almanacs/cooking/ is compiled (tools/, knowledge/, contract files)
+# → MCP:  almanac serve cooking     # stdio MCP server for host LLMs
+# → Skill: almanac register cooking --client=claude-code   # installs SKILL.md + MCP entry
 ```
+
+End-user querying happens through the host LLM (Claude Code, Cursor, Claude
+Desktop, …) after `register`. The `almanac` CLI itself is for build and
+management only — there is no built-in `run` orchestrator in v0.1.
 
 An almanac has **no persona**. It is a domain-specialized retrieval-and-tools
 layer that returns sourced, freshness-aware answers. Every fact carries a
@@ -37,14 +40,25 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-Pre-implementation design phase. The thread that produced this design is at
+**v0.1 in progress.** The 12-stage compile pipeline (bootstrap → domain
+analysis → source discovery → fact extraction → tool design + implementation
+→ knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
+against a mocked LLM, and the runtime (`almanac serve`) + `register` for
+Claude Code are wired and exercised by `src/e2e.test.ts`.
+
+What's not in v0.1 yet:
+
+- Stage 7 **LLM tool implementer** — domain-specific tools designed in
+  Stage 6 are currently disabled at compile time; only the four template
+  defaults (`query_facts`, `fetch_official_docs`, `web_search_recent`,
+  `latest_releases`) actually ship in a compiled almanac.
+- `register --client` for `claude-desktop`, `cursor`, `codex` (only
+  `claude-code` is supported today).
+- `almanac remove`, `almanac feed`, `almanac export` (v0.2).
+
+The original design thread is at
 [Amp T-019e0670…](https://ampcode.com/threads/T-019e0670-942c-711f-b948-f350ac93e96d).
-
-## Repository
-
-The repository is currently named `savant-forge`. Rename to `almanac` is
-pending (GitHub rename + local clone path).
 
 ## License
 
-MIT
+MIT — see [LICENSE](./LICENSE).
