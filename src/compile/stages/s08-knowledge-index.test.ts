@@ -18,6 +18,7 @@ import {
 import {
   buildKnowledgeIndex,
   openKnowledgeReader,
+  sanitizeFtsQuery,
 } from "./s08-knowledge-index.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -238,6 +239,65 @@ describe("SqliteKnowledgeReader.searchFacts", () => {
     expect(await reader.searchFacts("")).toEqual([]);
     expect(await reader.searchFacts("   ")).toEqual([]);
     db.close();
+  });
+
+  test("hyphenated query no longer trips FTS5 (regression)", async () => {
+    // Real-LLM smoke run: "create full-text search index fts5" threw
+    // `fts5: syntax error near "search"` because '-' is an FTS5 operator.
+    const { db } = buildKnowledgeIndex({
+      almanacId: "cooking",
+      facts,
+      dbPath: ":memory:",
+    });
+    const reader = openKnowledgeReader(db);
+    const result = await reader.searchFacts(
+      "create full-text search index fts5",
+    );
+    expect(Array.isArray(result)).toBe(true);
+    db.close();
+  });
+
+  test("FTS5-reserved keywords don't trigger operator behavior", async () => {
+    const { db } = buildKnowledgeIndex({
+      almanacId: "cooking",
+      facts,
+      dbPath: ":memory:",
+    });
+    const reader = openKnowledgeReader(db);
+    // Bare AND/OR/NOT/NEAR used to short-circuit the query. With quoting
+    // they're treated as ordinary tokens.
+    const result = await reader.searchFacts("AND OR NOT NEAR");
+    expect(Array.isArray(result)).toBe(true);
+    db.close();
+  });
+});
+
+describe("sanitizeFtsQuery", () => {
+  test("plain ASCII tokens are quoted and joined", () => {
+    expect(sanitizeFtsQuery("buttermilk substitute")).toBe(
+      '"buttermilk" "substitute"',
+    );
+  });
+
+  test("hyphens are stripped (full-text → fulltext)", () => {
+    expect(sanitizeFtsQuery("full-text search")).toBe('"fulltext" "search"');
+  });
+
+  test("FTS5 operator chars are dropped", () => {
+    // *, (, ), :, ^, " are reserved FTS5 chars.
+    expect(sanitizeFtsQuery("foo* (bar) baz:qux")).toBe(
+      '"foo" "bar" "bazqux"',
+    );
+  });
+
+  test("apostrophes inside words are kept", () => {
+    expect(sanitizeFtsQuery("user's manual")).toBe(`"user's" "manual"`);
+  });
+
+  test("empty + whitespace-only input → empty string", () => {
+    expect(sanitizeFtsQuery("")).toBe("");
+    expect(sanitizeFtsQuery("   ")).toBe("");
+    expect(sanitizeFtsQuery("** -- !!")).toBe("");
   });
 });
 

@@ -25,13 +25,17 @@ import { mkdir, readdir, readFile, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import {
+  SourcesFileSchema,
   ToolDesignResultSchema,
+  type ApprovedSource,
   type Stage07Output,
+  type SourcesFile,
   type ToolDesignResult,
   type ToolManifest,
 } from "../../core/types.ts";
 import { sha256Hex, type StageRunner } from "../pipeline.ts";
 import { toolDesignPath } from "./s06-tool-design.ts";
+import { approvedSourcesPath } from "./s03-approve-runner.ts";
 import { writeFinalManifest, writeToolFiles } from "./s07/file-writer.ts";
 import {
   TemplateImplementer,
@@ -117,6 +121,13 @@ export interface CreateToolImplRunnerOptions {
   maxAttempts?: number;
   /** Test seam: read Stage 6 output. */
   readToolDesign?: (almanacDir: string) => Promise<ToolDesignResult>;
+  /**
+   * Test seam: read the Stage 3 approved `SourcesFile`. The runner derives
+   * the default `fetch_official_docs` host allowlist from this file (only
+   * the hostnames of approved `kind: docs` / `news` sources land in the
+   * tool's `capabilities.network`).
+   */
+  readApprovedSources?: (almanacDir: string) => Promise<SourcesFile>;
   /** Test seam: skip default tools (used by tests that want only customs). */
   skipDefaults?: boolean;
 }
@@ -129,6 +140,8 @@ export function createToolImplRunner(
   opts: CreateToolImplRunnerOptions = {},
 ): StageRunner {
   const readToolDesign = opts.readToolDesign ?? defaultReadToolDesign;
+  const readApprovedSources =
+    opts.readApprovedSources ?? defaultReadApprovedSources;
   const maxAttempts = opts.maxAttempts ?? STAGE7_DEFAULT_MAX_ATTEMPTS;
   const skipDefaults = opts.skipDefaults ?? false;
 
@@ -142,9 +155,38 @@ export function createToolImplRunner(
     async run(ctx) {
       const design = await readToolDesign(ctx.almanacDir);
 
+      // The default `fetch_official_docs` tool ships with an EMPTY network
+      // allowlist; the runtime's allowlisted-fetch wrapper then rejects
+      // every URL with `network-not-allowed`. Populate the allowlist from
+      // the approved sources' hostnames (docs / news kinds) so the tool
+      // can actually call the documentation sites the evaluator picked.
+      // If the sources file is missing or unreadable, fall back to the
+      // empty default and log — the rest of the stage still runs.
+      let fetchHosts: readonly string[] = [];
+      if (!skipDefaults) {
+        try {
+          const approved = await readApprovedSources(ctx.almanacDir);
+          fetchHosts = extractFetchHosts(approved.sources);
+        } catch (cause) {
+          ctx.log({
+            event: "stage7:approved-sources-missing",
+            message: (cause as Error).message,
+            consequence:
+              "fetch_official_docs will ship with an empty network allowlist",
+          });
+        }
+      }
+
       const manifests: ToolManifest[] = [];
       if (!skipDefaults) {
-        manifests.push(...synthesizeAllDefaultManifests());
+        manifests.push(
+          ...synthesizeAllDefaultManifests({
+            fetch_official_docs:
+              fetchHosts.length > 0
+                ? { networkAllowlist: fetchHosts }
+                : {},
+          }),
+        );
       }
       manifests.push(...design.customTools);
 
@@ -245,6 +287,46 @@ async function defaultReadToolDesign(
     throw cause;
   }
   return ToolDesignResultSchema.parse(JSON.parse(body));
+}
+
+async function defaultReadApprovedSources(
+  almanacDir: string,
+): Promise<SourcesFile> {
+  const path = approvedSourcesPath(almanacDir);
+  const body = await readFile(path, "utf8");
+  return SourcesFileSchema.parse(JSON.parse(body));
+}
+
+/**
+ * Pull a deduplicated, sorted list of hostnames from approved sources
+ * whose `kind` is `docs`, `news`, `academic`, or `essay` — the kinds the
+ * default `fetch_official_docs` tool is meant to reach. Repos and files
+ * are excluded (the `latest_releases` tool has its own per-call URL
+ * construction; `local-file` doesn't need network).
+ *
+ * Exported for unit tests.
+ */
+export function extractFetchHosts(
+  sources: readonly ApprovedSource[],
+): string[] {
+  const seen = new Set<string>();
+  for (const s of sources) {
+    if (
+      s.kind !== "docs" &&
+      s.kind !== "news" &&
+      s.kind !== "academic" &&
+      s.kind !== "essay"
+    ) {
+      continue;
+    }
+    try {
+      const host = new URL(s.url).hostname.toLowerCase();
+      if (host.length > 0) seen.add(host);
+    } catch {
+      /* skip malformed URLs */
+    }
+  }
+  return [...seen].sort();
 }
 
 /**

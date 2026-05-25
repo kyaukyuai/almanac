@@ -222,10 +222,20 @@ class SqliteKnowledgeReader implements KnowledgeReader {
     }
     const limit = Math.min(opts?.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
 
-    // Build SQL with optional filters. We bind via placeholders to avoid
-    // FTS5 query injection from arbitrary user text.
+    // Sanitize the user-supplied query into a safe FTS5 expression. FTS5
+    // interprets `-`, `NEAR`, `NOT`, etc. as operators, so raw input like
+    // "full-text search" parses as `full NOT text` and throws
+    // `syntax error near "search"`. Token-quote each whitespace-separated
+    // word and OR them; FTS5's MATCH semantics with quoted tokens is "find
+    // any of these tokens", which matches what users naturally want from
+    // free-text search.
+    const sanitized = sanitizeFtsQuery(query);
+    if (sanitized.length === 0) return [];
+
+    // Build SQL with optional filters. We bind via placeholders so the
+    // sanitized expression rides through SQLite parameter binding.
     const filters: string[] = [];
-    const params: Array<string | number> = [query];
+    const params: Array<string | number> = [sanitized];
     if (opts?.freshnessClass) {
       filters.push("AND f.freshness_class = ?");
       params.push(opts.freshnessClass);
@@ -255,6 +265,38 @@ class SqliteKnowledgeReader implements KnowledgeReader {
       .get(id) as RawFactRow | null;
     return row ? rowToFact(row) : null;
   }
+}
+
+/**
+ * Convert a user-supplied free-text query into a safe FTS5 MATCH expression.
+ *
+ *   - Split on whitespace.
+ *   - For each token, strip any character outside [a-zA-Z0-9_'] (collapsing
+ *     hyphenated words: `full-text` → `fulltext`). FTS5 reserves `-`, `*`,
+ *     `(`, `)`, `:`, `^`, `"`; we just drop them rather than try to escape.
+ *   - Quote each token with double-quotes (escaping any embedded `"` as
+ *     `""` per FTS5 rules) so reserved keywords (`NEAR`, `NOT`, `AND`, `OR`)
+ *     don't trigger their operator behavior.
+ *   - Join with spaces; FTS5 treats space as implicit AND when query tokens
+ *     are quoted phrases — exactly what we want for "find facts mentioning
+ *     all of these terms".
+ *
+ * Returns "" when the input has no usable tokens; callers short-circuit
+ * to an empty result list in that case.
+ *
+ * Exported for unit tests.
+ */
+export function sanitizeFtsQuery(query: string): string {
+  const tokens: string[] = [];
+  for (const raw of query.split(/\s+/)) {
+    // Keep only chars FTS5 understands inside a token; drop everything
+    // operator-like. Apostrophes within words are common (e.g., "user's")
+    // and FTS5 accepts them inside a quoted token without further escaping.
+    const cleaned = raw.replace(/[^a-zA-Z0-9_']/g, "");
+    if (cleaned.length === 0) continue;
+    tokens.push(`"${cleaned.replace(/"/g, '""')}"`);
+  }
+  return tokens.join(" ");
 }
 
 interface RawFactRow {

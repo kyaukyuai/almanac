@@ -14,7 +14,9 @@ import {
   ToolDesignResultSchema,
   ToolManifestSchema,
   type AlmanacManifest,
+  type ApprovedSource,
   type CompileState,
+  type SourcesFile,
   type ToolDesignResult,
   type ToolManifest,
 } from "../../core/types.ts";
@@ -24,6 +26,7 @@ import { toolDesignPath } from "./s06-tool-design.ts";
 import {
   MissingToolDesignError,
   createToolImplRunner,
+  extractFetchHosts,
   removeStaleToolFiles,
   stage07OutputPath,
 } from "./s07-tool-impl-runner.ts";
@@ -293,5 +296,158 @@ describe("removeStaleToolFiles", () => {
     expect(removed).toEqual([]);
     expect(existsSync(join(toolsDir, "scratch.md"))).toBe(true);
     expect(existsSync(join(toolsDir, "tsconfig.toml"))).toBe(true);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// extractFetchHosts + fetch_official_docs allowlist (Bug A regression)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("extractFetchHosts", () => {
+  function src(
+    id: string,
+    url: string,
+    kind: ApprovedSource["kind"],
+  ): ApprovedSource {
+    return {
+      id,
+      url,
+      kind,
+      trust: 0.9,
+      volatility: "slow",
+      rationale: "test",
+      ingestion: { mode: "snapshot", scope: ["/"], refreshIntervalHours: 24 },
+      notes: null,
+    };
+  }
+
+  test("returns lowercased hostnames for docs/news/academic/essay only", () => {
+    const sources: ApprovedSource[] = [
+      src("a", "https://Kubernetes.io/docs/", "docs"),
+      src("b", "https://www.openai.com/research/", "academic"),
+      src("c", "https://example.com/blog", "news"),
+      src("d", "https://thinker.example/essay", "essay"),
+      // Excluded kinds:
+      src("e", "https://github.com/foo/bar", "repo"),
+      src("f", "file:///tmp/x.md", "file"),
+      src("g", "https://forum.example/", "community"),
+    ];
+    const hosts = extractFetchHosts(sources);
+    expect(hosts).toEqual([
+      "example.com",
+      "kubernetes.io",
+      "thinker.example",
+      "www.openai.com",
+    ]);
+  });
+
+  test("deduplicates hostnames", () => {
+    const sources: ApprovedSource[] = [
+      src("a", "https://docs.example/intro", "docs"),
+      src("b", "https://docs.example/api", "docs"),
+      src("c", "https://news.example/", "news"),
+    ];
+    expect(extractFetchHosts(sources)).toEqual(["docs.example", "news.example"]);
+  });
+
+  test("skips malformed urls without crashing", () => {
+    const sources: ApprovedSource[] = [
+      src("a", "https://valid.example/", "docs"),
+      // Construct via raw cast; the schema would normally reject this.
+      {
+        ...src("b", "https://valid.example/", "docs"),
+        url: "not a url" as string,
+      } as ApprovedSource,
+    ];
+    // Just shouldn't throw + should keep the valid one.
+    expect(extractFetchHosts(sources)).toEqual(["valid.example"]);
+  });
+
+  test("empty input → empty array", () => {
+    expect(extractFetchHosts([])).toEqual([]);
+  });
+});
+
+describe("createToolImplRunner — fetch_official_docs allowlist (regression)", () => {
+  function buildApproved(urls: string[]): SourcesFile {
+    return {
+      schemaVersion: "0.1.0",
+      status: "approved",
+      generatedAt: "2026-05-08T12:00:00.000Z",
+      approvedAt: "2026-05-08T12:00:01.000Z",
+      approvedBy: "auto",
+      generatedBy: {
+        stage: "02-source-discovery",
+        evaluatorPromptVersion: "evaluator-v1",
+        candidateCount: urls.length,
+        acceptedCount: urls.length,
+      },
+      coverage: {
+        docs: urls.length,
+        repo: 0,
+        news: 0,
+        community: 0,
+        academic: 0,
+        data: 0,
+        file: 0,
+        essay: 0,
+        book: 0,
+        talk: 0,
+      },
+      warnings: [],
+      sources: urls.map((url, i) => ({
+        id: `docs-${i}`,
+        url,
+        kind: "docs" as const,
+        trust: 0.95,
+        volatility: "slow" as const,
+        rationale: "test",
+        ingestion: { mode: "snapshot" as const, scope: ["/"], refreshIntervalHours: 24 },
+        notes: null,
+      })),
+      rejected: [],
+    };
+  }
+
+  test("populates network allowlist on fetch_official_docs from approved sources", async () => {
+    const fx = await freshFixture();
+    const outcome = await createToolImplRunner({
+      readApprovedSources: async () =>
+        buildApproved([
+          "https://sqlite.org/docs.html",
+          "https://www.sqlite.org/lang.html",
+        ]),
+    }).run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const mp = join(fx.almanacDir, "tools", "fetch_official_docs.json");
+    const manifest = ToolManifestSchema.parse(
+      JSON.parse(readFileSync(mp, "utf8")),
+    );
+    expect(manifest.capabilities.network).toEqual([
+      "sqlite.org",
+      "www.sqlite.org",
+    ]);
+  });
+
+  test("falls back to empty allowlist when approved sources are missing", async () => {
+    const fx = await freshFixture();
+    const events: object[] = [];
+    const outcome = await createToolImplRunner({
+      // Default readApprovedSources → tries to read non-existent file → throws.
+    }).run(makeCtx({ ...fx, log: (e) => events.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const mp = join(fx.almanacDir, "tools", "fetch_official_docs.json");
+    const manifest = ToolManifestSchema.parse(
+      JSON.parse(readFileSync(mp, "utf8")),
+    );
+    expect(manifest.capabilities.network).toEqual([]);
+    const warned = events.find(
+      (e) =>
+        (e as { event?: string }).event ===
+        "stage7:approved-sources-missing",
+    );
+    expect(warned).toBeDefined();
   });
 });
