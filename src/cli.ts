@@ -100,7 +100,7 @@ import { createMockProvider } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
 import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
 
-const FORGER_VERSION = "0.1.0";
+const FORGER_VERSION = "0.1.1";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
