@@ -1,7 +1,6 @@
 # almanac — Design Document
 
-Status: **Draft v0.2** · Last updated by the design thread at
-`T-019e0670-942c-711f-b948-f350ac93e96d`.
+Status: **v0.2.5 shipped · v0.3 plan in §8** · last updated 2026-05-25.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -643,29 +642,108 @@ almanac/
 
 ## 8. Roadmap
 
-### v0.1 (MVP)
+### v0.1 (MVP) — **shipped 2026-05-25** (v0.1.0 + v0.1.1)
 
-- `new` (TypeScript-only generated tools)
-- `update` (TTL-based refresh — first-class)
-- `list` / `inspect` / `remove`
-- **`serve` (generic MCP stdio server) — hero**
-- **`register` (claude-code, claude-desktop, cursor, codex)**
-- **Skill: `adapters/skill/SKILL.md` generation**
-- Source discovery: WebSearch + GitHub
-- Tool budget: 4 default + ≤3 domain-specific
-- Knowledge: `facts.jsonl` + bun:sqlite FTS5 (no vector)
-- Benchmark: 10 positive + 5 negative, MCP-based E2E
+- `new` / `update` (TTL-based refresh, `--from-stage`) / `list` / `inspect` /
+  `path` / `remove`
+- `serve` (generic MCP stdio server) — the hero command
+- `register` for claude-code, claude-desktop, cursor (JSON)
+- Skill: `adapters/skill/SKILL.md` generation
+- Source discovery: WebSearch + GitHub (planner → executor → evaluator)
+- 12-stage compile pipeline; Stage 7 LLM implementer with
+  `generate → tsc → smoke → retry` loop
+- Tool budget: 4 default + ≤3 domain-specific custom tools
+- Knowledge: `facts.jsonl` + `bun:sqlite` FTS5 (no vector yet)
+- Benchmark: 10 positive + 5 negative, MCP-based E2E (Stages 11–12)
+- GitHub Actions CI (typecheck + bun test) and MIT license
 
-### v0.2
+### v0.2 — **shipped through v0.2.5**
 
-- `feed` (incremental single-source ingest)
-- `export` (portable bundle)
-- Vector retrieval (`HashEmbeddingProvider` default, OpenAI optional)
-- Wiki view export (human inspection surface)
+Shipped:
+
+- `feed` — incremental single-source ingest (v0.2.0)
+- `export` — portable `.tar.gz` bundle (v0.2.1)
+- `codex` / TOML `register` (v0.2.2) — the four-client register triad is
+  complete (claude-code, claude-desktop, cursor, codex)
+- `CHANGELOG.md` + CI (v0.2.0+)
+- Stage 11 hardening: `factSample`-aware prompt v2 (v0.2.2) → v3 (v0.2.5),
+  case-insensitive `expected.contains` (v0.2.3), `factSample` default
+  20 → 60 (v0.2.4)
+
+Deferred to v0.3 (originally scoped here but unshipped):
+
+- Vector retrieval (default provider + OpenAI optional)
 - HTTP / SSE MCP transport
 - Auto-refresh scheduler (cron / launchd helper)
+- Wiki view export (human inspection surface)
 
-### v0.3+
+### Empirical baseline — v0.2.5 cross-domain validation
+
+After five fix-rolls on the sqlite smoke and an independent
+cross-validation on Rust:
+
+| domain  | depth     | facts | tools (custom) | passed | citationRate |
+|--------:|-----------|------:|---------------:|-------:|-------------:|
+| sqlite  | standard  |   620 |              2 |  12/15 | 0.70         |
+| Rust    | standard  |   779 |              2 |  12/15 | 0.70         |
+
+The remaining 20 % of failures clusters into two structural areas
+(see v0.3 thrust below). v0.2.x is therefore considered
+feature-complete — further patches at this stage would only nibble
+at edges. The real lift requires v0.3-class structural work.
+
+### v0.3 main thrust — custom tool ↔ source-mode hygiene
+
+Both `pragma_lookup` (sqlite) and `lookup_std_item` (Rust) failed
+their positive fixtures with `no-results` for the *same* root
+cause: Stage 6 designed each tool on the assumption of full
+fact-corpus content, while Stage 4 fetched the relevant source in
+`index-only` mode (URL + minimal metadata, no page body). Stage 7
+implemented exactly what was designed — faithfully but uselessly.
+
+Three resolution paths to evaluate, in order of preference:
+
+1. **Stage 6 awareness.** Feed each approved source's `mode`
+   (`snapshot` vs `index-only`) into the tool-design prompt;
+   require every custom tool to enumerate the `sourceId`s it
+   reads from and refuse designs that depend solely on
+   index-only sources. Such tools must instead be designed
+   around `fetch_official_docs` at runtime.
+2. **Stage 7 fallback wiring.** Inside an LLM-designed tool that
+   currently calls `ctx.knowledge.searchFacts(q)`, auto-emit a
+   fallback path: if the fact search returns empty *and* the
+   tool's source-list contains an index-only entry, call
+   `ctx.fetch.docs(url)` against that source's URL and parse the
+   live page. This is a runtime-level mitigation requiring no
+   prompt change.
+3. **Stage 4 widening.** Default well-known-licensed sources
+   (`doc.rust-lang.org/*`, `sqlite.org/*`, `kubernetes.io/docs/*`,
+   `docs.djangoproject.com/*`) to `snapshot` rather than
+   `index-only`. Curated allowlist or an automated
+   `LICENSE`-detection helper at Stage 2.
+
+Approach (1) + (2) together is the principled fix; (3) is the
+cheapest near-term reduction.
+
+### v0.3 supporting thrusts
+
+- **Vector retrieval** (deferred from v0.2). Addresses terminology
+  gaps where the LLM-extracted fact uses one term but the
+  benchmark fixture or end-user query uses a synonym (e.g.
+  `vdbe` ↔ `virtual database engine`). Plan: `bun:sqlite` + a
+  cheap embedding model (Voyage `voyage-3-lite` default, OpenAI
+  `text-embedding-3-small` optional, local
+  `@xenova/transformers` for air-gapped); reciprocal rank fusion
+  (RRF) of cosine + FTS5 BM25.
+- **HTTP / SSE MCP transport** (deferred from v0.2). Unlocks
+  hosted / multi-tenant scenarios. Runtime-only — no compile-time
+  changes.
+- **Auto-refresh scheduler** (deferred from v0.2). Cron / launchd
+  helper that runs `almanac update` against TTL-stale sources.
+- **Wiki view export** (deferred from v0.2). HTML bundle for
+  human-readable `inspect` flows.
+
+### v0.4+ (long-tail)
 
 - Slack adapter
 - Almanac marketplace
@@ -677,11 +755,32 @@ almanac/
 
 ## 9. Open questions / next steps
 
-1. **Stage 1 prompt v1**: the most important LLM prompt. Determines the
-   `freshnessProfile`, which cascades into every later stage. *Next deliverable.*
-2. **Stage 6 prompt v1**: tool design — how to bias toward live retrieval.
-3. **Stage 7 implementation skeleton**: the tsc + smoke loop is the riskiest
-   piece of v0.1.
-4. **`almanac-core` types**: zod schemas for `DomainSpec`, `FactRecord`,
-   `ToolManifest`, `ToolResult`, `ResourceDescriptor` — the canonical contract.
-5. **Repository rename**: `savant-forge` → `almanac` (GitHub + local clone).
+The original v0.1 deliverables listed here have all shipped
+(Stage 1 prompt, Stage 6 prompt, Stage 7 LLM implementer,
+`almanac-core` types, `savant-forge` → `almanac` rename). Active
+questions for v0.3:
+
+1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
+   `text-embedding-3-small` vs local
+   `@xenova/transformers/all-MiniLM-L6-v2`. Tradeoff:
+   cost-per-token vs bundle size vs offline support.
+   Recommendation: Voyage for the default path, OpenAI as opt-in
+   when the user already has that key, local as the air-gapped
+   fallback.
+2. **Hybrid retrieval recipe.** RRF (parameter-free, well-cited)
+   vs a weighted linear blend (tunable per domain). Start with
+   RRF; promote to weighted only if benchmark signals demand it.
+3. **Runtime tool budget under v0.3.** Adding live-fetch fallback
+   into LLM-designed tools (thrust 2 above) increases per-call
+   latency and may push tools beyond the current 4-default +
+   ≤3-custom envelope. Decide whether to raise the budget or
+   compress via richer default tools.
+4. **Snapshot allowlist.** Curated list of trusted hosts whose
+   docs default to `snapshot` rather than `index-only`. Needs to
+   be additive (never *block* a source, only *upgrade* the
+   default mode) and explicit in `sources.json`.
+5. **Stage 11 `intent` enum coverage.** The Rust smoke produced
+   one schema retry because the LLM emitted `"diagnose-error"`,
+   which is not in the canonical six-value enum. Either
+   broaden the enum (`debug` / `diagnose`) or tighten the
+   prompt's enum framing.
