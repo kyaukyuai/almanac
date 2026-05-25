@@ -81,6 +81,13 @@ What's still deferred:
 The original design thread is at
 [Amp T-019e0670…](https://ampcode.com/threads/T-019e0670-942c-711f-b948-f350ac93e96d).
 
+## Changelog
+
+See [CHANGELOG.md](./CHANGELOG.md) for a concise version history.
+The [GitHub Releases](https://github.com/kyaukyuai/almanac/releases)
+page carries the long-form motivation and worked examples for each
+version.
+
 ## License
 
 MIT — see [LICENSE](./LICENSE).
