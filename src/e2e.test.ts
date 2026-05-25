@@ -702,7 +702,10 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
       expect(report.summary.errored).toBe(0);
       expect(report.summary.citationRate).toBe(1);
     },
-    30_000,
+    // 60s budget. The bulk of the wall time is the Stage 7 LLM implementer
+    // path spawning `bun x tsc` + `bun test` subprocesses for the synthetic
+    // custom tool; on cold caches that can take 10–15 s.
+    60_000,
   );
 });
 
