@@ -1414,6 +1414,70 @@ export const ExtractionResultSchema = z
   });
 export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
 
+/**
+ * Lenient remap from common LLM-emitted fact-type values to canonical
+ * `FactTypeSchema` values. The Stage 5 prompt instructs the model to use the
+ * canonical 9 types, but real-LLM runs against opinion-heavy domains
+ * (e.g., Enterprise AI) consistently produced `"pattern"` / `"antipattern"`
+ * / `"practice"` — terms that come straight from the DomainSpec's
+ * `entityTypes` list. These are clean concept overlaps, so we coerce them
+ * at the parse boundary rather than reject otherwise-valid facts.
+ *
+ * Exported for unit tests; the runtime path goes through
+ * `normalizeExtractionResult` below.
+ */
+export const FACT_TYPE_LENIENT_REMAP: Readonly<Record<string, FactType>> = {
+  pattern: "framework",
+  antipattern: "tradeoff",
+  practice: "procedure",
+  // Entity-shaped types that occasionally leak in from DomainSpec.entityTypes;
+  // map all to "reference" (a pointer to canonical material).
+  role: "reference",
+  vendor: "reference",
+  platform: "reference",
+};
+
+/**
+ * Best-effort normalization of raw extractor output BEFORE schema validation.
+ * Two mistakes show up repeatedly in real-LLM runs:
+ *
+ *   - `facts[i].type` set to a domain-entity term (`pattern`, `practice`,
+ *     etc.) rather than the canonical 9 fact-type enum.
+ *   - `facts[i].excerpt` longer than the 300-char cap — the model includes
+ *     full paragraphs instead of single-sentence snippets.
+ *
+ * Both are recoverable: remap the type via `FACT_TYPE_LENIENT_REMAP`,
+ * truncate the excerpt. Other malformed shapes (missing required fields,
+ * bad freshnessClass) still surface as schema errors so the chunk gets
+ * logged and dropped.
+ *
+ * Non-object input is returned unchanged so the schema parse can produce
+ * its normal error.
+ */
+export function normalizeExtractionResult(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return raw;
+  }
+  const r = raw as Record<string, unknown>;
+  if (!Array.isArray(r.facts)) return raw;
+  const normalizedFacts = r.facts.map((f) => {
+    if (typeof f !== "object" || f === null) return f;
+    const fact = { ...(f as Record<string, unknown>) };
+    if (typeof fact.type === "string") {
+      const lower = fact.type.toLowerCase();
+      const remapped = FACT_TYPE_LENIENT_REMAP[lower];
+      if (remapped !== undefined) {
+        fact.type = remapped;
+      }
+    }
+    if (typeof fact.excerpt === "string" && fact.excerpt.length > 300) {
+      fact.excerpt = fact.excerpt.slice(0, 300);
+    }
+    return fact;
+  });
+  return { ...r, facts: normalizedFacts };
+}
+
 /** The canonical durable fact record written to `extracted/facts.jsonl`. */
 export const FactRecordSchema = z
   .object({

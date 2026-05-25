@@ -16,8 +16,10 @@ import { z } from "zod";
 import {
   ExtractedFactDraftSchema,
   ExtractionResultSchema,
+  FACT_TYPE_LENIENT_REMAP,
   FactRecordSchema,
   materializeFact,
+  normalizeExtractionResult,
   type ExtractedFactDraft,
   type ExtractionResult,
   type FactRecord,
@@ -351,5 +353,108 @@ describe("FactRecord — validation rejections", () => {
     const bad = valid();
     bad.source.url = "not a url";
     expect(() => FactRecordSchema.parse(bad)).toThrow(z.ZodError);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// normalizeExtractionResult — lenient pre-parse fixups (regression)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("normalizeExtractionResult", () => {
+  function factWith(type: string, excerpt = "ok"): Record<string, unknown> {
+    return {
+      text: "A reasonably long fact statement that satisfies the min cap.",
+      type,
+      entities: ["x"],
+      excerpt,
+      freshnessClass: "static",
+      validUntilRelative: null,
+      confidence: 0.9,
+    };
+  }
+  const baseExtractionShape = {
+    schemaVersion: "0.1.0",
+    status: "extracted",
+    skipReason: null,
+    coverage: { extractable: "x", nonExtractable: "y" },
+  };
+
+  test("remaps known LLM type mistakes to canonical fact types", () => {
+    const raw = {
+      ...baseExtractionShape,
+      facts: [
+        factWith("pattern"),
+        factWith("antipattern"),
+        factWith("practice"),
+        factWith("role"),
+        factWith("vendor"),
+        factWith("platform"),
+        factWith("fact"), // canonical — leave alone
+      ],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    expect(normalized.facts.map((f) => (f as { type: string }).type)).toEqual([
+      "framework",
+      "tradeoff",
+      "procedure",
+      "reference",
+      "reference",
+      "reference",
+      "fact",
+    ]);
+    // The result is now schema-valid where the raw form was not.
+    expect(() => ExtractionResultSchema.parse(normalized)).not.toThrow();
+  });
+
+  test("matches the lenient remap table exactly", () => {
+    expect(Object.keys(FACT_TYPE_LENIENT_REMAP).sort()).toEqual([
+      "antipattern",
+      "pattern",
+      "platform",
+      "practice",
+      "role",
+      "vendor",
+    ]);
+  });
+
+  test("case-insensitive on type", () => {
+    const raw = {
+      ...baseExtractionShape,
+      facts: [factWith("PATTERN"), factWith("AntiPattern")],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    expect(normalized.facts.map((f) => (f as { type: string }).type)).toEqual([
+      "framework",
+      "tradeoff",
+    ]);
+  });
+
+  test("truncates excerpts longer than 300 chars (regression)", () => {
+    const long = "x".repeat(800);
+    const raw = {
+      ...baseExtractionShape,
+      facts: [factWith("fact", long)],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    const e = (normalized.facts[0] as { excerpt: string }).excerpt;
+    expect(e.length).toBe(300);
+  });
+
+  test("leaves unknown types alone (schema will reject loud)", () => {
+    const raw = {
+      ...baseExtractionShape,
+      facts: [factWith("totally-unknown-type")],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    expect((normalized.facts[0] as { type: string }).type).toBe(
+      "totally-unknown-type",
+    );
+    expect(() => ExtractionResultSchema.parse(normalized)).toThrow(z.ZodError);
+  });
+
+  test("non-object input is returned unchanged", () => {
+    expect(normalizeExtractionResult(null)).toBeNull();
+    expect(normalizeExtractionResult("not-an-object")).toBe("not-an-object");
+    expect(normalizeExtractionResult([1, 2, 3])).toEqual([1, 2, 3]);
   });
 });

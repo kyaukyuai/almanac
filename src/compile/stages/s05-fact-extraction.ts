@@ -36,6 +36,7 @@ import {
   SourcesFileSchema,
   isFetchedEntry,
   materializeFact,
+  normalizeExtractionResult,
   type ApprovedSource,
   type DomainSpec,
   type ExtractionResult,
@@ -383,7 +384,14 @@ function parseExtractionResult(
     });
     return null;
   }
-  const result = ExtractionResultSchema.safeParse(parsed);
+  // Smooth over two recurring LLM mistakes before schema validation:
+  // (1) `type` set to a DomainSpec entityType (`pattern`, `practice`, etc.)
+  //     instead of the canonical fact-type enum, and
+  // (2) `excerpt` longer than the 300-char cap.
+  // Both are recoverable; other malformed shapes still surface as schema
+  // errors below.
+  const normalized = normalizeExtractionResult(parsed);
+  const result = ExtractionResultSchema.safeParse(normalized);
   if (!result.success) {
     log({
       event: "stage5:malformed-chunk",
