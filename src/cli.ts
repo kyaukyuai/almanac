@@ -19,6 +19,9 @@
  *   almanac remove <id> [opts]             delete an almanac dir + unregister
  *                                          it from any client configs (dry-run
  *                                          by default; --apply to commit)
+ *   almanac feed <id> <url> [opts]         incrementally add one source to a
+ *                                          compiled almanac (fetch + extract +
+ *                                          reindex; dry-run by default)
  *
  * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
  * Stage 11 (benchmark generation) is LLM-driven and is skipped when no
@@ -48,7 +51,10 @@ import { createSourceDiscoveryPlannerRunner } from "./compile/stages/s02a-source
 import { createSourceDiscoveryExecutorRunner } from "./compile/stages/s02x-source-discovery-executor.ts";
 import { createSourceDiscoveryEvaluatorRunner } from "./compile/stages/s02b-source-discovery-evaluator.ts";
 import { createApproveRunner } from "./compile/stages/s03-approve-runner.ts";
-import { createSourceFetchRunner } from "./compile/stages/s04-source-fetch-runner.ts";
+import {
+  createSourceFetchRunner,
+  defaultFetchers,
+} from "./compile/stages/s04-source-fetch-runner.ts";
 import { createFactExtractionRunner } from "./compile/stages/s05-fact-extraction.ts";
 import { createToolDesignRunner } from "./compile/stages/s06-tool-design.ts";
 import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
@@ -99,6 +105,8 @@ import { createAnthropicProvider } from "./llm/anthropic.ts";
 import { createMockProvider } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
 import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
+import { runFeed, FeedAlreadyExistsError } from "./manage/feed.ts";
+import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 const FORGER_VERSION = "0.1.1";
 
@@ -733,6 +741,109 @@ interface ServeOptions {
 // remove
 // ──────────────────────────────────────────────────────────────────────────────
 
+// ──────────────────────────────────────────────────────────────────────────────
+// feed
+// ──────────────────────────────────────────────────────────────────────────────
+
+interface FeedOptions {
+  root: string;
+  kind?: SourceKind;
+  mode?: IngestionMode;
+  trust?: string; // raw string from commander; we parse to number
+  rationale?: string;
+  sourceId?: string;
+  scope?: string[];
+  apply?: boolean;
+}
+
+async function cmdFeed(
+  id: string,
+  url: string,
+  opts: FeedOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  if (!/^https?:\/\//i.test(url)) {
+    fail(
+      `feed: <url> must be http:// or https:// (got "${url}"). ` +
+        "file:// support lands in v0.3+.",
+    );
+  }
+
+  const apply = opts.apply === true;
+  const trust =
+    opts.trust !== undefined ? Number.parseFloat(opts.trust) : undefined;
+  if (trust !== undefined && (!Number.isFinite(trust) || trust < 0 || trust > 1)) {
+    fail(`feed: --trust must be a number in [0, 1] (got "${opts.trust}")`);
+  }
+
+  const provider = resolveProvider();
+  if (provider === null) {
+    fail(
+      "feed: ANTHROPIC_API_KEY is not set, but Stage 5 fact extraction needs an LLM. " +
+        "Export ANTHROPIC_API_KEY (or set ALMANAC_LLM=mock for an experimentation no-op).",
+    );
+  }
+
+  process.stdout.write(
+    `▶ feed almanac "${id}" ← ${url}\n` +
+      `    mode          ${apply ? "APPLY (writes will be made)" : "DRY RUN (re-run with --apply to write)"}\n\n`,
+  );
+
+  try {
+    const result = await runFeed({
+      almanacDir,
+      url,
+      ...(opts.kind !== undefined ? { kind: opts.kind } : {}),
+      ...(opts.mode !== undefined ? { mode: opts.mode } : {}),
+      ...(trust !== undefined ? { trust } : {}),
+      ...(opts.rationale !== undefined ? { rationale: opts.rationale } : {}),
+      ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
+      ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
+      apply,
+      llm: provider,
+      fetchers: defaultFetchers(),
+      log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
+    });
+
+    process.stdout.write("\n");
+    if (result.kind === "dry-run") {
+      process.stdout.write(
+        `Would add source:\n` +
+          `    id            ${result.newSource.id}\n` +
+          `    url           ${result.newSource.url}\n` +
+          `    kind          ${result.newSource.kind}\n` +
+          `    mode          ${result.newSource.ingestion.mode}\n` +
+          `    trust         ${result.newSource.trust}\n` +
+          `    sources       ${result.existingSourcesCount} → ${result.existingSourcesCount + 1}\n\n` +
+          `Re-run with --apply to fetch + extract + reindex.\n`,
+      );
+    } else if (result.kind === "skipped") {
+      process.stdout.write(`Skipped: ${result.reason}\n`);
+    } else {
+      process.stdout.write(
+        `Done.\n` +
+          `    new source    ${result.newSource.id}\n` +
+          `    fetch status  ${result.fetchEntry.status}\n` +
+          `    facts added   ${result.factsAdded}\n` +
+          `    total facts   ${result.newFactCount}\n` +
+          `    version       → ${result.newVersion}\n`,
+      );
+    }
+  } catch (e) {
+    if (e instanceof FeedAlreadyExistsError) {
+      fail(e.message);
+    }
+    throw e;
+  }
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// remove
+// ──────────────────────────────────────────────────────────────────────────────
+
 interface RemoveOptions {
   root: string;
   /** If false (default), print what would happen but don't touch disk. */
@@ -1199,6 +1310,42 @@ program
   )
   .addOption(rootOption)
   .action(cmdRemove);
+
+program
+  .command("feed <id> <url>")
+  .description(
+    "incrementally add one source to a compiled almanac (fetch + extract + reindex; dry-run by default)",
+  )
+  .addOption(
+    new Option("--kind <name>", "Source kind (default: docs)").choices([
+      "docs",
+      "community",
+      "academic",
+      "data",
+      "news",
+      "repo",
+      "file",
+      "essay",
+      "book",
+      "talk",
+    ]),
+  )
+  .addOption(
+    new Option("--mode <which>", "Ingestion mode (default: snapshot)").choices([
+      "snapshot",
+      "index-only",
+    ]),
+  )
+  .option("--trust <n>", "Trust score in [0, 1] (default: 0.85)")
+  .option("--rationale <text>", "One-line reason for adding this source")
+  .option("--source-id <id>", "Override the derived source id (must be lowercase kebab-case)")
+  .option(
+    "--scope <glob...>",
+    "ingestion.scope globs (repeatable; default per-kind)",
+  )
+  .option("--apply", "Actually perform the changes (default: dry-run)")
+  .addOption(rootOption)
+  .action(cmdFeed);
 
 program
   .command("register <id>")
