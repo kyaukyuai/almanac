@@ -39,11 +39,13 @@ import {
   NoEnabledToolsError,
   STAGE11_PROMPT_VERSION,
   createBenchmarkGenRunner,
+  defaultReadFactSample,
   negativeJsonlPath,
   positiveJsonlPath,
   stage11OutputPath,
   validateInvocations,
 } from "./s11-benchmark-gen.ts";
+import { factsJsonlPath } from "./s05-fact-extraction.ts";
 import type { StageContext } from "../pipeline.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -255,7 +257,7 @@ describe("createBenchmarkGenRunner", () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v1": JSON.stringify(buildStage11Output("query_facts")),
+        "11-benchmark-gen@v2": JSON.stringify(buildStage11Output("query_facts")),
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -380,5 +382,116 @@ describe("createBenchmarkGenRunner", () => {
     await expect(runner.run(makeCtx(fx))).rejects.toBeInstanceOf(
       InvalidFixtureInvocationError,
     );
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// defaultReadFactSample
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("defaultReadFactSample", () => {
+  async function seedFacts(
+    almanacDir: string,
+    factCount: number,
+  ): Promise<void> {
+    const fp = factsJsonlPath(almanacDir);
+    await mkdir(dirname(fp), { recursive: true });
+    const lines: string[] = [];
+    for (let i = 0; i < factCount; i++) {
+      // ULID regex excludes I/L/O/U; use all-digit IDs to dodge those.
+      // Must be exactly 26 chars.
+      const ulid = String(1_000_000 + i).padStart(26, "0");
+      lines.push(
+        JSON.stringify({
+          id: ulid,
+          text: `Fact number ${i} about sqlite syntax.`,
+          type: "fact",
+          entities: [`entity-${i}`],
+          source: {
+            sourceId: `src-${i % 3}`,
+            contentHash: "a".repeat(64),
+            url: `https://example.com/${i}`,
+            excerpt: `Fact number ${i} about sqlite syntax.`,
+          },
+          freshnessClass: "static",
+          validUntil: null,
+          confidence: 0.9,
+          extractedAt: "2026-05-08T12:00:00.000Z",
+          extractor: { model: "claude-sonnet-4-5", promptVersion: "v1" },
+        }),
+      );
+    }
+    writeFileSync(fp, lines.join("\n") + "\n", "utf8");
+  }
+
+  test("missing facts.jsonl → empty array (no throw)", async () => {
+    const fx = await freshFixture();
+    const sample = await defaultReadFactSample(fx.almanacDir, 20);
+    expect(sample).toEqual([]);
+  });
+
+  test("size=0 → empty array (no read)", async () => {
+    const fx = await freshFixture();
+    await seedFacts(fx.almanacDir, 50);
+    expect(await defaultReadFactSample(fx.almanacDir, 0)).toEqual([]);
+  });
+
+  test("evenly spaces samples across the corpus", async () => {
+    const fx = await freshFixture();
+    await seedFacts(fx.almanacDir, 50);
+    const sample = await defaultReadFactSample(fx.almanacDir, 10);
+    expect(sample).toHaveLength(10);
+    // step = 50 / 10 = 5; samples should be facts 0, 5, 10, 15, ...
+    expect(sample[0]!.entities[0]).toBe("entity-0");
+    expect(sample[1]!.entities[0]).toBe("entity-5");
+    expect(sample[9]!.entities[0]).toBe("entity-45");
+    // Compact shape: only the routing-relevant fields.
+    expect(Object.keys(sample[0]!).sort()).toEqual([
+      "entities",
+      "sourceId",
+      "text",
+      "type",
+    ]);
+  });
+
+  test("size > factCount → all facts returned", async () => {
+    const fx = await freshFixture();
+    await seedFacts(fx.almanacDir, 3);
+    const sample = await defaultReadFactSample(fx.almanacDir, 20);
+    expect(sample).toHaveLength(3);
+  });
+
+  test("malformed lines are skipped silently", async () => {
+    const fx = await freshFixture();
+    const fp = factsJsonlPath(fx.almanacDir);
+    await mkdir(dirname(fp), { recursive: true });
+    writeFileSync(
+      fp,
+      [
+        "not-json",
+        JSON.stringify({
+          id: "01H8Q5Z2QJK4VXNTRWP3M7XYZ0",
+          text: "Valid fact text long enough to satisfy schema.",
+          type: "fact",
+          entities: ["x"],
+          source: {
+            sourceId: "src-1",
+            contentHash: "a".repeat(64),
+            url: "https://example.com",
+            excerpt: "Valid fact text long enough to satisfy schema.",
+          },
+          freshnessClass: "static",
+          validUntil: null,
+          confidence: 0.9,
+          extractedAt: "2026-05-08T12:00:00.000Z",
+          extractor: { model: "claude-sonnet-4-5", promptVersion: "v1" },
+        }),
+        "{invalid-json:",
+      ].join("\n") + "\n",
+      "utf8",
+    );
+    const sample = await defaultReadFactSample(fx.almanacDir, 10);
+    expect(sample).toHaveLength(1);
+    expect(sample[0]!.text).toContain("Valid fact text");
   });
 });

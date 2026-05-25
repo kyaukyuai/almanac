@@ -23,11 +23,14 @@ import { dirname, join } from "node:path";
 
 import {
   DomainSpecSchema,
+  FactRecordSchema,
   parseStage11Output,
   type DomainSpec,
+  type FactRecord,
   type Stage11Output,
   type ToolManifest,
 } from "../../core/types.ts";
+import { factsJsonlPath } from "./s05-fact-extraction.ts";
 import {
   LlmJsonParseError,
   LlmSchemaValidationError,
@@ -42,15 +45,18 @@ import { discoverToolNames, loadTool } from "../../serve/tool-loader.ts";
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const STAGE11_PROMPT_VERSION = "v1";
+export const STAGE11_PROMPT_VERSION = "v2";
 export const STAGE11_PROMPT_STAGE_ID = "11-benchmark-gen";
 
-/** Matches `recommendedModel` in `prompts/11-benchmark-gen/v1.md`. */
+/** Matches `recommendedModel` in `prompts/11-benchmark-gen/v2.md`. */
 export const STAGE11_DEFAULT_MODEL = "claude-sonnet-4-5";
 export const STAGE11_DEFAULT_MAX_TOKENS = 6144;
 export const STAGE11_DEFAULT_TEMPERATURE = 0.2;
 /** 1 initial + 1 retry-on-error. Mirrors Stage 6. */
 export const STAGE11_DEFAULT_MAX_ATTEMPTS = 2;
+
+/** Default size of the fact sample shown to the Stage 11 LLM. */
+export const STAGE11_DEFAULT_FACT_SAMPLE_SIZE = 20;
 
 export const STAGE11_OUTPUT_REL_PATH = ".compile/stage11-output.json";
 export const POSITIVE_JSONL_REL_PATH = "tests/positive.jsonl";
@@ -144,6 +150,14 @@ export interface CreateBenchmarkGenRunnerOptions {
   temperature?: number;
   /** Defaults to `STAGE11_DEFAULT_MAX_ATTEMPTS` (1 initial + 1 retry). */
   maxAttempts?: number;
+  /**
+   * Defaults to `STAGE11_DEFAULT_FACT_SAMPLE_SIZE` (20). Sample of facts
+   * shown to the LLM so positive fixture queries can target real corpus
+   * vocabulary; v1 of the prompt ran "blind" against just the
+   * `DomainSpec`, leading the LLM to invent fictional terms that the
+   * indexed facts never contained.
+   */
+  factSampleSize?: number;
   /** Override the prompts root (tests). */
   promptsDir?: string;
 
@@ -151,6 +165,29 @@ export interface CreateBenchmarkGenRunnerOptions {
   readDomainSpec?: (almanacDir: string) => Promise<DomainSpec>;
   /** Test seam: list enabled tool manifests for the almanac. */
   readEnabledManifests?: (almanacDir: string) => Promise<ToolManifest[]>;
+  /**
+   * Test seam: read the fact sample. Defaults to evenly-spaced reading
+   * of `extracted/facts.jsonl`. Returns an empty array (not throw) when
+   * the file is missing — Stage 11 can still emit useful fixtures
+   * driven by the live tools alone.
+   */
+  readFactSample?: (
+    almanacDir: string,
+    size: number,
+  ) => Promise<FactSampleEntry[]>;
+}
+
+/**
+ * Compact projection of a `FactRecord` shown to the Stage 11 LLM. The
+ * full record carries provenance + freshness fields the benchmark author
+ * doesn't need; we only expose the routing-relevant text + entities + the
+ * source the fact came from.
+ */
+export interface FactSampleEntry {
+  text: string;
+  type: string;
+  entities: readonly string[];
+  sourceId: string;
 }
 
 /**
@@ -169,13 +206,19 @@ export function createBenchmarkGenRunner(
   const readDomainSpec = opts.readDomainSpec ?? defaultReadDomainSpec;
   const readEnabledManifests =
     opts.readEnabledManifests ?? defaultReadEnabledManifests;
+  const readFactSample = opts.readFactSample ?? defaultReadFactSample;
+  const factSampleSize = Math.max(
+    0,
+    opts.factSampleSize ?? STAGE11_DEFAULT_FACT_SAMPLE_SIZE,
+  );
 
   return {
     promptVersion: STAGE11_PROMPT_VERSION,
     async run(ctx) {
-      const [domainSpec, manifests] = await Promise.all([
+      const [domainSpec, manifests, factSample] = await Promise.all([
         readDomainSpec(ctx.almanacDir),
         readEnabledManifests(ctx.almanacDir),
+        readFactSample(ctx.almanacDir, factSampleSize),
       ]);
 
       if (manifests.length === 0) {
@@ -200,6 +243,7 @@ export function createBenchmarkGenRunner(
         vars: {
           domainSpec: JSON.stringify(domainSpec),
           toolManifests: JSON.stringify(promptManifests),
+          factSample: JSON.stringify(factSample),
         },
       });
 
@@ -209,6 +253,7 @@ export function createBenchmarkGenRunner(
         callName,
         model,
         toolCount: manifests.length,
+        factSampleSize: factSample.length,
         maxAttempts,
       });
 
@@ -441,6 +486,58 @@ async function defaultReadEnabledManifests(
     if (!t.manifest.disabled) enabled.push(t.manifest);
   }
   return enabled;
+}
+
+/**
+ * Read `extracted/facts.jsonl` and return an evenly-spaced sample of size
+ * `size`. Empty / missing file → empty array (Stage 11 still runs; the
+ * prompt instructs the LLM to fall back to vocabulary from
+ * `DomainSpec.entityTypes` when the sample is empty).
+ *
+ * Sampling: walk every `Math.floor(total / size)` rows. This gives the
+ * LLM a view across the whole corpus rather than the first source only
+ * (Stage 5 emits facts in source-then-chunk order, so the first 20 lines
+ * typically cover one or two sources).
+ */
+export async function defaultReadFactSample(
+  almanacDir: string,
+  size: number,
+): Promise<FactSampleEntry[]> {
+  if (size <= 0) return [];
+  let body: string;
+  try {
+    body = await readFile(factsJsonlPath(almanacDir), "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return [];
+    throw cause;
+  }
+  const facts: FactRecord[] = [];
+  for (const line of body.split("\n")) {
+    if (line.length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch {
+      continue;
+    }
+    const r = FactRecordSchema.safeParse(parsed);
+    if (r.success) facts.push(r.data);
+  }
+  if (facts.length === 0) return [];
+
+  const step = facts.length / Math.min(size, facts.length);
+  const out: FactSampleEntry[] = [];
+  for (let i = 0; i < size && i * step < facts.length; i++) {
+    const fact = facts[Math.floor(i * step)];
+    if (fact === undefined) continue;
+    out.push({
+      text: fact.text,
+      type: fact.type,
+      entities: fact.entities,
+      sourceId: fact.source.sourceId,
+    });
+  }
+  return out;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
