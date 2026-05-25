@@ -56,6 +56,9 @@ Capabilities:
   upstream stages. Fetches, extracts, and reindexes in place.
 - **`almanac update <id> --from-stage=NN`** — rewind to any stage and
   re-run the rest. Stage 7 GCs stale tool files from prior runs.
+- **`almanac export <id>`** *(new in v0.2.1)* — package a compiled
+  almanac as a portable `.tar.gz` archive (≈190 KiB for a 231-fact
+  almanac). Unpack anywhere; `almanac serve` works immediately.
 - **`almanac list / inspect / path / remove`** — basic management.
 - **`almanac serve <id>`** — stdio MCP server exposing the four default
   tools (`query_facts`, `fetch_official_docs`, `web_search_recent`,
@@ -71,9 +74,9 @@ Capabilities:
 What's still deferred:
 
 - `register --client=codex` (TOML support needed).
-- `almanac export` (portable tar.gz archive).
 - Vector retrieval (FTS5 only in v0.2; embeddings come later).
 - HTTP / SSE MCP transport (stdio only).
+- Auto-refresh scheduler (cron / launchd helper).
 
 The original design thread is at
 [Amp T-019e0670…](https://ampcode.com/threads/T-019e0670-942c-711f-b948-f350ac93e96d).

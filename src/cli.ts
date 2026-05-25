@@ -115,7 +115,7 @@ import {
 } from "./manage/export.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
-const FORGER_VERSION = "0.2.0";
+const FORGER_VERSION = "0.2.1";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
