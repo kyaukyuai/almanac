@@ -457,4 +457,31 @@ describe("normalizeExtractionResult", () => {
     expect(normalizeExtractionResult("not-an-object")).toBe("not-an-object");
     expect(normalizeExtractionResult([1, 2, 3])).toEqual([1, 2, 3]);
   });
+
+  test("truncates coverage.nonExtractable longer than 300 chars (regression)", () => {
+    const long = "x".repeat(800);
+    const raw = {
+      ...baseExtractionShape,
+      coverage: { extractable: "ok", nonExtractable: long },
+      facts: [factWith("fact")],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    expect(
+      (normalized.coverage as { nonExtractable: string }).nonExtractable.length,
+    ).toBe(300);
+    expect(() => ExtractionResultSchema.parse(normalized)).not.toThrow();
+  });
+
+  test("truncates coverage.extractable longer than 300 chars", () => {
+    const long = "y".repeat(800);
+    const raw = {
+      ...baseExtractionShape,
+      coverage: { extractable: long, nonExtractable: "ok" },
+      facts: [factWith("fact")],
+    };
+    const normalized = normalizeExtractionResult(raw) as typeof raw;
+    expect(
+      (normalized.coverage as { extractable: string }).extractable.length,
+    ).toBe(300);
+  });
 });

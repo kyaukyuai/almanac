@@ -13,6 +13,36 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.2.6] — 2026-05-25
+
+### Added
+
+- `IntentKindSchema` gains `debug` as a seventh value. Covers
+  diagnostic / troubleshooting queries (compiler errors, stack
+  traces, symptom → root-cause mapping). Stage 1 and Stage 11
+  prompts updated to reference the new value; the Stage 1
+  worked example moves the CrashLoopBackOff query into `debug`
+  and gives `explain` a cleaner conceptual example.
+- `INTENT_LENIENT_REMAP` + `normalizeStage11Output` —
+  pre-schema remap of common LLM intent typos
+  (`diagnose-error`, `diagnose`, `troubleshoot`,
+  `troubleshooting`) onto canonical `debug`. Same pattern as
+  `FACT_TYPE_LENIENT_REMAP`. Added because the Rust smoke
+  proved that simply listing `debug` in the prompt schema does
+  not override the model's strong `diagnose-error` naming prior
+  — the retry still fires on attempt 1. Remap absorbs the
+  variance at the parse boundary, saving the retry's ~$0.05 and
+  ~20s.
+
+### Fixed
+
+- `normalizeExtractionResult` now truncates
+  `coverage.extractable` and `coverage.nonExtractable` to the
+  300-char schema cap, alongside the existing `fact.excerpt`
+  truncation. First observed on `blog-rust-lang-org` during the
+  v0.2.5 Rust smoke, which dropped one otherwise-fine chunk on
+  `nonExtractable` overflow.
+
 ## [0.2.5] — 2026-05-25
 
 ### Changed
@@ -174,7 +204,8 @@ examples for each version. This file is the concise index.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.5...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.6...HEAD
+[0.2.6]: https://github.com/kyaukyuai/almanac/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/kyaukyuai/almanac/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...v0.2.3

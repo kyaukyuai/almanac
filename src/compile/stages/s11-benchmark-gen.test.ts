@@ -17,9 +17,12 @@ import {
   AlmanacManifestSchema,
   CompileStateSchema,
   DomainSpecSchema,
+  INTENT_LENIENT_REMAP,
   PositiveFixtureSchema,
   NegativeFixtureSchema,
   Stage11OutputSchema,
+  normalizeStage11Output,
+  parseStage11Output,
   type AlmanacManifest,
   type CompileState,
   type DomainSpec,
@@ -238,6 +241,58 @@ describe("validateInvocations", () => {
     expect(() =>
       validateInvocations(out.set, new Set(["query_facts"])),
     ).toThrow(InvalidFixtureInvocationError);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pre-parse lenient intent remap
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("INTENT_LENIENT_REMAP / normalizeStage11Output", () => {
+  test("table covers the known LLM intent typos and maps them to debug", () => {
+    expect(Object.keys(INTENT_LENIENT_REMAP).sort()).toEqual([
+      "diagnose",
+      "diagnose-error",
+      "troubleshoot",
+      "troubleshooting",
+    ]);
+    expect(new Set(Object.values(INTENT_LENIENT_REMAP))).toEqual(
+      new Set(["debug"]),
+    );
+  });
+
+  test("remaps 'diagnose-error' to 'debug' (regression — Rust smoke)", () => {
+    const raw = buildStage11Output("query_facts") as unknown as {
+      set: { positive: Array<{ intent: string }> };
+    };
+    raw.set.positive[0]!.intent = "diagnose-error";
+    const normalized = normalizeStage11Output(raw) as typeof raw;
+    expect(normalized.set.positive[0]!.intent).toBe("debug");
+  });
+
+  test("parseStage11Output applies the remap before schema validation", () => {
+    const raw = buildStage11Output("query_facts") as unknown as {
+      set: { positive: Array<{ intent: string }> };
+    };
+    raw.set.positive[0]!.intent = "troubleshoot";
+    const parsed = parseStage11Output(raw);
+    expect(parsed.set.positive[0]!.intent).toBe("debug");
+  });
+
+  test("non-object input is returned unchanged (schema raises its own error)", () => {
+    expect(normalizeStage11Output(null)).toBeNull();
+    expect(normalizeStage11Output("not-an-object")).toBe("not-an-object");
+    expect(normalizeStage11Output([1, 2, 3])).toEqual([1, 2, 3]);
+  });
+
+  test("leaves unknown intent values for the schema to reject (loud)", () => {
+    const raw = buildStage11Output("query_facts") as unknown as {
+      set: { positive: Array<{ intent: string }> };
+    };
+    raw.set.positive[0]!.intent = "totally-unknown-intent";
+    const normalized = normalizeStage11Output(raw) as typeof raw;
+    expect(normalized.set.positive[0]!.intent).toBe("totally-unknown-intent");
+    expect(() => parseStage11Output(raw)).toThrow();
   });
 });
 

@@ -116,7 +116,16 @@ export type FreshnessProfile = z.infer<typeof FreshnessProfileSchema>;
 // Prompt template: src/compile/prompts/01-domain-analysis/v1.md
 // ──────────────────────────────────────────────────────────────────────────────
 
-/** A user query "shape" the domain expects to handle. */
+/**
+ * A user query "shape" the domain expects to handle.
+ *
+ * `debug` (added in v0.2.6) covers diagnostic / troubleshooting
+ * queries — interpreting compiler errors, reading stack traces,
+ * mapping symptom to root cause. It was added after the Rust
+ * smoke (v0.2.5) consistently triggered a Stage 11
+ * schema-validation retry as the LLM tried to emit values like
+ * `diagnose-error` for compiler-error fixtures.
+ */
 export const IntentKindSchema = z.enum([
   "lookup",
   "howto",
@@ -124,6 +133,7 @@ export const IntentKindSchema = z.enum([
   "calc",
   "explain",
   "track",
+  "debug",
 ]);
 export type IntentKind = z.infer<typeof IntentKindSchema>;
 
@@ -1439,17 +1449,22 @@ export const FACT_TYPE_LENIENT_REMAP: Readonly<Record<string, FactType>> = {
 
 /**
  * Best-effort normalization of raw extractor output BEFORE schema validation.
- * Two mistakes show up repeatedly in real-LLM runs:
+ * Mistakes that show up repeatedly in real-LLM runs:
  *
  *   - `facts[i].type` set to a domain-entity term (`pattern`, `practice`,
  *     etc.) rather than the canonical 9 fact-type enum.
  *   - `facts[i].excerpt` longer than the 300-char cap — the model includes
  *     full paragraphs instead of single-sentence snippets.
+ *   - `coverage.extractable` / `coverage.nonExtractable` longer than the
+ *     300-char cap. Same root cause as the excerpt overflow: the model
+ *     writes a paragraph where the schema wants a single sentence. First
+ *     observed on `blog-rust-lang-org` during the v0.2.5 Rust smoke,
+ *     which dropped one otherwise-fine chunk on `nonExtractable`.
  *
- * Both are recoverable: remap the type via `FACT_TYPE_LENIENT_REMAP`,
- * truncate the excerpt. Other malformed shapes (missing required fields,
- * bad freshnessClass) still surface as schema errors so the chunk gets
- * logged and dropped.
+ * All three are recoverable: remap the type via `FACT_TYPE_LENIENT_REMAP`,
+ * truncate the excerpt, truncate the coverage strings. Other malformed
+ * shapes (missing required fields, bad freshnessClass) still surface as
+ * schema errors so the chunk gets logged and dropped.
  *
  * Non-object input is returned unchanged so the schema parse can produce
  * its normal error.
@@ -1475,7 +1490,21 @@ export function normalizeExtractionResult(raw: unknown): unknown {
     }
     return fact;
   });
-  return { ...r, facts: normalizedFacts };
+  const out: Record<string, unknown> = { ...r, facts: normalizedFacts };
+  if (typeof r.coverage === "object" && r.coverage !== null) {
+    const cov = { ...(r.coverage as Record<string, unknown>) };
+    if (typeof cov.extractable === "string" && cov.extractable.length > 300) {
+      cov.extractable = cov.extractable.slice(0, 300);
+    }
+    if (
+      typeof cov.nonExtractable === "string" &&
+      cov.nonExtractable.length > 300
+    ) {
+      cov.nonExtractable = cov.nonExtractable.slice(0, 300);
+    }
+    out.coverage = cov;
+  }
+  return out;
 }
 
 /** The canonical durable fact record written to `extracted/facts.jsonl`. */
@@ -2815,8 +2844,65 @@ export const Stage11OutputSchema = z.object({
 });
 export type Stage11Output = z.infer<typeof Stage11OutputSchema>;
 
+/**
+ * Lenient remap for `intent` values the LLM hallucinates around the
+ * canonical 7-value enum. Same pattern as `FACT_TYPE_LENIENT_REMAP`:
+ * absorb the LLM's naming variance at the parse boundary instead of
+ * paying for a schema-validation retry.
+ *
+ * The case that motivated this entry — `diagnose-error` → `debug` —
+ * persisted on the Rust smoke even after `debug` was added to the
+ * canonical enum and surfaced in both Stage 1 and Stage 11 prompts.
+ * The model has a strong naming prior that the prompt schema alone
+ * does not override.
+ *
+ * Keep this table narrow: only add a mapping if you have seen the
+ * exact wrong value in a real run AND there is one obvious correct
+ * target. When in doubt, let the schema retry handle it.
+ */
+export const INTENT_LENIENT_REMAP: Readonly<Record<string, IntentKind>> = {
+  "diagnose-error": "debug",
+  diagnose: "debug",
+  troubleshoot: "debug",
+  troubleshooting: "debug",
+};
+
+/**
+ * Best-effort normalization of raw Stage 11 LLM output BEFORE schema
+ * validation. Walks `set.positive[i].intent` and remaps via
+ * `INTENT_LENIENT_REMAP`. Other malformed shapes still surface as
+ * schema errors so the runner can retry.
+ *
+ * Non-object input is returned unchanged so the schema parse can
+ * produce its normal error.
+ */
+export function normalizeStage11Output(raw: unknown): unknown {
+  if (typeof raw !== "object" || raw === null || Array.isArray(raw)) {
+    return raw;
+  }
+  const r = raw as Record<string, unknown>;
+  const set = r.set;
+  if (typeof set !== "object" || set === null || Array.isArray(set)) {
+    return raw;
+  }
+  const setObj = set as Record<string, unknown>;
+  if (!Array.isArray(setObj.positive)) return raw;
+  const positive = setObj.positive.map((p) => {
+    if (typeof p !== "object" || p === null) return p;
+    const fixture = { ...(p as Record<string, unknown>) };
+    if (typeof fixture.intent === "string") {
+      const remapped = INTENT_LENIENT_REMAP[fixture.intent.toLowerCase()];
+      if (remapped !== undefined) {
+        fixture.intent = remapped;
+      }
+    }
+    return fixture;
+  });
+  return { ...r, set: { ...setObj, positive } };
+}
+
 export function parseStage11Output(raw: unknown): Stage11Output {
-  return Stage11OutputSchema.parse(raw);
+  return Stage11OutputSchema.parse(normalizeStage11Output(raw));
 }
 
 // ── Stage 12 — run results ───────────────────────────────────────────────────
