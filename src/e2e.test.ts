@@ -526,7 +526,7 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
             implCode: SAFETY_NOTE_IMPL,
             testCode: SAFETY_NOTE_TEST,
           }),
-          "11-benchmark-gen@v2": JSON.stringify(BENCHMARK_SET),
+          "11-benchmark-gen@v3": JSON.stringify(BENCHMARK_SET),
         },
       });
 

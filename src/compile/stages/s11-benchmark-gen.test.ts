@@ -257,7 +257,7 @@ describe("createBenchmarkGenRunner", () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v2": JSON.stringify(buildStage11Output("query_facts")),
+        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
       },
     });
     const runner = createBenchmarkGenRunner({

@@ -13,6 +13,30 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.2.5] — 2026-05-25
+
+### Changed
+
+- Stage 11 prompt v2 → v3. Two prompt-induced failure modes
+  surfaced by the v0.2.4 sqlite smoke are addressed:
+  - **Worked-example leakage.** The v2 prompt's inline mini-
+    example used sqlite-flavored vocabulary (`"FTS5 external
+    content"`). When Stage 11 actually ran on the sqlite domain,
+    the LLM copied that phrase as a query even though the
+    corpus did not contain it. v3 uses kubernetes-flavored
+    tokens uniformly (matching the canonical example) and adds
+    an explicit CRITICAL section warning the LLM not to import
+    example tokens into its output.
+  - **`expected.contains` against `entities`.** v2 said
+    `contains` substrings should come from "fact text" loosely;
+    the LLM picked the kebab-cased `entities` value
+    (`"virtual-table"`) instead of the natural-prose form
+    (`"virtual tables"`), and the substring check failed
+    against the data. v3 documents the rule explicitly:
+    `contains` is matched against the **`text`** field, never
+    against `entities`; the matcher is case-insensitive but
+    does NOT normalize hyphens, whitespace, or punctuation.
+
 ## [0.2.4] — 2026-05-25
 
 ### Changed
@@ -150,7 +174,8 @@ examples for each version. This file is the concise index.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.4...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.5...HEAD
+[0.2.5]: https://github.com/kyaukyuai/almanac/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/kyaukyuai/almanac/compare/v0.2.1...v0.2.2

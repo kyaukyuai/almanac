@@ -45,10 +45,10 @@ import { discoverToolNames, loadTool } from "../../serve/tool-loader.ts";
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const STAGE11_PROMPT_VERSION = "v2";
+export const STAGE11_PROMPT_VERSION = "v3";
 export const STAGE11_PROMPT_STAGE_ID = "11-benchmark-gen";
 
-/** Matches `recommendedModel` in `prompts/11-benchmark-gen/v2.md`. */
+/** Matches `recommendedModel` in `prompts/11-benchmark-gen/v3.md`. */
 export const STAGE11_DEFAULT_MODEL = "claude-sonnet-4-5";
 export const STAGE11_DEFAULT_MAX_TOKENS = 6144;
 export const STAGE11_DEFAULT_TEMPERATURE = 0.2;
