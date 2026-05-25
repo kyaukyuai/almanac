@@ -12,6 +12,7 @@
  *     - citations.length >= expected.minCitations
  *     - freshness.staleness ∈ expected.acceptableStaleness
  *     - JSON.stringify(result.data) contains every entry in expected.contains
+ *       (case-insensitive substring match)
  *
  *   NEGATIVE
  *     - if expectedErrorCode is set: result.ok === false AND error.code matches
@@ -57,9 +58,13 @@ export function evaluatePositive(
     });
   }
   if (fixture.expected.contains.length > 0) {
-    const haystack = JSON.stringify(result.data);
+    // Case-insensitive: fact corpora often preserve original casing
+    // (e.g. "FTS5") while LLM-authored fixtures default to lowercase
+    // per the Stage 11 prompt. Match case-insensitively so that
+    // mismatch is not a source of false-negatives.
+    const haystack = JSON.stringify(result.data).toLowerCase();
     const missing = fixture.expected.contains.filter(
-      (needle) => !haystack.includes(needle),
+      (needle) => !haystack.includes(needle.toLowerCase()),
     );
     if (missing.length > 0) {
       return makeResult(fixture.id, "positive", "fail", observed, durationMs, {

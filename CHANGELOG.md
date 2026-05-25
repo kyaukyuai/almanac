@@ -13,6 +13,19 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.2.3] — 2026-05-25
+
+### Fixed
+
+- Stage 12 `expected.contains` substring match is now case-
+  insensitive. Fact corpora often preserve original casing (e.g.
+  "FTS5") while LLM-authored fixtures default to lowercase per the
+  Stage 11 prompt; the case mismatch caused otherwise-correct
+  matches to register as false-negative failures. Observed on the
+  sqlite smoke (`q: "fts5"` hit the fact "FTS5 external content
+  tables..." but `contains: ["fts5"]` did not). Score moved 8/15 →
+  9/15 with no other changes.
+
 ## [0.2.2] — 2026-05-25
 
 ### Added
@@ -123,7 +136,8 @@ examples for each version. This file is the concise index.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...HEAD
+[0.2.3]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/kyaukyuai/almanac/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyaukyuai/almanac/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kyaukyuai/almanac/compare/v0.1.1...v0.2.0

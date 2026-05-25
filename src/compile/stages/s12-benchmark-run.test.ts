@@ -210,6 +210,30 @@ describe("evaluatePositive", () => {
     expect(r.status).toBe("fail");
     expect(r.reason).toContain("missing required substrings: [eviction]");
   });
+
+  test("contains is case-insensitive (fixture lowercase, data uppercase)", () => {
+    const ftsFixture: PositiveFixture = {
+      ...positive,
+      id: "sqlite-pos-fts5",
+      expected: { ...positive.expected, contains: ["fts5"] },
+    };
+    const upperData: ToolResult = {
+      ...okWithCitations,
+      ok: true,
+      data: { facts: [{ text: "FTS5 external content tables..." }] },
+    } as ToolResult;
+    const r = evaluatePositive(ftsFixture, upperData, 5);
+    expect(r.status).toBe("pass");
+  });
+
+  test("contains is case-insensitive (fixture mixed case, data lowercase)", () => {
+    const fixture: PositiveFixture = {
+      ...positive,
+      expected: { ...positive.expected, contains: ["EvIcTiOn"] },
+    };
+    const r = evaluatePositive(fixture, okWithCitations, 5);
+    expect(r.status).toBe("pass");
+  });
 });
 
 describe("evaluateNegative", () => {
