@@ -279,8 +279,14 @@ describe("sanitizeFtsQuery", () => {
     );
   });
 
-  test("hyphens are stripped (full-text → fulltext)", () => {
-    expect(sanitizeFtsQuery("full-text search")).toBe('"fulltext" "search"');
+  test("hyphens split tokens (full-text → full + text, matching indexer behavior)", () => {
+    expect(sanitizeFtsQuery("full-text search")).toBe(
+      '"full" "text" "search"',
+    );
+  });
+
+  test("multiple hyphens within a single word all split", () => {
+    expect(sanitizeFtsQuery("foo-bar-baz")).toBe('"foo" "bar" "baz"');
   });
 
   test("FTS5 operator chars are dropped", () => {

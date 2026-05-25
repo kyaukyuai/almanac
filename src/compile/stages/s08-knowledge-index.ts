@@ -270,16 +270,21 @@ class SqliteKnowledgeReader implements KnowledgeReader {
 /**
  * Convert a user-supplied free-text query into a safe FTS5 MATCH expression.
  *
- *   - Split on whitespace.
- *   - For each token, strip any character outside [a-zA-Z0-9_'] (collapsing
- *     hyphenated words: `full-text` → `fulltext`). FTS5 reserves `-`, `*`,
- *     `(`, `)`, `:`, `^`, `"`; we just drop them rather than try to escape.
+ *   - Split on whitespace AND on hyphens: `full-text` → `["full", "text"]`.
+ *     This matches the indexer side, which also splits on hyphens at
+ *     tokenize time. Stripping hyphens (`full-text` → `fulltext`) was
+ *     attractive but produced tokens that never appeared in the index, so
+ *     a quoted-AND match against e.g. `"fulltext" "search"` always missed.
+ *   - For each sub-token, strip any remaining char outside
+ *     `[a-zA-Z0-9_']`. FTS5 reserves `*`, `(`, `)`, `:`, `^`, `"`; we drop
+ *     them rather than try to escape. Apostrophes inside words (`user's`)
+ *     are kept.
  *   - Quote each token with double-quotes (escaping any embedded `"` as
  *     `""` per FTS5 rules) so reserved keywords (`NEAR`, `NOT`, `AND`, `OR`)
  *     don't trigger their operator behavior.
- *   - Join with spaces; FTS5 treats space as implicit AND when query tokens
- *     are quoted phrases — exactly what we want for "find facts mentioning
- *     all of these terms".
+ *   - Join with spaces; FTS5 treats space as implicit AND between quoted
+ *     phrases — what we want for "find facts mentioning all of these
+ *     terms".
  *
  * Returns "" when the input has no usable tokens; callers short-circuit
  * to an empty result list in that case.
@@ -288,13 +293,14 @@ class SqliteKnowledgeReader implements KnowledgeReader {
  */
 export function sanitizeFtsQuery(query: string): string {
   const tokens: string[] = [];
-  for (const raw of query.split(/\s+/)) {
-    // Keep only chars FTS5 understands inside a token; drop everything
-    // operator-like. Apostrophes within words are common (e.g., "user's")
-    // and FTS5 accepts them inside a quoted token without further escaping.
-    const cleaned = raw.replace(/[^a-zA-Z0-9_']/g, "");
-    if (cleaned.length === 0) continue;
-    tokens.push(`"${cleaned.replace(/"/g, '""')}"`);
+  for (const word of query.split(/\s+/)) {
+    for (const sub of word.split(/-+/)) {
+      // Keep only chars FTS5 understands inside a token; drop everything
+      // operator-like.
+      const cleaned = sub.replace(/[^a-zA-Z0-9_']/g, "");
+      if (cleaned.length === 0) continue;
+      tokens.push(`"${cleaned.replace(/"/g, '""')}"`);
+    }
   }
   return tokens.join(" ");
 }
