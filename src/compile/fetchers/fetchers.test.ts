@@ -25,7 +25,11 @@ import {
   normalizeMediaType,
   parseHttpDate,
 } from "./generic-http.ts";
-import { GithubRepoFetcher } from "./github-repo.ts";
+import {
+  GithubRepoFetcher,
+  matchesAny,
+  mediaTypeForPath,
+} from "./github-repo.ts";
 import { HttpIndexOnlyFetcher } from "./http-index-only.ts";
 import { LocalFileFetcher } from "./local-file.ts";
 import type { ApprovedSource } from "../../core/types.ts";
@@ -287,23 +291,51 @@ describe("GithubRepoFetcher", () => {
     expect(f.canHandle(docsSource("a", "https://github.com/x/y"))).toBe(false);
   });
 
-  test("snapshot-mode repo emits a degraded-to-index-only log event (regression)", async () => {
+  test("snapshot mode: walks tree, fetches matching blobs, writes documents[]", async () => {
     const events: object[] = [];
-    const dir = makeTmpDir("gh-snap-");
+    const dir = makeTmpDir("gh-snap-ok-");
+    const sha = "abc123".padEnd(40, "0");
     const ctx = makeCtx(
       dir,
       asFetch((url) => {
         if (url.endsWith("/repos/octo/repo")) {
           return new Response(
-            JSON.stringify({ full_name: "octo/repo", default_branch: "main", pushed_at: "2026-04-01T00:00:00Z" }),
+            JSON.stringify({
+              full_name: "octo/repo",
+              default_branch: "main",
+              pushed_at: "2026-04-01T00:00:00Z",
+            }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
         }
         if (url.endsWith("/commits/main")) {
           return new Response(
-            JSON.stringify({ sha: "abc123".padEnd(40, "0"), commit: { author: { date: "2026-04-15T10:00:00Z" } } }),
+            JSON.stringify({
+              sha,
+              commit: { author: { date: "2026-04-15T10:00:00Z" } },
+            }),
             { status: 200, headers: { "content-type": "application/json" } },
           );
+        }
+        if (url.includes(`/git/trees/${sha}`)) {
+          return new Response(
+            JSON.stringify({
+              tree: [
+                { path: "README.md", type: "blob", size: 200 },
+                { path: "docs/intro.md", type: "blob", size: 400 },
+                { path: "docs/api.md", type: "blob", size: 500 },
+                { path: "src/main.ts", type: "blob", size: 1000 },
+              ],
+              truncated: false,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.startsWith("https://raw.githubusercontent.com/octo/repo/")) {
+          return new Response(`# content of ${url.split("/").pop()}\n`, {
+            status: 200,
+            headers: { "content-type": "text/markdown" },
+          });
         }
         return new Response("", { status: 404 });
       }),
@@ -311,14 +343,84 @@ describe("GithubRepoFetcher", () => {
     );
     const snap: ApprovedSource = {
       ...repoSource("octo-repo", "https://github.com/octo/repo"),
+      ingestion: {
+        mode: "snapshot",
+        scope: ["docs/**", "README.md"],
+        refreshIntervalHours: 24,
+      },
+    };
+    const entry = await new GithubRepoFetcher().fetch(snap, ctx);
+    expect(entry.status).toBe("fetched");
+    if (entry.status === "fetched") {
+      // README.md + docs/intro.md + docs/api.md, but NOT src/main.ts
+      expect(entry.documents).toHaveLength(3);
+      const paths = entry.documents.map((d) => d.title).sort();
+      expect(paths).toEqual(["README.md", "docs/api.md", "docs/intro.md"]);
+      for (const d of entry.documents) {
+        expect(d.mediaType).toBe("text/markdown");
+        expect(d.byteLength).toBeGreaterThan(0);
+        expect(d.relPath).toMatch(/^sources\/raw\/[a-f0-9]{64}\.md$/);
+        expect(d.sourceTimestamp).toBe("2026-04-15T10:00:00.000Z");
+      }
+    }
+    const ok = events.find(
+      (e) =>
+        (e as { event?: string; mode?: string }).event === "fetcher:github:ok" &&
+        (e as { mode?: string }).mode === "snapshot",
+    );
+    expect(ok).toBeDefined();
+  });
+
+  test("snapshot mode with empty scope match falls back to index-only", async () => {
+    const events: object[] = [];
+    const dir = makeTmpDir("gh-snap-empty-");
+    const sha = "def456".padEnd(40, "0");
+    const ctx = makeCtx(
+      dir,
+      asFetch((url) => {
+        if (url.endsWith("/repos/octo/repo")) {
+          return new Response(
+            JSON.stringify({ full_name: "octo/repo", default_branch: "main" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/commits/main")) {
+          return new Response(
+            JSON.stringify({
+              sha,
+              commit: { author: { date: "2026-04-15T10:00:00Z" } },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.includes(`/git/trees/${sha}`)) {
+          return new Response(
+            JSON.stringify({
+              tree: [{ path: "src/main.ts", type: "blob", size: 100 }],
+              truncated: false,
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        return new Response("", { status: 404 });
+      }),
+      { log: (e) => events.push(e) },
+    );
+    // Scope only matches things under docs/, but tree has only src/main.ts.
+    const snap: ApprovedSource = {
+      ...repoSource("octo-repo", "https://github.com/octo/repo"),
       ingestion: { mode: "snapshot", scope: ["docs/**"], refreshIntervalHours: 24 },
     };
     const entry = await new GithubRepoFetcher().fetch(snap, ctx);
     expect(entry.status).toBe("index-only");
-    const degraded = events.find(
-      (e) => (e as { event?: string }).event === "fetcher:github:degraded-to-index-only",
+    if (entry.status === "index-only") {
+      expect(entry.indexMeta.commitSha).toBe(sha);
+    }
+    const empty = events.find(
+      (e) =>
+        (e as { event?: string }).event === "fetcher:github:snapshot-empty",
     );
-    expect(degraded).toBeDefined();
+    expect(empty).toBeDefined();
   });
 
   test("produces an index-only entry from /repos and /commits", async () => {
@@ -574,5 +676,68 @@ describe("LocalFileFetcher", () => {
     if (entry.status === "failed") {
       expect(entry.error.code).toBe("parse-error");
     }
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Pure helpers in github-repo.ts (matchesAny + mediaTypeForPath)
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("matchesAny (github-repo glob matcher)", () => {
+  test("exact filename matches", () => {
+    expect(matchesAny("README.md", ["README.md"])).toBe(true);
+    expect(matchesAny("readme.md", ["README.md"])).toBe(false);
+  });
+
+  test("globstar matches subtrees", () => {
+    expect(matchesAny("docs/intro.md", ["docs/**"])).toBe(true);
+    expect(matchesAny("docs/api/v1/users.md", ["docs/**"])).toBe(true);
+    expect(matchesAny("src/main.ts", ["docs/**"])).toBe(false);
+  });
+
+  test("bare directory name implies a /** suffix", () => {
+    expect(matchesAny("examples/getting-started.md", ["examples"])).toBe(true);
+    expect(matchesAny("examples/nested/file.md", ["examples"])).toBe(true);
+    expect(matchesAny("test/example.ts", ["examples"])).toBe(false);
+  });
+
+  test("trailing slash implies globstar", () => {
+    expect(matchesAny("docs/intro.md", ["docs/"])).toBe(true);
+  });
+
+  test("multiple patterns: any-match semantics", () => {
+    expect(
+      matchesAny("docs/intro.md", ["README.md", "src/**", "docs/**"]),
+    ).toBe(true);
+    expect(
+      matchesAny("CHANGELOG.txt", ["README.md", "docs/**"]),
+    ).toBe(false);
+  });
+
+  test("empty patterns array → never matches", () => {
+    expect(matchesAny("anything", [])).toBe(false);
+  });
+});
+
+describe("mediaTypeForPath", () => {
+  test("known extensions", () => {
+    expect(mediaTypeForPath("README.md")).toBe("text/markdown");
+    expect(mediaTypeForPath("data.json")).toBe("application/json");
+    expect(mediaTypeForPath("config.yaml")).toBe("text/yaml");
+    expect(mediaTypeForPath("config.yml")).toBe("text/yaml");
+    expect(mediaTypeForPath("page.html")).toBe("text/html");
+    expect(mediaTypeForPath("src/foo.ts")).toBe("text/plain");
+    expect(mediaTypeForPath("script.py")).toBe("text/plain");
+  });
+
+  test("unknown extensions fall back to octet-stream", () => {
+    expect(mediaTypeForPath("image.png")).toBe("application/octet-stream");
+    expect(mediaTypeForPath("noext")).toBe("application/octet-stream");
+    expect(mediaTypeForPath("archive.tar.gz")).toBe("application/octet-stream");
+  });
+
+  test("case-insensitive on the extension", () => {
+    expect(mediaTypeForPath("README.MD")).toBe("text/markdown");
+    expect(mediaTypeForPath("CONFIG.YAML")).toBe("text/yaml");
   });
 });
