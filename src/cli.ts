@@ -22,6 +22,8 @@
  *   almanac feed <id> <url> [opts]         incrementally add one source to a
  *                                          compiled almanac (fetch + extract +
  *                                          reindex; dry-run by default)
+ *   almanac export <id> [opts]             package a compiled almanac as a
+ *                                          portable .tar.gz archive
  *
  * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
  * Stage 11 (benchmark generation) is LLM-driven and is skipped when no
@@ -106,6 +108,11 @@ import { createMockProvider } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
 import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
 import { runFeed, FeedAlreadyExistsError } from "./manage/feed.ts";
+import {
+  ExportFailedError,
+  defaultExportPath,
+  runExport,
+} from "./manage/export.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 const FORGER_VERSION = "0.2.0";
@@ -738,8 +745,67 @@ interface ServeOptions {
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// remove
+// export
 // ──────────────────────────────────────────────────────────────────────────────
+
+interface ExportOptions {
+  root: string;
+  output?: string;
+  includeCompile?: boolean;
+}
+
+async function cmdExport(id: string, opts: ExportOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  const manifest = await readManifest(almanacDir);
+
+  // Resolve output path. Relative paths are anchored at the cwd the user
+  // ran the CLI from; absolute paths go through unchanged.
+  const outputPath = opts.output
+    ? resolve(opts.output)
+    : defaultExportPath({
+        almanacId: manifest.almanacId,
+        version: manifest.version,
+      });
+
+  process.stdout.write(
+    `▶ export almanac "${manifest.almanacId}" v${manifest.version}\n` +
+      `    from   ${almanacDir}\n` +
+      `    to     ${outputPath}\n` +
+      `    extras ${opts.includeCompile === true ? "INCLUDE .compile/" : "exclude .compile/"}\n\n`,
+  );
+
+  try {
+    const result = await runExport({
+      almanacDir,
+      outputPath,
+      ...(opts.includeCompile === true ? { includeCompile: true } : {}),
+      log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
+    });
+    process.stdout.write(
+      `\nDone.\n` +
+        `    output  ${result.outputPath}\n` +
+        `    size    ${formatBytes(result.byteLength)}\n` +
+        `\nUnpack with:\n` +
+        `    tar -xzf ${outputPath}\n` +
+        `    almanac serve ${id} --root .\n`,
+    );
+  } catch (e) {
+    if (e instanceof ExportFailedError) {
+      fail(`export failed: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n} B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // feed
@@ -1310,6 +1376,22 @@ program
   )
   .addOption(rootOption)
   .action(cmdRemove);
+
+program
+  .command("export <id>")
+  .description(
+    "package a compiled almanac as a portable .tar.gz archive",
+  )
+  .option(
+    "--output <path>",
+    "Output .tar.gz path (default: ./almanac-<id>-<version>.tar.gz)",
+  )
+  .option(
+    "--include-compile",
+    "Include the .compile/ directory (Stage 1–6 intermediates); default: exclude",
+  )
+  .addOption(rootOption)
+  .action(cmdExport);
 
 program
   .command("feed <id> <url>")
