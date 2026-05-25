@@ -108,7 +108,7 @@ import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
 import { runFeed, FeedAlreadyExistsError } from "./manage/feed.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
-const FORGER_VERSION = "0.1.1";
+const FORGER_VERSION = "0.2.0";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
