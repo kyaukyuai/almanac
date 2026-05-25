@@ -44,6 +44,13 @@ import { join, resolve } from "node:path";
 
 import { Command, Option } from "commander";
 
+import {
+  parseMcpConfig,
+  serializeMcpConfig,
+  writeMcpConfigAtomic,
+  type McpConfigFormat,
+} from "./manage/mcp-config.ts";
+
 import { bootstrapAlmanac } from "./compile/stages/s00-bootstrap.ts";
 import {
   createDomainAnalysisRunner,
@@ -942,6 +949,8 @@ async function cmdRemove(id: string, opts: RemoveOptions): Promise<void> {
         profileName: profile.name,
         serverName,
         mcpConfigPath: profile.mcpConfigPath,
+        format: profile.format,
+        mcpServersKey: profile.mcpServersKey,
         apply,
       });
       if (profile.skillsDir !== null) {
@@ -982,6 +991,8 @@ async function unregisterMcp(args: {
   profileName: RegisterClient;
   serverName: string;
   mcpConfigPath: string;
+  format: McpConfigFormat;
+  mcpServersKey: string;
   apply: boolean;
 }): Promise<void> {
   process.stdout.write(`◆ ${args.profileName} mcp server "${args.serverName}"\n`);
@@ -989,28 +1000,35 @@ async function unregisterMcp(args: {
     process.stdout.write(`    skipped — config not found at ${args.mcpConfigPath}\n`);
     return;
   }
-  let config: { mcpServers?: Record<string, unknown> } & Record<string, unknown>;
+  let config: Record<string, unknown>;
   try {
-    config = JSON.parse(await readFile(args.mcpConfigPath, "utf8"));
+    config = parseMcpConfig(await readFile(args.mcpConfigPath, "utf8"), args.format);
   } catch (e) {
     process.stdout.write(
-      `    ! config at ${args.mcpConfigPath} is not valid JSON: ${(e as Error).message} — skipping\n`,
+      `    ! config at ${args.mcpConfigPath} is not valid ${args.format.toUpperCase()}: ${(e as Error).message} — skipping\n`,
     );
     return;
   }
-  const servers = config.mcpServers as Record<string, unknown> | undefined;
+  const servers = config[args.mcpServersKey] as
+    | Record<string, unknown>
+    | undefined;
   if (!servers || !(args.serverName in servers)) {
-    process.stdout.write(`    skipped — no entry at mcpServers["${args.serverName}"]\n`);
+    process.stdout.write(
+      `    skipped — no entry at ${args.mcpServersKey}["${args.serverName}"]\n`,
+    );
     return;
   }
-  process.stdout.write(`    config ${args.mcpConfigPath}\n`);
-  process.stdout.write(`    would remove mcpServers["${args.serverName}"]\n`);
+  process.stdout.write(`    config ${args.mcpConfigPath} (${args.format})\n`);
+  process.stdout.write(
+    `    would remove ${args.mcpServersKey}["${args.serverName}"]\n`,
+  );
   if (!args.apply) return;
   delete servers[args.serverName];
-  const tmp = `${args.mcpConfigPath}.almanac-tmp`;
-  await writeFile(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
-  const { rename } = await import("node:fs/promises");
-  await rename(tmp, args.mcpConfigPath);
+  await writeMcpConfigAtomic({
+    path: args.mcpConfigPath,
+    config,
+    format: args.format,
+  });
   process.stdout.write(`    ✓ removed\n`);
 }
 
@@ -1053,7 +1071,7 @@ async function cmdServe(id: string, opts: ServeOptions): Promise<void> {
 // register
 // ──────────────────────────────────────────────────────────────────────────────
 
-type RegisterClient = "claude-code" | "claude-desktop" | "cursor";
+type RegisterClient = "claude-code" | "claude-desktop" | "cursor" | "codex";
 type RegisterTarget = "skill" | "mcp" | "both";
 
 interface RegisterOptions {
@@ -1078,6 +1096,14 @@ interface ClientProfile {
    * a skills concept; `--target=skill` (or `both`) becomes a no-op for them.
    */
   readonly skillsDir: string | null;
+  /** Wire format of the MCP config file. */
+  readonly format: McpConfigFormat;
+  /**
+   * Top-level key under which MCP server entries live in the config file.
+   * Claude / Cursor use `mcpServers` (camelCase, JSON convention); Codex
+   * uses `mcp_servers` (snake_case, TOML convention).
+   */
+  readonly mcpServersKey: string;
 }
 
 const CLIENT_PROFILES: Readonly<Record<RegisterClient, ClientProfile>> = {
@@ -1085,6 +1111,8 @@ const CLIENT_PROFILES: Readonly<Record<RegisterClient, ClientProfile>> = {
     name: "claude-code",
     mcpConfigPath: join(homedir(), ".claude.json"),
     skillsDir: join(homedir(), ".claude", "skills"),
+    format: "json",
+    mcpServersKey: "mcpServers",
   },
   "claude-desktop": {
     name: "claude-desktop",
@@ -1098,11 +1126,24 @@ const CLIENT_PROFILES: Readonly<Record<RegisterClient, ClientProfile>> = {
       "claude_desktop_config.json",
     ),
     skillsDir: null, // Claude Desktop has no skills concept.
+    format: "json",
+    mcpServersKey: "mcpServers",
   },
   cursor: {
     name: "cursor",
     mcpConfigPath: join(homedir(), ".cursor", "mcp.json"),
     skillsDir: null, // Cursor has no skills concept.
+    format: "json",
+    mcpServersKey: "mcpServers",
+  },
+  codex: {
+    name: "codex",
+    // Codex CLI reads MCP servers from this TOML file. See
+    // https://github.com/openai/codex/blob/main/codex-rs/config.md
+    mcpConfigPath: join(homedir(), ".codex", "config.toml"),
+    skillsDir: null, // Codex has no skills concept.
+    format: "toml",
+    mcpServersKey: "mcp_servers",
   },
 };
 
@@ -1169,6 +1210,8 @@ async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
       mcpConfigPath,
       cliPath: selfCliPath(),
       almanacRoot: resolve(opts.root),
+      format: profile.format,
+      mcpServersKey: profile.mcpServersKey,
       apply,
     });
     process.stdout.write("\n");
@@ -1213,6 +1256,8 @@ async function registerMcp(args: {
   mcpConfigPath: string;
   cliPath: string;
   almanacRoot: string;
+  format: McpConfigFormat;
+  mcpServersKey: string;
   apply: boolean;
 }): Promise<void> {
   const entry = {
@@ -1220,7 +1265,7 @@ async function registerMcp(args: {
     args: ["run", args.cliPath, "serve", args.almanacId, "--root", args.almanacRoot],
   };
   process.stdout.write(`◆ mcp server "${args.serverName}"\n`);
-  process.stdout.write(`    config ${args.mcpConfigPath}\n`);
+  process.stdout.write(`    config ${args.mcpConfigPath} (${args.format})\n`);
   process.stdout.write(
     `    entry  ${JSON.stringify(entry, null, 2).replace(/\n/g, "\n           ")}\n`,
   );
@@ -1228,37 +1273,31 @@ async function registerMcp(args: {
   if (!args.apply) return;
 
   // Read-modify-write the config. If it doesn't exist yet, create a minimal one.
-  let config: { mcpServers?: Record<string, unknown> } & Record<string, unknown> = {};
+  let config: Record<string, unknown> = {};
   if (existsSync(args.mcpConfigPath)) {
     const raw = await readFile(args.mcpConfigPath, "utf8");
     try {
-      config = JSON.parse(raw);
+      config = parseMcpConfig(raw, args.format);
     } catch (e) {
       fail(
-        `MCP config at ${args.mcpConfigPath} is not valid JSON: ${(e as Error).message}\n` +
+        `MCP config at ${args.mcpConfigPath} is not valid ${args.format.toUpperCase()}: ${(e as Error).message}\n` +
           `       fix the file or pass --mcp-config=<path> to use a different one.`,
-      );
-    }
-    if (typeof config !== "object" || config === null || Array.isArray(config)) {
-      fail(
-        `MCP config at ${args.mcpConfigPath} is not a JSON object (got ${typeof config}).`,
       );
     }
   }
   const servers: Record<string, unknown> =
-    (config.mcpServers as Record<string, unknown>) ?? {};
+    (config[args.mcpServersKey] as Record<string, unknown>) ?? {};
   const existed = args.serverName in servers;
   servers[args.serverName] = entry;
-  config.mcpServers = servers;
+  config[args.mcpServersKey] = servers;
 
-  // Atomic-ish: write to a sibling temp then rename.
-  const tmp = `${args.mcpConfigPath}.almanac-tmp`;
-  await writeFile(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
-  // `rename` is atomic on the same filesystem; we expect both paths to share it.
-  const { rename } = await import("node:fs/promises");
-  await rename(tmp, args.mcpConfigPath);
+  await writeMcpConfigAtomic({
+    path: args.mcpConfigPath,
+    config,
+    format: args.format,
+  });
   process.stdout.write(
-    `    ✓ ${existed ? "updated" : "added"} mcpServers["${args.serverName}"]\n`,
+    `    ✓ ${existed ? "updated" : "added"} ${args.mcpServersKey}["${args.serverName}"]\n`,
   );
 }
 
