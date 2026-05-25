@@ -13,6 +13,25 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.2.2] — 2026-05-25
+
+### Added
+
+- `almanac register --client=codex` — TOML config support via
+  `smol-toml`. Writes `[mcp_servers.almanac-<id>]` tables to
+  `~/.codex/config.toml`. Closes the design.md §3 register triad —
+  all four downstream clients (claude-code, claude-desktop, cursor,
+  codex) are now supported.
+
+### Changed
+
+- `src/manage/mcp-config.ts` — new module factoring out the JSON +
+  TOML MCP-config IO (`parseMcpConfig`, `serializeMcpConfig`,
+  `writeMcpConfigAtomic`) shared by `register` and `remove`.
+- `CLIENT_PROFILES` carries `format` and `mcpServersKey` per client
+  so register / remove dispatch on those rather than hard-coding
+  JSON + `mcpServers`.
+
 ## [0.2.1] — 2026-05-25
 
 ### Added
@@ -104,7 +123,8 @@ examples for each version. This file is the concise index.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.1...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...HEAD
+[0.2.2]: https://github.com/kyaukyuai/almanac/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyaukyuai/almanac/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/kyaukyuai/almanac/compare/v0.1.1...v0.2.0
 [0.1.1]: https://github.com/kyaukyuai/almanac/compare/v0.1.0...v0.1.1
