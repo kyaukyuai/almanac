@@ -47,15 +47,26 @@ analysis → source discovery → fact extraction → tool design + implementati
 against a mocked LLM, and the runtime (`almanac serve`) + `register` for
 Claude Code are wired and exercised by `src/e2e.test.ts`.
 
-What's not in v0.1 yet:
+Capabilities that landed during v0.1 iteration:
 
-- Stage 7 **LLM tool implementer** — domain-specific tools designed in
-  Stage 6 are currently disabled at compile time; only the four template
-  defaults (`query_facts`, `fetch_official_docs`, `web_search_recent`,
-  `latest_releases`) actually ship in a compiled almanac.
-- `register --client` for `claude-desktop`, `cursor`, `codex` (only
-  `claude-code` is supported today).
-- `almanac remove`, `almanac feed`, `almanac export` (v0.2).
+- **Stage 7 LLM tool implementer** — domain-specific tools designed in
+  Stage 6 are generated through a real `generate → write → tsc → bun test`
+  retry loop. The four template defaults (`query_facts`,
+  `fetch_official_docs`, `web_search_recent`, `latest_releases`) still
+  ship in every almanac.
+- **`register --client`** supports `claude-code`, `claude-desktop`,
+  and `cursor`. Codex requires TOML config and is deferred to v0.2.
+- **`almanac remove`** with dry-run by default, cleans up client
+  registrations across all known clients.
+- **GitHub repo snapshot** mirrors `ingestion.scope`-matched files
+  from permissively-licensed repos into `sources/raw/`.
+- **GitHub Actions CI** runs typecheck + the full test suite on every
+  push and PR.
+
+What's still deferred:
+
+- `register --client=codex` (TOML support needed).
+- `almanac feed`, `almanac export` (v0.2).
 
 The original design thread is at
 [Amp T-019e0670…](https://ampcode.com/threads/T-019e0670-942c-711f-b948-f350ac93e96d).

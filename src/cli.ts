@@ -15,7 +15,10 @@
  *   almanac serve <id> [opts]              start the MCP server (stdio transport)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
- *                                          (currently: --client=claude-code)
+ *                                          (--client=claude-code|claude-desktop|cursor)
+ *   almanac remove <id> [opts]             delete an almanac dir + unregister
+ *                                          it from any client configs (dry-run
+ *                                          by default; --apply to commit)
  *
  * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
  * Stage 11 (benchmark generation) is LLM-driven and is skipped when no
@@ -726,6 +729,136 @@ interface ServeOptions {
   root: string;
 }
 
+// ──────────────────────────────────────────────────────────────────────────────
+// remove
+// ──────────────────────────────────────────────────────────────────────────────
+
+interface RemoveOptions {
+  root: string;
+  /** If false (default), print what would happen but don't touch disk. */
+  apply?: boolean;
+  /** Skip the client-config cleanup pass; only delete the almanac dir. */
+  keepRegistrations?: boolean;
+}
+
+async function cmdRemove(id: string, opts: RemoveOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  const manifest = await readManifest(almanacDir);
+  const apply = opts.apply === true;
+  const serverName = mcpServerName(manifest.almanacId);
+
+  process.stdout.write(
+    `▶ remove almanac "${manifest.almanacId}" (${manifest.displayName})\n` +
+      `    dir           ${almanacDir}\n` +
+      `    mode          ${apply ? "APPLY (deletes will happen)" : "DRY RUN (re-run with --apply to delete)"}\n\n`,
+  );
+
+  // Pass 1 — client-config cleanup. Iterate every known ClientProfile and
+  // try to remove any entry for this almanac. Missing configs are fine —
+  // the user may have only registered with one client.
+  if (opts.keepRegistrations !== true) {
+    for (const profile of Object.values(CLIENT_PROFILES)) {
+      await unregisterMcp({
+        profileName: profile.name,
+        serverName,
+        mcpConfigPath: profile.mcpConfigPath,
+        apply,
+      });
+      if (profile.skillsDir !== null) {
+        await unregisterSkill({
+          profileName: profile.name,
+          almanacId: manifest.almanacId,
+          skillsDir: profile.skillsDir,
+          apply,
+        });
+      }
+    }
+    process.stdout.write("\n");
+  }
+
+  // Pass 2 — delete the almanac dir itself.
+  process.stdout.write(`◆ almanac directory\n    ${almanacDir}\n`);
+  if (!apply) {
+    process.stdout.write("    (would rm -rf)\n");
+  } else {
+    const { rm } = await import("node:fs/promises");
+    await rm(almanacDir, { recursive: true, force: true });
+    process.stdout.write("    ✓ removed\n");
+  }
+
+  if (!apply) {
+    process.stdout.write(
+      "\nNothing was written. Re-run with --apply to perform the removal.\n",
+    );
+  }
+}
+
+/**
+ * Remove `mcpServers[<serverName>]` from a client's MCP config, if present.
+ * Missing configs and missing entries are no-ops (the user may have only
+ * registered with a subset of clients).
+ */
+async function unregisterMcp(args: {
+  profileName: RegisterClient;
+  serverName: string;
+  mcpConfigPath: string;
+  apply: boolean;
+}): Promise<void> {
+  process.stdout.write(`◆ ${args.profileName} mcp server "${args.serverName}"\n`);
+  if (!existsSync(args.mcpConfigPath)) {
+    process.stdout.write(`    skipped — config not found at ${args.mcpConfigPath}\n`);
+    return;
+  }
+  let config: { mcpServers?: Record<string, unknown> } & Record<string, unknown>;
+  try {
+    config = JSON.parse(await readFile(args.mcpConfigPath, "utf8"));
+  } catch (e) {
+    process.stdout.write(
+      `    ! config at ${args.mcpConfigPath} is not valid JSON: ${(e as Error).message} — skipping\n`,
+    );
+    return;
+  }
+  const servers = config.mcpServers as Record<string, unknown> | undefined;
+  if (!servers || !(args.serverName in servers)) {
+    process.stdout.write(`    skipped — no entry at mcpServers["${args.serverName}"]\n`);
+    return;
+  }
+  process.stdout.write(`    config ${args.mcpConfigPath}\n`);
+  process.stdout.write(`    would remove mcpServers["${args.serverName}"]\n`);
+  if (!args.apply) return;
+  delete servers[args.serverName];
+  const tmp = `${args.mcpConfigPath}.almanac-tmp`;
+  await writeFile(tmp, JSON.stringify(config, null, 2) + "\n", "utf8");
+  const { rename } = await import("node:fs/promises");
+  await rename(tmp, args.mcpConfigPath);
+  process.stdout.write(`    ✓ removed\n`);
+}
+
+/**
+ * Remove `<skillsDir>/almanac-<id>/` if present. Missing dir = no-op.
+ */
+async function unregisterSkill(args: {
+  profileName: RegisterClient;
+  almanacId: string;
+  skillsDir: string;
+  apply: boolean;
+}): Promise<void> {
+  process.stdout.write(`◆ ${args.profileName} skill\n`);
+  const skillDir = join(args.skillsDir, `almanac-${args.almanacId}`);
+  if (!existsSync(skillDir)) {
+    process.stdout.write(`    skipped — no skill at ${skillDir}\n`);
+    return;
+  }
+  process.stdout.write(`    would rm -rf ${skillDir}\n`);
+  if (!args.apply) return;
+  const { rm } = await import("node:fs/promises");
+  await rm(skillDir, { recursive: true, force: true });
+  process.stdout.write(`    ✓ removed\n`);
+}
+
 async function cmdServe(id: string, opts: ServeOptions): Promise<void> {
   const dir = almanacDirPath(opts.root, id);
   if (!existsSync(dir)) {
@@ -743,7 +876,7 @@ async function cmdServe(id: string, opts: ServeOptions): Promise<void> {
 // register
 // ──────────────────────────────────────────────────────────────────────────────
 
-type RegisterClient = "claude-code";
+type RegisterClient = "claude-code" | "claude-desktop" | "cursor";
 type RegisterTarget = "skill" | "mcp" | "both";
 
 interface RegisterOptions {
@@ -754,12 +887,47 @@ interface RegisterOptions {
   apply?: boolean;
   /** Override the destination skills directory. */
   skillsDir?: string;
-  /** Override the Claude Code config path. */
+  /** Override the MCP config path. */
   mcpConfig?: string;
 }
 
-const DEFAULT_CLAUDE_SKILLS_DIR = join(homedir(), ".claude", "skills");
-const DEFAULT_CLAUDE_MCP_CONFIG = join(homedir(), ".claude.json");
+interface ClientProfile {
+  /** Human-friendly client name. */
+  readonly name: RegisterClient;
+  /** Default MCP config path. */
+  readonly mcpConfigPath: string;
+  /**
+   * Default skill destination directory. `null` for clients that don't have
+   * a skills concept; `--target=skill` (or `both`) becomes a no-op for them.
+   */
+  readonly skillsDir: string | null;
+}
+
+const CLIENT_PROFILES: Readonly<Record<RegisterClient, ClientProfile>> = {
+  "claude-code": {
+    name: "claude-code",
+    mcpConfigPath: join(homedir(), ".claude.json"),
+    skillsDir: join(homedir(), ".claude", "skills"),
+  },
+  "claude-desktop": {
+    name: "claude-desktop",
+    // macOS-only default. Linux/Windows users can override with --mcp-config.
+    // See https://modelcontextprotocol.io/quickstart/user
+    mcpConfigPath: join(
+      homedir(),
+      "Library",
+      "Application Support",
+      "Claude",
+      "claude_desktop_config.json",
+    ),
+    skillsDir: null, // Claude Desktop has no skills concept.
+  },
+  cursor: {
+    name: "cursor",
+    mcpConfigPath: join(homedir(), ".cursor", "mcp.json"),
+    skillsDir: null, // Cursor has no skills concept.
+  },
+};
 
 /**
  * The MCP server name advertised by `almanac serve <id>` is `almanac-<id>` —
@@ -779,9 +947,10 @@ function selfCliPath(): string {
 }
 
 async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
-  if (opts.client !== "claude-code") {
+  const profile = CLIENT_PROFILES[opts.client];
+  if (profile === undefined) {
     fail(
-      `unsupported --client "${opts.client}"; only "claude-code" is supported in v0.1`,
+      `unsupported --client "${opts.client}"; supported: ${Object.keys(CLIENT_PROFILES).join(", ")}`,
     );
   }
   const almanacDir = almanacDirPath(opts.root, id);
@@ -790,8 +959,8 @@ async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
   }
   const manifest = await readManifest(almanacDir);
   const apply = opts.apply === true;
-  const skillsDir = opts.skillsDir ?? DEFAULT_CLAUDE_SKILLS_DIR;
-  const mcpConfigPath = opts.mcpConfig ?? DEFAULT_CLAUDE_MCP_CONFIG;
+  const skillsDir = opts.skillsDir ?? profile.skillsDir;
+  const mcpConfigPath = opts.mcpConfig ?? profile.mcpConfigPath;
   const serverName = mcpServerName(manifest.almanacId);
 
   process.stdout.write(
@@ -801,13 +970,19 @@ async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
   );
 
   if (opts.target === "skill" || opts.target === "both") {
-    await registerSkill({
-      almanacDir,
-      almanacId: manifest.almanacId,
-      skillsDir,
-      apply,
-    });
-    process.stdout.write("\n");
+    if (skillsDir === null) {
+      process.stdout.write(
+        `◆ skill\n  ! ${opts.client} has no skills concept; skipping\n\n`,
+      );
+    } else {
+      await registerSkill({
+        almanacDir,
+        almanacId: manifest.almanacId,
+        skillsDir,
+        apply,
+      });
+      process.stdout.write("\n");
+    }
   }
 
   if (opts.target === "mcp" || opts.target === "both") {
@@ -1013,13 +1188,26 @@ program
   .action(cmdServe);
 
 program
+  .command("remove <id>")
+  .description(
+    "delete a compiled almanac and clean up any client registrations (dry-run by default)",
+  )
+  .option("--apply", "Actually perform the deletions (default: dry-run)")
+  .option(
+    "--keep-registrations",
+    "Skip the client-config cleanup pass; only remove the almanac directory",
+  )
+  .addOption(rootOption)
+  .action(cmdRemove);
+
+program
   .command("register <id>")
   .description(
-    "register an almanac with a downstream client (copies SKILL.md and merges MCP server entry)",
+    "register an almanac with a downstream client (copies SKILL.md when supported, merges MCP server entry)",
   )
   .addOption(
     new Option("--client <name>", "Target client")
-      .choices(["claude-code"])
+      .choices(Object.keys(CLIENT_PROFILES))
       .default("claude-code"),
   )
   .addOption(
@@ -1030,11 +1218,11 @@ program
   .option("--apply", "Actually perform the writes (default: dry-run)")
   .option(
     "--skills-dir <path>",
-    `Override the destination skills directory (default: ${DEFAULT_CLAUDE_SKILLS_DIR})`,
+    "Override the destination skills directory (default: per-client; null for clients without skills)",
   )
   .option(
     "--mcp-config <path>",
-    `Override the Claude Code MCP config path (default: ${DEFAULT_CLAUDE_MCP_CONFIG})`,
+    "Override the MCP config path (default: per-client — Claude Code, Claude Desktop, and Cursor have distinct defaults)",
   )
   .addOption(rootOption)
   .action(cmdRegister);
