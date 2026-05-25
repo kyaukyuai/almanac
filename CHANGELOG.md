@@ -13,6 +13,20 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.2.4] — 2026-05-25
+
+### Changed
+
+- `STAGE11_DEFAULT_FACT_SAMPLE_SIZE` raised from 20 → 60. The
+  earlier 3 % surface (20 of ~620 facts on the sqlite corpus)
+  systematically hid secondary terminology (`vdbe`,
+  `wal transaction`, `jsonb`, `sqlean`) from the benchmark
+  author, so Stage 11 invented queries that no fact could match.
+  At 10 % surface the LLM anchors fixture queries to real corpus
+  vocabulary. Sqlite smoke moved 9/15 → 10/15 (citationRate
+  0.4 → 0.6) with Stage 11 LLM cost +0 (same single call) and
+  prompt token cost +~2 KB.
+
 ## [0.2.3] — 2026-05-25
 
 ### Fixed
@@ -136,7 +150,8 @@ examples for each version. This file is the concise index.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.4...HEAD
+[0.2.4]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/kyaukyuai/almanac/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/kyaukyuai/almanac/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/kyaukyuai/almanac/compare/v0.2.0...v0.2.1

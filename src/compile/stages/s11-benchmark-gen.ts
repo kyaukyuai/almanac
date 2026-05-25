@@ -55,8 +55,17 @@ export const STAGE11_DEFAULT_TEMPERATURE = 0.2;
 /** 1 initial + 1 retry-on-error. Mirrors Stage 6. */
 export const STAGE11_DEFAULT_MAX_ATTEMPTS = 2;
 
-/** Default size of the fact sample shown to the Stage 11 LLM. */
-export const STAGE11_DEFAULT_FACT_SAMPLE_SIZE = 20;
+/**
+ * Default size of the fact sample shown to the Stage 11 LLM.
+ *
+ * 60 is a working tradeoff: on a 600-fact corpus this samples 10 %
+ * of the surface, which is enough to expose secondary terminology
+ * (e.g. "vdbe", "wal transaction" in the sqlite smoke) that the
+ * earlier 3 % sample (20 facts) systematically missed. The cost
+ * impact on Stage 11 prompt tokens is ~2 KB — negligible against
+ * the ~6 KB ToolManifest payload.
+ */
+export const STAGE11_DEFAULT_FACT_SAMPLE_SIZE = 60;
 
 export const STAGE11_OUTPUT_REL_PATH = ".compile/stage11-output.json";
 export const POSITIVE_JSONL_REL_PATH = "tests/positive.jsonl";
@@ -151,7 +160,7 @@ export interface CreateBenchmarkGenRunnerOptions {
   /** Defaults to `STAGE11_DEFAULT_MAX_ATTEMPTS` (1 initial + 1 retry). */
   maxAttempts?: number;
   /**
-   * Defaults to `STAGE11_DEFAULT_FACT_SAMPLE_SIZE` (20). Sample of facts
+   * Defaults to `STAGE11_DEFAULT_FACT_SAMPLE_SIZE` (60). Sample of facts
    * shown to the LLM so positive fixture queries can target real corpus
    * vocabulary; v1 of the prompt ran "blind" against just the
    * `DomainSpec`, leading the LLM to invent fictional terms that the
