@@ -272,9 +272,7 @@ class SqliteKnowledgeReader implements KnowledgeReader {
  *
  *   - Split on whitespace AND on hyphens: `full-text` → `["full", "text"]`.
  *     This matches the indexer side, which also splits on hyphens at
- *     tokenize time. Stripping hyphens (`full-text` → `fulltext`) was
- *     attractive but produced tokens that never appeared in the index, so
- *     a quoted-AND match against e.g. `"fulltext" "search"` always missed.
+ *     tokenize time.
  *   - For each sub-token, strip any remaining char outside
  *     `[a-zA-Z0-9_']`. FTS5 reserves `*`, `(`, `)`, `:`, `^`, `"`; we drop
  *     them rather than try to escape. Apostrophes inside words (`user's`)
@@ -282,9 +280,16 @@ class SqliteKnowledgeReader implements KnowledgeReader {
  *   - Quote each token with double-quotes (escaping any embedded `"` as
  *     `""` per FTS5 rules) so reserved keywords (`NEAR`, `NOT`, `AND`, `OR`)
  *     don't trigger their operator behavior.
- *   - Join with spaces; FTS5 treats space as implicit AND between quoted
- *     phrases — what we want for "find facts mentioning all of these
- *     terms".
+ *   - Join with spaces — FTS5's implicit AND between quoted tokens.
+ *
+ * Why AND not OR? Both have problems with verbose natural-language
+ * queries: AND is strict and may miss relevant single-aspect facts (the
+ * user types 6 words and no single fact happens to mention all 6); OR is
+ * permissive and pulls junk into the result set, which catastrophically
+ * breaks negative-fixture expectations (`maxCitations: 0` queries find
+ * something for any input). We pick precision (AND) over recall here.
+ * The right long-term fix is to keep AND + add `bm25` score threshold
+ * filtering or n-of-m partial matching; tracked for v0.3+.
  *
  * Returns "" when the input has no usable tokens; callers short-circuit
  * to an empty result list in that case.

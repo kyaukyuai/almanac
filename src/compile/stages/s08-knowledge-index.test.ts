@@ -273,7 +273,7 @@ describe("SqliteKnowledgeReader.searchFacts", () => {
 });
 
 describe("sanitizeFtsQuery", () => {
-  test("plain ASCII tokens are quoted and joined", () => {
+  test("plain ASCII tokens are quoted and space-joined (implicit AND)", () => {
     expect(sanitizeFtsQuery("buttermilk substitute")).toBe(
       '"buttermilk" "substitute"',
     );
@@ -298,6 +298,10 @@ describe("sanitizeFtsQuery", () => {
 
   test("apostrophes inside words are kept", () => {
     expect(sanitizeFtsQuery("user's manual")).toBe(`"user's" "manual"`);
+  });
+
+  test("single-token input produces just the quoted token", () => {
+    expect(sanitizeFtsQuery("solo")).toBe('"solo"');
   });
 
   test("empty + whitespace-only input → empty string", () => {
