@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.5] — 2026-05-26
+
 ### Changed
 
 - **Stage 11 prompt v3 — canonical error-code taxonomy.** The
