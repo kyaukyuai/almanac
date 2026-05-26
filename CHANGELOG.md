@@ -13,6 +13,45 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.3.2] — 2026-05-26
+
+### Changed
+
+- **HTTP fetchers fall through for non-bare-github `kind:repo`.**
+  Drop the `source.kind === "repo"` rejection from
+  `HttpIndexOnlyFetcher.canHandle` and
+  `GenericHttpFetcher.canHandle`. The `kind === "file"` rejection
+  stays. Chain ordering puts `GithubRepoFetcher` first, so bare
+  `https://github.com/{owner}/{repo}` URLs continue to route to
+  the GitHub API path; only sources `GithubRepoFetcher` rejects
+  (github.io URLs, github.com URLs with a path suffix like
+  `/releases`, `mode:feed` sources) now fall through to the HTTP
+  fetchers instead of failing `unknown-mode`.
+- Three new tests cover the new behavior plus the precedence
+  invariant: `HttpIndexOnlyFetcher.canHandle` true for `kind:repo`
+  + github.io URL + `index-only`;
+  `GenericHttpFetcher.canHandle` true for `kind:repo` +
+  github.com path URL + `feed`; the default chain still routes
+  bare github.com to `github-repo` (regression guard).
+
+### Why
+
+The v0.3.1 Rust smoke surfaced two silent failures (now visible
+via `stage4:fetch:failed`) that both came from Stage 2
+classifying GitHub Pages or release feeds as `kind:repo` but
+giving them URLs `GithubRepoFetcher` cannot serve:
+
+- `rust-lang-github-io-api-guidelines` —
+  `https://rust-lang.github.io/api-guidelines/`, kind=repo,
+  mode=index-only. github.io is plain HTTP; the bare-repo regex
+  rejects it.
+- `gh-rust-lang-rust-releases` —
+  `https://github.com/rust-lang/rust/releases`, kind=repo,
+  mode=feed. The path suffix loses it the regex, and feed mode
+  is also outside `GithubRepoFetcher`'s allowlist.
+
+Both are now claimed by the HTTP fetcher chain.
+
 ## [0.3.1] — 2026-05-26
 
 ### Added
