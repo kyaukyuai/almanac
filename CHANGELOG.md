@@ -11,6 +11,19 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage 6 prompt v3 — anchor-fragment `sampleUrls` for tools that
+  accept qualified names.** When the tool's `inputSchema` accepts
+  qualified identifiers like `X::Y` (e.g., `Arc::clone`), Stage 6 must
+  include at least one sampleUrl with the canonical anchor fragment
+  (`...struct.Arc.html#method.clone`). Teaches the impl that qualified
+  inputs route to the type's page plus a documented anchor rather than
+  fabricating a sub-path. Motivated by the v0.3.6 Rust smoke's
+  `rust-pos-arc-signature` failure where `lookup_std_item('Arc::clone')`
+  built `/std/Arc/fn.clone.html` (wrong) instead of using
+  `#method.clone` on the struct page.
+
 ## [0.3.6] — 2026-05-27
 
 ### Added
