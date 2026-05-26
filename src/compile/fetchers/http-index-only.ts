@@ -37,8 +37,13 @@ export class HttpIndexOnlyFetcher implements Fetcher {
   readonly name = "http-index-only";
 
   canHandle(source: ApprovedSource): boolean {
-    if (source.kind === "repo" || source.kind === "file") return false;
+    // `file` kind always routes to LocalFileFetcher; never claim it.
+    if (source.kind === "file") return false;
     if (source.ingestion.mode !== "index-only") return false;
+    // `repo` kind is allowed to fall through here when GithubRepoFetcher
+    // doesn't claim it (non-github.com host like github.io, or a github.com
+    // URL with a path suffix the bare-repo regex rejects). Chain ordering
+    // guarantees GithubRepoFetcher gets first refusal.
     return /^https?:\/\//i.test(source.url);
   }
 

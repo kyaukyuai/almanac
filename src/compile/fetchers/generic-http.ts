@@ -30,9 +30,14 @@ export class GenericHttpFetcher implements Fetcher {
   readonly name = "generic-http";
 
   canHandle(source: ApprovedSource): boolean {
-    if (source.kind === "repo" || source.kind === "file") return false;
+    // `file` kind always routes to LocalFileFetcher; never claim it.
+    if (source.kind === "file") return false;
     if (source.ingestion.mode === "index-only") return false;
     if (!/^https?:\/\//i.test(source.url)) return false;
+    // `repo` kind is allowed to fall through here when GithubRepoFetcher
+    // doesn't claim it (e.g., a github.com URL with a path suffix or a
+    // mode=feed source that the bare-repo regex / mode check rejects).
+    // Chain ordering guarantees GithubRepoFetcher gets first refusal.
     return true;
   }
 

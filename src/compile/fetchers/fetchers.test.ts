@@ -32,6 +32,7 @@ import {
 } from "./github-repo.ts";
 import { HttpIndexOnlyFetcher } from "./http-index-only.ts";
 import { LocalFileFetcher } from "./local-file.ts";
+import { defaultFetchers } from "../stages/s04-source-fetch-runner.ts";
 import type { ApprovedSource } from "../../core/types.ts";
 import type { FetchContext } from "./types.ts";
 
@@ -160,8 +161,32 @@ describe("GenericHttpFetcher", () => {
   test("canHandle: docs+snapshot=yes, repo+index-only=no, file=no", () => {
     const f = new GenericHttpFetcher();
     expect(f.canHandle(docsSource("a", "https://x.com"))).toBe(true);
+    // repo+index-only is still false because index-only is HttpIndexOnlyFetcher's
+    // territory regardless of kind.
     expect(f.canHandle(repoSource("b", "https://github.com/x/x"))).toBe(false);
     expect(f.canHandle(fileSource("c", "file:///etc/hosts"))).toBe(false);
+  });
+
+  test("canHandle: kind=repo + mode=feed/snapshot is claimed (v0.3.2 fall-through)", () => {
+    // mode=feed on a github.com path URL (e.g., /releases) is rejected by
+    // GithubRepoFetcher's bare-repo regex AND its mode check, so the chain
+    // used to drop the source as unknown-mode. Now GenericHttpFetcher picks
+    // it up and at least fetches the page.
+    const f = new GenericHttpFetcher();
+    const feedRepo: ApprovedSource = {
+      ...repoSource("rust-releases", "https://github.com/rust-lang/rust/releases"),
+      ingestion: {
+        mode: "feed",
+        scope: ["releases/latest"],
+        refreshIntervalHours: 24,
+      },
+    };
+    expect(f.canHandle(feedRepo)).toBe(true);
+    const snapshotRepo: ApprovedSource = {
+      ...repoSource("something", "https://example.com/snapshot"),
+      ingestion: { mode: "snapshot", scope: ["/"], refreshIntervalHours: 24 },
+    };
+    expect(f.canHandle(snapshotRepo)).toBe(true);
   });
 
   test("200 OK with HTML extracts <title> and writes raw bytes", async () => {
@@ -514,7 +539,7 @@ function indexOnlySource(
 }
 
 describe("HttpIndexOnlyFetcher", () => {
-  test("canHandle: HTTP url + index-only + non-repo/non-file kinds", () => {
+  test("canHandle: HTTP url + index-only + any non-file kind", () => {
     const f = new HttpIndexOnlyFetcher();
     expect(
       f.canHandle(indexOnlySource("a", "https://example.com", "essay")),
@@ -527,16 +552,49 @@ describe("HttpIndexOnlyFetcher", () => {
     ).toBe(true);
     // wrong mode
     expect(f.canHandle(docsSource("d", "https://example.com"))).toBe(false);
-    // wrong kind
-    const repoIndexOnly = {
-      ...indexOnlySource("e", "https://github.com/x/y", "essay"),
-      kind: "repo" as const,
+    // kind=file always rejected (LocalFileFetcher claims those)
+    const fileKind = {
+      ...indexOnlySource("e", "https://example.com", "essay"),
+      kind: "file" as const,
     };
-    expect(f.canHandle(repoIndexOnly)).toBe(false);
+    expect(f.canHandle(fileKind)).toBe(false);
     // non-http
     expect(
       f.canHandle(indexOnlySource("f", "file:///tmp/x", "essay")),
     ).toBe(false);
+  });
+
+  test("default chain routes bare github.com to GithubRepoFetcher (precedence preserved)", () => {
+    // Sanity check that the v0.3.2 fall-through change does not regress the
+    // happy path: a bare github.com URL with kind=repo + mode=snapshot must
+    // still pick up GithubRepoFetcher even though HttpIndexOnlyFetcher /
+    // GenericHttpFetcher would also claim it.
+    const chain = defaultFetchers();
+    const bareRepo: ApprovedSource = {
+      ...repoSource("kube", "https://github.com/kubernetes/kubernetes"),
+      ingestion: { mode: "snapshot", scope: ["/"], refreshIntervalHours: 168 },
+    };
+    const claimed = chain.find((f) => f.canHandle(bareRepo));
+    expect(claimed?.name).toBe("github-repo");
+  });
+
+  test("canHandle: kind=repo + non-github.com URL is claimed (v0.3.2 fall-through)", () => {
+    // GithubRepoFetcher rejects github.io URLs (bare-repo regex). With the
+    // kind=repo exclusion removed, HttpIndexOnlyFetcher now claims those so
+    // they no longer fail unknown-mode at Stage 4. Chain ordering still puts
+    // GithubRepoFetcher first for bare github.com URLs, so the change is
+    // additive — bare github.com repos continue to route to the API path.
+    const f = new HttpIndexOnlyFetcher();
+    const githubIo = {
+      ...indexOnlySource("api-guidelines", "https://rust-lang.github.io/api-guidelines/", "docs"),
+      kind: "repo" as const,
+    };
+    expect(f.canHandle(githubIo)).toBe(true);
+    const githubPath = {
+      ...indexOnlySource("rust-releases", "https://github.com/rust-lang/rust/releases", "docs"),
+      kind: "repo" as const,
+    };
+    expect(f.canHandle(githubPath)).toBe(true);
   });
 
   test("HEAD 200 → status: index-only with finalUrl + lastUpdatedAt label", async () => {
