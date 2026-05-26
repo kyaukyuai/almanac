@@ -23,7 +23,8 @@ import {
   DomainSpecSchema,
   FactRecordSchema,
   SourcesFileSchema,
-  parseToolDesignResult,
+  ToolDesignSourceValidationError,
+  parseToolDesignResultWithSources,
   type DomainSpec,
   type SourcesFile,
   type ToolDesignResult,
@@ -43,7 +44,7 @@ import { factsJsonlPath } from "./s05-fact-extraction.ts";
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const STAGE6_PROMPT_VERSION = "v1";
+export const STAGE6_PROMPT_VERSION = "v2";
 export const STAGE6_PROMPT_STAGE_ID = "06-tool-design";
 
 /** Matches `recommendedModel` in `prompts/06-tool-design/v1.md`. */
@@ -238,10 +239,12 @@ export function createToolDesignRunner(
         }
 
         try {
-          design = parseToolDesignResult(parsedJson);
+          design = parseToolDesignResultWithSources(parsedJson, approved);
           lastError = null;
           break;
         } catch (e) {
+          const isSourceValidation =
+            e instanceof ToolDesignSourceValidationError;
           const detail = e instanceof Error ? e.message : String(e);
           lastError = new LlmSchemaValidationError(
             `Stage 6: LLM output does not match ToolDesignResult schema: ${detail}`,
@@ -254,7 +257,9 @@ export function createToolDesignRunner(
               event: "stage6:llm:retry",
               callName,
               attempt,
-              reason: "schema-validation",
+              reason: isSourceValidation
+                ? "source-mode-validation"
+                : "schema-validation",
               message: detail,
             });
             messages.push(
@@ -262,7 +267,9 @@ export function createToolDesignRunner(
               {
                 role: "user",
                 content: buildRetryFeedback({
-                  reason: "schema-validation",
+                  reason: isSourceValidation
+                    ? "source-mode-validation"
+                    : "schema-validation",
                   detail,
                 }),
               },
@@ -317,22 +324,33 @@ export function createToolDesignRunner(
  * rather than re-reasoning the entire task.
  */
 function buildRetryFeedback(args: {
-  reason: "json-parse" | "schema-validation";
+  reason: "json-parse" | "schema-validation" | "source-mode-validation";
   detail: string;
 }): string {
   const header =
     args.reason === "json-parse"
       ? "Your previous response could not be parsed as JSON."
+      : args.reason === "source-mode-validation"
+      ? "Your previous response was valid JSON and matched the schema, but one or more custom tools violated the source-mode invariants (see Hard invariant #4 in the original instructions)."
       : "Your previous response was valid JSON but did not match the required schema.";
-  return [
+  const lines = [
     header,
     "",
     "Validation error:",
     args.detail,
     "",
+  ];
+  if (args.reason === "source-mode-validation") {
+    lines.push(
+      "Remember: a fact-reading tool (knowledgeUsage.facts: true) must list at least one approved source whose ingestion.mode is \"snapshot\". If the relevant source is index-only, redesign the tool as a live-fetch wrapper (volatilityClass: \"fast\", knowledgeUsage.facts: false, sourceDependencies listing that source id), or drop the tool entirely.",
+      "",
+    );
+  }
+  lines.push(
     "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
     "Return ONLY the JSON object — no prose, no code fences, no explanation.",
-  ].join("\n");
+  );
+  return lines.join("\n");
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

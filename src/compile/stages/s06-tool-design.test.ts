@@ -164,6 +164,7 @@ function buildCustomTool(name: string): ToolManifest {
       sourceTimestamp: false,
     },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
+    sourceDependencies: [],
     examples: [
       {
         description: "Pod returns a schema",
@@ -171,7 +172,7 @@ function buildCustomTool(name: string): ToolManifest {
         expectedShape: "match-outputSchema",
       },
     ],
-    designedBy: { model: "claude-sonnet-4", promptVersion: "06-tool-design/v1" },
+    designedBy: { model: "claude-sonnet-4", promptVersion: "06-tool-design/v2" },
     disabled: false,
   };
 }
@@ -296,18 +297,19 @@ function makeCtx(input: {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe("createToolDesignRunner", () => {
-  test("advertises promptVersion=v1", () => {
+  test("advertises promptVersion=v2", () => {
     const runner = createToolDesignRunner({
       provider: createMockProvider({ defaultResponse: "{}" }),
     });
     expect(runner.promptVersion).toBe(STAGE6_PROMPT_VERSION);
+    expect(STAGE6_PROMPT_VERSION).toBe("v2");
   });
 
   test("happy path: persists tool-design.json with deterministic outputHash", async () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v1": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
       },
     });
     const outcome = await createToolDesignRunner({ provider }).run(
@@ -325,7 +327,7 @@ describe("createToolDesignRunner", () => {
     const fx2 = await freshFixture();
     const provider2 = createMockProvider({
       responses: {
-        "06-tool-design@v1": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
       },
     });
     const outcome2 = await createToolDesignRunner({ provider: provider2 }).run(
@@ -339,7 +341,7 @@ describe("createToolDesignRunner", () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v1": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
       },
     });
     await createToolDesignRunner({ provider }).run(makeCtx(fx));
@@ -363,7 +365,7 @@ describe("createToolDesignRunner", () => {
         "The four default tools fully cover this domain's expected workflows.",
     });
     const provider = createMockProvider({
-      responses: { "06-tool-design@v1": JSON.stringify(empty) },
+      responses: { "06-tool-design@v2": JSON.stringify(empty) },
     });
     const outcome = await createToolDesignRunner({ provider }).run(
       makeCtx(fx),
@@ -464,7 +466,7 @@ describe("createToolDesignRunner — retry on validation failure", () => {
     let call = 0;
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v1": () => {
+        "06-tool-design@v2": () => {
           call += 1;
           if (call === 1) {
             // First attempt: missing required `rationale` field.
@@ -506,7 +508,7 @@ describe("createToolDesignRunner — retry on validation failure", () => {
     let call = 0;
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v1": () => {
+        "06-tool-design@v2": () => {
           call += 1;
           if (call === 1) return "this is not json at all";
           return JSON.stringify({
@@ -594,3 +596,4 @@ describe("defaultReadFactCoverage", () => {
     );
   });
 });
+
