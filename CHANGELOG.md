@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.4] — 2026-05-26
+
 ### Added
 
 - **Stage 7 static validator — catches hallucinated URL fallback lists.**
