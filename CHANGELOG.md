@@ -11,6 +11,23 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage 11 prompt v3 — canonical error-code taxonomy.** The
+  benchmark-gen prompt now lists the exact `error.code` strings that
+  Stage 7 tools actually emit (`bad-input`, `not-found`, `no-results`,
+  `no-source`, `bad-response`, `network-not-allowed`,
+  `capability-missing`, `knowledge-missing`, `timeout`, `rate-limited`)
+  and explicitly forbids near-synonyms like `invalid-input` /
+  `input-error` / `missing-input`. The `expectedErrorCode` field type
+  hint in the JSON schema example changes from
+  `"kebab-or-snake-case"` to `"canonical-code"` with a pointer to
+  the list. Motivated by the v0.3.4 Rust smoke's
+  `rust-neg-future-edition-2027` failure, where the LLM-generated
+  fixture asked for `expectedErrorCode: "invalid-input"` while the
+  Stage 7 `edition_diff` impl correctly returned the canonical
+  `"bad-input"`, causing a 1-fixture string-compare miss.
+
 ## [0.3.4] — 2026-05-26
 
 ### Added
