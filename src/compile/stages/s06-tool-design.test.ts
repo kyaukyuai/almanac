@@ -35,6 +35,7 @@ import {
   MissingDomainSpecError,
   MissingFactsError,
   STAGE6_PROMPT_VERSION,
+  buildSourceModeSummary,
   createToolDesignRunner,
   defaultReadFactCoverage,
   toolDesignPath,
@@ -297,19 +298,19 @@ function makeCtx(input: {
 // ──────────────────────────────────────────────────────────────────────────────
 
 describe("createToolDesignRunner", () => {
-  test("advertises promptVersion=v2", () => {
+  test("advertises promptVersion=v3", () => {
     const runner = createToolDesignRunner({
       provider: createMockProvider({ defaultResponse: "{}" }),
     });
     expect(runner.promptVersion).toBe(STAGE6_PROMPT_VERSION);
-    expect(STAGE6_PROMPT_VERSION).toBe("v2");
+    expect(STAGE6_PROMPT_VERSION).toBe("v3");
   });
 
   test("happy path: persists tool-design.json with deterministic outputHash", async () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v3": JSON.stringify(buildToolDesignResult()),
       },
     });
     const outcome = await createToolDesignRunner({ provider }).run(
@@ -327,7 +328,7 @@ describe("createToolDesignRunner", () => {
     const fx2 = await freshFixture();
     const provider2 = createMockProvider({
       responses: {
-        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v3": JSON.stringify(buildToolDesignResult()),
       },
     });
     const outcome2 = await createToolDesignRunner({ provider: provider2 }).run(
@@ -337,11 +338,11 @@ describe("createToolDesignRunner", () => {
     expect(outcome2.outputHash).toBe(outcome.outputHash);
   });
 
-  test("forwards domainSpec/sourcesFile/factCoverage into the user message", async () => {
+  test("forwards domainSpec/sourcesFile/factCoverage + sourceModeSummary into the user message", async () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": JSON.stringify(buildToolDesignResult()),
+        "06-tool-design@v3": JSON.stringify(buildToolDesignResult()),
       },
     });
     await createToolDesignRunner({ provider }).run(makeCtx(fx));
@@ -351,9 +352,11 @@ describe("createToolDesignRunner", () => {
     expect(userMsg.content).toContain("domainSpec:");
     expect(userMsg.content).toContain("sourcesFile:");
     expect(userMsg.content).toContain("factCoverage:");
+    expect(userMsg.content).toContain("sourceModeSummary:");
     expect(userMsg.content).toContain("kubernetes");
     expect(userMsg.content).toContain("k8s-docs");
     expect(userMsg.content).toContain("factsExtracted");
+    expect(userMsg.content).toContain("snapshotIds");
   });
 
   test("empty customTools is a valid happy path", async () => {
@@ -365,7 +368,7 @@ describe("createToolDesignRunner", () => {
         "The four default tools fully cover this domain's expected workflows.",
     });
     const provider = createMockProvider({
-      responses: { "06-tool-design@v2": JSON.stringify(empty) },
+      responses: { "06-tool-design@v3": JSON.stringify(empty) },
     });
     const outcome = await createToolDesignRunner({ provider }).run(
       makeCtx(fx),
@@ -466,7 +469,7 @@ describe("createToolDesignRunner — retry on validation failure", () => {
     let call = 0;
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": () => {
+        "06-tool-design@v3": () => {
           call += 1;
           if (call === 1) {
             // First attempt: missing required `rationale` field.
@@ -508,7 +511,7 @@ describe("createToolDesignRunner — retry on validation failure", () => {
     let call = 0;
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": () => {
+        "06-tool-design@v3": () => {
           call += 1;
           if (call === 1) return "this is not json at all";
           return JSON.stringify({
@@ -594,6 +597,91 @@ describe("defaultReadFactCoverage", () => {
     await expect(defaultReadFactCoverage(fx.almanacDir)).rejects.toBeInstanceOf(
       MissingFactsError,
     );
+  });
+});
+
+describe("buildSourceModeSummary", () => {
+  test("groups source ids by ingestion.mode and counts each bucket", () => {
+    const summary = buildSourceModeSummary(
+      SourcesFileSchema.parse({
+        ...APPROVED_SOURCES,
+        coverage: { ...APPROVED_SOURCES.coverage, docs: 1, repo: 2, news: 1 },
+        generatedBy: {
+          ...APPROVED_SOURCES.generatedBy,
+          candidateCount: 4,
+          acceptedCount: 4,
+        },
+        sources: [
+          APPROVED_SOURCES.sources[0]!, // k8s-docs, snapshot
+          {
+            id: "k8s-repo",
+            url: "https://github.com/kubernetes/kubernetes",
+            kind: "repo",
+            trust: 0.95,
+            volatility: "fast",
+            rationale: "Upstream.",
+            ingestion: {
+              mode: "index-only",
+              scope: ["/"],
+              refreshIntervalHours: 168,
+            },
+            notes: null,
+          },
+          {
+            id: "k8s-blog",
+            url: "https://kubernetes.io/blog/",
+            kind: "news",
+            trust: 0.9,
+            volatility: "fast",
+            rationale: "Official blog.",
+            ingestion: {
+              mode: "feed",
+              scope: ["/feed/"],
+              refreshIntervalHours: 24,
+            },
+            notes: null,
+          },
+          {
+            id: "k8s-rfcs",
+            url: "https://github.com/kubernetes/enhancements",
+            kind: "repo",
+            trust: 0.92,
+            volatility: "slow",
+            rationale: "Enhancement proposals.",
+            ingestion: {
+              mode: "snapshot",
+              scope: ["/keps/"],
+              refreshIntervalHours: 168,
+            },
+            notes: null,
+          },
+        ],
+      }),
+    );
+    expect(summary.counts).toEqual({ snapshot: 2, indexOnly: 1, feed: 1 });
+    expect(summary.snapshotIds).toEqual(["k8s-docs", "k8s-rfcs"]);
+    expect(summary.indexOnlyIds).toEqual(["k8s-repo"]);
+    expect(summary.feedIds).toEqual(["k8s-blog"]);
+  });
+
+  test("returns empty arrays for an empty sources list", () => {
+    const summary = buildSourceModeSummary(
+      SourcesFileSchema.parse({
+        ...APPROVED_SOURCES,
+        coverage: {
+          docs: 0, repo: 0, news: 0, community: 0, academic: 0,
+          data: 0, file: 0, essay: 0, book: 0, talk: 0,
+        },
+        generatedBy: {
+          ...APPROVED_SOURCES.generatedBy,
+          candidateCount: 0,
+          acceptedCount: 0,
+        },
+        sources: [],
+      }),
+    );
+    expect(summary.counts).toEqual({ snapshot: 0, indexOnly: 0, feed: 0 });
+    expect(summary.snapshotIds).toEqual([]);
   });
 });
 
@@ -719,7 +807,7 @@ describe("createToolDesignRunner — v0.3 source-mode awareness", () => {
     };
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": JSON.stringify(goodDesign),
+        "06-tool-design@v3": JSON.stringify(goodDesign),
       },
     });
     const outcome = await createToolDesignRunner({ provider }).run(makeCtx(fx));
@@ -740,7 +828,7 @@ describe("createToolDesignRunner — v0.3 source-mode awareness", () => {
       rationale: "Live API tool that does not touch the fact store.",
     };
     const provider = createMockProvider({
-      responses: { "06-tool-design@v2": JSON.stringify(liveDesign) },
+      responses: { "06-tool-design@v3": JSON.stringify(liveDesign) },
     });
     const outcome = await createToolDesignRunner({ provider }).run(makeCtx(fx));
     if (outcome.kind !== "success") throw new Error("expected success");
@@ -766,7 +854,7 @@ describe("createToolDesignRunner — v0.3 source-mode awareness", () => {
     let call = 0;
     const provider = createMockProvider({
       responses: {
-        "06-tool-design@v2": () => {
+        "06-tool-design@v3": () => {
           call += 1;
           if (call === 1) {
             // index-only-only tool → source-mode violation

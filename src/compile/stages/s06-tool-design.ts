@@ -44,7 +44,7 @@ import { factsJsonlPath } from "./s05-fact-extraction.ts";
 // Constants
 // ──────────────────────────────────────────────────────────────────────────────
 
-export const STAGE6_PROMPT_VERSION = "v2";
+export const STAGE6_PROMPT_VERSION = "v3";
 export const STAGE6_PROMPT_STAGE_ID = "06-tool-design";
 
 /** Matches `recommendedModel` in `prompts/06-tool-design/v1.md`. */
@@ -156,6 +156,8 @@ export function createToolDesignRunner(
         readFactCoverage(ctx.almanacDir),
       ]);
 
+      const sourceModeSummary = buildSourceModeSummary(approved);
+
       const prompt = loadPromptTemplate({
         stageId: STAGE6_PROMPT_STAGE_ID,
         version: STAGE6_PROMPT_VERSION,
@@ -163,6 +165,7 @@ export function createToolDesignRunner(
         vars: {
           domainSpec: JSON.stringify(domainSpec),
           sourcesFile: JSON.stringify(approved),
+          sourceModeSummary: JSON.stringify(sourceModeSummary),
           factCoverage: JSON.stringify(factCoverage),
         },
       });
@@ -436,6 +439,46 @@ export async function defaultReadFactCoverage(
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Aggregation of `sourcesFile.sources[*].ingestion.mode` injected into the
+ * Stage 6 user message (v3+). Fixes a v2 regression where the LLM
+ * occasionally claimed "zero snapshot-mode sources" while the raw JSON
+ * actually carried several — the model was failing to aggregate from the
+ * nested input on its own. With this summary pre-computed and named, the
+ * model can scan one block instead of folding `ingestion.mode` across all
+ * sources.
+ */
+export interface SourceModeSummary {
+  counts: { snapshot: number; indexOnly: number; feed: number };
+  snapshotIds: string[];
+  indexOnlyIds: string[];
+  feedIds: string[];
+}
+
+export function buildSourceModeSummary(
+  approved: SourcesFile,
+): SourceModeSummary {
+  const summary: SourceModeSummary = {
+    counts: { snapshot: 0, indexOnly: 0, feed: 0 },
+    snapshotIds: [],
+    indexOnlyIds: [],
+    feedIds: [],
+  };
+  for (const s of approved.sources) {
+    if (s.ingestion.mode === "snapshot") {
+      summary.counts.snapshot += 1;
+      summary.snapshotIds.push(s.id);
+    } else if (s.ingestion.mode === "index-only") {
+      summary.counts.indexOnly += 1;
+      summary.indexOnlyIds.push(s.id);
+    } else if (s.ingestion.mode === "feed") {
+      summary.counts.feed += 1;
+      summary.feedIds.push(s.id);
+    }
+  }
+  return summary;
+}
 
 function stripFence(text: string): string {
   const trimmed = text.trim();

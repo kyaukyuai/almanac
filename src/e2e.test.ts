@@ -522,7 +522,7 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
           "02-source-discovery@planner-v1": JSON.stringify(DISCOVERY_PLAN),
           "02-source-discovery@evaluator-v1": JSON.stringify(DRAFT_SOURCES),
           "05-fact-extraction@v1": JSON.stringify(EXTRACTION_RESULT),
-          "06-tool-design@v2": JSON.stringify(TOOL_DESIGN),
+          "06-tool-design@v3": JSON.stringify(TOOL_DESIGN),
           "07-tool-impl@v1": JSON.stringify({
             implCode: SAFETY_NOTE_IMPL,
             testCode: SAFETY_NOTE_TEST,
