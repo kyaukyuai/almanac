@@ -13,6 +13,54 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.3.1] — 2026-05-26
+
+### Added
+
+- **Stage 4 — per-source failure events.** `runSourceFetch` now
+  emits `stage4:fetch:failed` whenever an entry's status is
+  `failed`, both from the orchestrator's catch path (unknown-mode,
+  fetcher-thrown errors) and when a fetcher returns a failed
+  entry on its own (HTTP 404 etc). Previously these were captured
+  in `sources/manifest.summary.json` only, so a silent fetch fail
+  on a source that later showed up in a Stage 6 tool's
+  `sourceDependencies` was invisible until benchmark time. The
+  Rust v0.3.0 smoke surfaced this exactly:
+  `gh-rust-lang-rust-releases` silently failed `unknown-mode`
+  (its URL `https://github.com/rust-lang/rust/releases` includes
+  a `/releases` path the `GithubRepoFetcher` regex rejects).
+  Stage 6 then designed `error_explain` with that source in
+  sourceDependencies, and the empty corpus only surfaced as a
+  failed benchmark.
+
+### Changed
+
+- **Stage 6 prompt v2 → v3.** Adds a "Pre-computed source-mode
+  summary" block to the User message, populated by a new
+  `buildSourceModeSummary` helper in the runner. The summary
+  carries counts plus ids per ingestion mode (`snapshotIds`,
+  `indexOnlyIds`, `feedIds`) so the model can scan one block
+  instead of aggregating across the nested sources JSON.
+  Motivated by the v0.3.0 sqlite smoke, where the LLM's
+  rationale claimed "zero snapshot-mode sources" while three of
+  nine sources were in fact snapshot. The conclusion
+  (`customTools: []`) was safe — `pragma_lookup` specifically
+  targeted the index-only `sqlite-org-lang` source — but the
+  rationale itself was factually wrong, a sign the model was
+  failing to aggregate `ingestion.mode` from the input on its
+  own. The Rust v0.3.1 smoke confirms the fix: the v3 rationale
+  now correctly identifies `doc-rust-lang-org-std` as
+  index-only and `gh-rust-lang-rfcs` as snapshot.
+
+### Known limitations (deferred to v0.4)
+
+- `GithubRepoFetcher` rejects repo URLs with path suffixes
+  (e.g., `/releases`, `/tree/foo`). Stage 4 now logs the silent
+  failure but the underlying URL canonicalisation / scope-aware
+  fetch is a larger fix. Same shape: github.io docs URLs
+  (`rust-lang-github-io-api-guidelines`) also currently fail
+  `unknown-mode` because no fetcher claims them.
+
 ## [0.3.0] — 2026-05-26
 
 ### Added
