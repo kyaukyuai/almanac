@@ -13,6 +13,61 @@ examples for each version. This file is the concise index.
 
 — nothing yet.
 
+## [0.3.0] — 2026-05-26
+
+### Added
+
+- **v0.3 main thrust — Stage 6 source-mode awareness.** Addresses
+  the empirical 80 % ceiling identified in v0.2.6 cross-domain
+  validation. In v0.2.6 Stage 6 designed fact-store-reading
+  tools on top of `index-only` sources (Stage 4 had not
+  snapshotted their bodies), so the runtime calls returned
+  empty (`pragma_lookup`, `lookup_std_item`).
+  - `ToolManifestSchema` gains `sourceDependencies: string[]`
+    (defaults to `[]`). Lists the approved `sources[*].id`
+    values a custom tool reads content from.
+  - New `parseToolDesignResultWithSources(raw, sources)`
+    performs two cross-checks the pure schema cannot:
+    (1) every `sourceDependencies[*]` resolves to an approved
+    source id; (2) when `knowledgeUsage.facts === true`,
+    `sourceDependencies` must contain at least one
+    `ingestion.mode === "snapshot"` source. Violations throw
+    `ToolDesignSourceValidationError`.
+  - Stage 6 prompt v1 → v2. Adds a "Source modes" preamble,
+    makes `sourceDependencies` mandatory in the schema block,
+    and teaches the model to redesign fact-reading tools as
+    live-fetch wrappers when the relevant source is
+    `index-only`. Worked examples (kubernetes / cooking /
+    crypto) all carry `sourceDependencies` now.
+  - Stage 6 runner: `STAGE6_PROMPT_VERSION = "v2"`. Validation
+    failures from the new cross-check feed back into the retry
+    loop with a `source-mode-validation` reason and a tailored
+    feedback message that explicitly points the model at the
+    live-fetch redesign path.
+
+### Validated
+
+Cross-domain real-LLM smokes on 2026-05-26 with the v2 prompt
+running against fresh `/tmp/almanac-*-v03-smoke` builds:
+
+| domain | passed | citationRate | customTools | failure modes |
+|-------:|-------:|-------------:|------------:|:--------------|
+| sqlite (v0.2.6) | 12 / 15 | 0.70 | 1 (broken `pragma_lookup`) | structural empty-result + live-web variance |
+| sqlite (v0.3.0) | **14 / 15** | **0.90** | 0 (LLM redesigned away) | only live-web variance (`web_search_recent` for "sqlite new pragma") |
+| rust   (v0.2.6) | 13 / 15 | 0.80 | 1 (broken `lookup_std_item`) | structural empty-result + live-web variance |
+| rust   (v0.3.0) | 13 / 15 | 0.80 | **3 (all correctly designed)** | E0277 corpus gap (Stage 4 silent fetch fail) + live-web variance |
+
+The Rust numbers are flat by count but the failure *modes* are
+new: `lookup_std_item` is no longer broken — Stage 6 redesigned
+it as `facts:false` + `volatilityClass:"fast"` live-fetch over
+`doc-rust-lang-org-std`, exactly the path the v2 prompt teaches.
+The remaining 2 failures are inherent (live-web variance, Stage
+4 silent fetch fail of `gh-rust-lang-rust-releases` losing E0277
+content) — neither is a Stage 6 issue. The sqlite +2 / +0.20
+lift is the same effect from the opposite direction: the LLM
+correctly returned `customTools: []` because no design honored
+the new invariants for that source mix.
+
 ## [0.2.6] — 2026-05-25
 
 ### Added

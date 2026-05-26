@@ -597,3 +597,211 @@ describe("defaultReadFactCoverage", () => {
   });
 });
 
+// ──────────────────────────────────────────────────────────────────────────────
+// v0.3 — source-mode awareness
+//
+// Reproduces the v0.2.6 failure mode where Stage 6 designed fact-store-reading
+// tools on top of index-only sources, and Stage 7 implemented them faithfully
+// but uselessly (runtime calls returned empty).
+// ──────────────────────────────────────────────────────────────────────────────
+
+async function freshIndexOnlyFixture(): Promise<{
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  state: CompileState;
+}> {
+  const root = mkdtempSync(join(tmpdir(), "almanac-s06-idx-"));
+  cleanup.push(root);
+  const almanacDir = join(root, "kubernetes");
+  const { manifest, compileState } = bootstrapAlmanac({
+    almanacId: "kubernetes",
+    domain: "kubernetes",
+    displayName: "Kubernetes",
+    freshnessProfileId: "mixed",
+    runId: "run-test",
+    forgerVersion: "0.0.0",
+    options: {
+      depth: "standard",
+      sourcesHint: [],
+      target: "both",
+      autoApprove: true,
+      language: "ts",
+    },
+    now: new Date("2026-05-08T12:00:00.000Z"),
+  });
+  await ensureAlmanacLayout(almanacDir);
+
+  const sources: SourcesFile = SourcesFileSchema.parse({
+    ...APPROVED_SOURCES,
+    coverage: { ...APPROVED_SOURCES.coverage, docs: 1, repo: 1 },
+    generatedBy: {
+      ...APPROVED_SOURCES.generatedBy,
+      candidateCount: 2,
+      acceptedCount: 2,
+    },
+    sources: [
+      APPROVED_SOURCES.sources[0]!,
+      {
+        id: "k8s-repo",
+        url: "https://github.com/kubernetes/kubernetes",
+        kind: "repo",
+        trust: 0.95,
+        volatility: "fast",
+        rationale: "Upstream source repository.",
+        ingestion: {
+          mode: "index-only",
+          scope: ["/"],
+          refreshIntervalHours: 168,
+        },
+        notes: null,
+      },
+    ],
+  });
+
+  const p = domainSpecPath(almanacDir);
+  await mkdir(dirname(p), { recursive: true });
+  writeFileSync(p, JSON.stringify(VALID_DOMAIN_SPEC, null, 2), "utf8");
+  const sp = approvedSourcesPath(almanacDir);
+  await mkdir(dirname(sp), { recursive: true });
+  writeFileSync(sp, JSON.stringify(sources, null, 2), "utf8");
+  const fp = factsJsonlPath(almanacDir);
+  await mkdir(dirname(fp), { recursive: true });
+  await writeFile(fp, FACTS_JSONL_BODY, "utf8");
+
+  return {
+    almanacDir,
+    manifest: AlmanacManifestSchema.parse(manifest),
+    state: CompileStateSchema.parse(compileState),
+  };
+}
+
+function makeFactsTool(
+  name: string,
+  sourceDependencies: string[],
+): ToolManifest {
+  return {
+    ...buildCustomTool(name),
+    volatilityClass: "static",
+    freshness: {
+      cachePolicy: "manual-refresh",
+      ttlSeconds: null,
+      sourceTimestamp: false,
+    },
+    knowledgeUsage: { facts: true, ftsQuery: "{q}", embeddings: false },
+    sourceDependencies,
+  };
+}
+
+describe("createToolDesignRunner — v0.3 source-mode awareness", () => {
+  test("rejects facts:true tool that depends only on index-only sources", async () => {
+    const fx = await freshIndexOnlyFixture();
+    const badDesign = {
+      schemaVersion: "0.1.0",
+      customTools: [makeFactsTool("lookup_std_item", ["k8s-repo"])],
+      rationale:
+        "This should fail because k8s-repo is index-only; the fact store will be empty for it.",
+    };
+    const provider = createMockProvider({
+      defaultResponse: JSON.stringify(badDesign),
+    });
+    await expect(
+      createToolDesignRunner({ provider, maxAttempts: 1 }).run(makeCtx(fx)),
+    ).rejects.toBeInstanceOf(LlmSchemaValidationError);
+  });
+
+  test("accepts facts:true tool that includes at least one snapshot source", async () => {
+    const fx = await freshIndexOnlyFixture();
+    const goodDesign = {
+      schemaVersion: "0.1.0",
+      customTools: [makeFactsTool("lookup_std_item", ["k8s-docs", "k8s-repo"])],
+      rationale:
+        "k8s-docs is snapshot, so the fact store contains its body — facts retrieval works.",
+    };
+    const provider = createMockProvider({
+      responses: {
+        "06-tool-design@v2": JSON.stringify(goodDesign),
+      },
+    });
+    const outcome = await createToolDesignRunner({ provider }).run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+    const body = readFileSync(toolDesignPath(fx.almanacDir), "utf8");
+    const parsed = ToolDesignResultSchema.parse(JSON.parse(body));
+    expect(parsed.customTools[0]!.sourceDependencies).toEqual([
+      "k8s-docs",
+      "k8s-repo",
+    ]);
+  });
+
+  test("accepts live tool (facts:false) with empty sourceDependencies", async () => {
+    const fx = await freshIndexOnlyFixture();
+    const liveDesign = {
+      schemaVersion: "0.1.0",
+      customTools: [buildCustomTool("price_now")], // facts:false, sourceDependencies:[]
+      rationale: "Live API tool that does not touch the fact store.",
+    };
+    const provider = createMockProvider({
+      responses: { "06-tool-design@v2": JSON.stringify(liveDesign) },
+    });
+    const outcome = await createToolDesignRunner({ provider }).run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+  });
+
+  test("rejects tool that references an unknown source id", async () => {
+    const fx = await freshIndexOnlyFixture();
+    const badDesign = {
+      schemaVersion: "0.1.0",
+      customTools: [makeFactsTool("lookup_std_item", ["k8s-docs", "ghost"])],
+      rationale: "Ghost id is not in approved sources.",
+    };
+    const provider = createMockProvider({
+      defaultResponse: JSON.stringify(badDesign),
+    });
+    await expect(
+      createToolDesignRunner({ provider, maxAttempts: 1 }).run(makeCtx(fx)),
+    ).rejects.toBeInstanceOf(LlmSchemaValidationError);
+  });
+
+  test("source-mode failure emits stage6:llm:retry with source-mode-validation reason", async () => {
+    const fx = await freshIndexOnlyFixture();
+    let call = 0;
+    const provider = createMockProvider({
+      responses: {
+        "06-tool-design@v2": () => {
+          call += 1;
+          if (call === 1) {
+            // index-only-only tool → source-mode violation
+            return JSON.stringify({
+              schemaVersion: "0.1.0",
+              customTools: [makeFactsTool("lookup_std_item", ["k8s-repo"])],
+              rationale:
+                "First attempt depends only on index-only; should retry.",
+            });
+          }
+          // Second attempt: redesigned as live-fetch wrapper.
+          return JSON.stringify({
+            schemaVersion: "0.1.0",
+            customTools: [
+              {
+                ...buildCustomTool("lookup_std_item"),
+                sourceDependencies: ["k8s-repo"],
+              },
+            ],
+            rationale:
+              "Redesigned to live-fetch from the index-only source via fetch_official_docs pattern.",
+          });
+        },
+      },
+    });
+    const events: object[] = [];
+    const outcome = await createToolDesignRunner({ provider }).run(
+      makeCtx({ ...fx, log: (e) => events.push(e) }),
+    );
+    if (outcome.kind !== "success") throw new Error("expected success");
+    expect(outcome.llmCalls).toBe(2);
+    const retryEvent = events.find(
+      (e) => (e as { event?: string }).event === "stage6:llm:retry",
+    ) as { reason?: string } | undefined;
+    expect(retryEvent).toBeDefined();
+    expect(retryEvent!.reason).toBe("source-mode-validation");
+  });
+});
