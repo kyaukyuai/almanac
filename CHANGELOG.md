@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.6] — 2026-05-27
+
 ### Added
 
 - **`ToolManifest.sampleUrls`** — optional 0–5 array of real
