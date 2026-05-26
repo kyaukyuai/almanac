@@ -321,6 +321,7 @@ describe("ToolDesignResult — validation rejections", () => {
     volatilityClass: "live",
     freshness: { cachePolicy: "no-cache", ttlSeconds: null, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
+    sourceDependencies: [],
     examples: [
       {
         description: "smoke",

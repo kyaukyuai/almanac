@@ -90,6 +90,7 @@ function baseManifest(name: string, overrides: Partial<ToolManifest> = {}): Tool
     volatilityClass: "slow",
     freshness: { cachePolicy: "ttl", ttlSeconds: 3600, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
+    sourceDependencies: [],
     examples: [
       { description: "smoke", input: { q: "x" }, expectedShape: "match-outputSchema" },
     ],

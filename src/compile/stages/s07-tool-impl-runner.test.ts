@@ -76,6 +76,7 @@ function buildCustomTool(name: string): ToolManifest {
     volatilityClass: "fast",
     freshness: { cachePolicy: "ttl", ttlSeconds: 86400, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
+    sourceDependencies: [],
     examples: [
       {
         description: "Pod returns a schema",

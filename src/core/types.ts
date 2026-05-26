@@ -2117,6 +2117,22 @@ export const ToolManifestSchema = z
     implementedBy: ToolImplementationProvenanceSchema.optional(),
     disabled: z.boolean(),
     disabledReason: z.string().min(1).max(300).optional(),
+    /**
+     * Approved source ids the tool reads content from. Empty for tools that
+     * hit only live external APIs and never depend on indexed/snapshotted
+     * source material. Cross-validation against `SourcesFile.sources[*].id`
+     * lives in `parseToolDesignResultWithSources`; the schema itself only
+     * checks shape and uniqueness.
+     */
+    sourceDependencies: z
+      .array(
+        z
+          .string()
+          .max(64)
+          .regex(SOURCE_ID, "must match SourcesFile source id format"),
+      )
+      .max(12)
+      .default([]),
   })
   .superRefine((m, ctx) => {
     // disabled ↔ disabledReason
@@ -2161,6 +2177,22 @@ export const ToolManifestSchema = z
         message:
           'knowledgeUsage.facts is only allowed when volatilityClass is "static" or "slow" (the fact store does not cache fast/live)',
       });
+    }
+
+    // sourceDependencies entries must be unique
+    if (m.sourceDependencies.length > 0) {
+      const seen = new Set<string>();
+      for (let i = 0; i < m.sourceDependencies.length; i++) {
+        const id = m.sourceDependencies[i]!;
+        if (seen.has(id)) {
+          ctx.addIssue({
+            code: z.ZodIssueCode.custom,
+            path: ["sourceDependencies", i],
+            message: `duplicate sourceDependencies entry: "${id}"`,
+          });
+        }
+        seen.add(id);
+      }
     }
   });
 export type ToolManifest = z.infer<typeof ToolManifestSchema>;
@@ -2225,6 +2257,105 @@ export type ToolDesignResult = z.infer<typeof ToolDesignResultSchema>;
 /** Parse the raw Stage 6 LLM JSON output into a validated `ToolDesignResult`. */
 export function parseToolDesignResult(raw: unknown): ToolDesignResult {
   return ToolDesignResultSchema.parse(raw);
+}
+
+/**
+ * Stage 6 cross-validation against the approved `SourcesFile`.
+ *
+ * v0.3 source-mode awareness — the empirical 80 % ceiling in v0.2.6 came from
+ * Stage 6 designing fact-store-reading tools (`pragma_lookup`,
+ * `lookup_std_item`) on top of sources that Stage 4 had fetched in
+ * `index-only` mode. The fact store never saw their content, so the runtime
+ * tool calls returned empty.
+ *
+ * Two rules enforced here (cannot live in the pure schema because they need
+ * the approved sources to resolve ids):
+ *
+ *   1. Every `sourceDependencies[*]` must reference an approved
+ *      `sources[*].id`.
+ *   2. If `knowledgeUsage.facts === true`, `sourceDependencies` must be
+ *      non-empty AND contain at least one source whose
+ *      `ingestion.mode === "snapshot"`. A facts-backed tool that only lists
+ *      index-only / feed sources will return empty at runtime — the model
+ *      should redesign it around `fetch_official_docs` instead.
+ *
+ * Live-API tools (`knowledgeUsage.facts === false`) may keep
+ * `sourceDependencies: []` — they don't touch the indexed corpus.
+ */
+export function parseToolDesignResultWithSources(
+  raw: unknown,
+  sources: SourcesFile,
+): ToolDesignResult {
+  const parsed = ToolDesignResultSchema.parse(raw);
+  const sourceById = new Map(sources.sources.map((s) => [s.id, s] as const));
+  const issues: string[] = [];
+
+  for (let i = 0; i < parsed.customTools.length; i++) {
+    const t = parsed.customTools[i]!;
+
+    for (let j = 0; j < t.sourceDependencies.length; j++) {
+      const id = t.sourceDependencies[j]!;
+      if (!sourceById.has(id)) {
+        issues.push(
+          `customTools[${i}] "${t.name}": sourceDependencies[${j}] "${id}" ` +
+            `does not match any approved source id`,
+        );
+      }
+    }
+
+    if (t.knowledgeUsage.facts) {
+      if (t.sourceDependencies.length === 0) {
+        issues.push(
+          `customTools[${i}] "${t.name}": knowledgeUsage.facts is true but ` +
+            `sourceDependencies is empty; a facts-backed tool must declare ` +
+            `which approved sources its fact retrieval depends on`,
+        );
+      } else {
+        const hasSnapshot = t.sourceDependencies.some((id) => {
+          const s = sourceById.get(id);
+          return s !== undefined && s.ingestion.mode === "snapshot";
+        });
+        if (!hasSnapshot) {
+          const modes = t.sourceDependencies
+            .map((id) => {
+              const s = sourceById.get(id);
+              return `${id}=${s?.ingestion.mode ?? "missing"}`;
+            })
+            .join(", ");
+          issues.push(
+            `customTools[${i}] "${t.name}": knowledgeUsage.facts is true ` +
+              `but no listed sourceDependencies is in snapshot mode ` +
+              `(modes: ${modes}); index-only sources do not contribute ` +
+              `content to the fact store, so the tool will return empty ` +
+              `at runtime. Redesign this tool around fetch_official_docs ` +
+              `(volatilityClass: "fast", facts: false) or pick a ` +
+              `snapshot-mode source.`,
+          );
+        }
+      }
+    }
+  }
+
+  if (issues.length > 0) {
+    throw new ToolDesignSourceValidationError(issues);
+  }
+
+  return parsed;
+}
+
+/**
+ * Raised by `parseToolDesignResultWithSources` when one or more custom tools
+ * violate the source-mode invariants (unknown source id, or facts-backed
+ * tool whose dependencies do not include a snapshot-mode source).
+ */
+export class ToolDesignSourceValidationError extends Error {
+  constructor(public readonly issues: readonly string[]) {
+    super(
+      "Stage 6 source-dependency validation failed:\n" +
+        issues.map((i) => `  - ${i}`).join("\n"),
+    );
+    this.name = "ToolDesignSourceValidationError";
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

@@ -125,6 +125,7 @@ function buildManifest(name: string, vol: "static" | "slow" | "fast" = "slow"): 
       ftsQuery: vol !== "fast" ? "{q}" : null,
       embeddings: false,
     },
+    sourceDependencies: [],
     examples: [
       {
         description: `${name} smoke`,

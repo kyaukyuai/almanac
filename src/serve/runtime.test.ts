@@ -63,6 +63,7 @@ function baseToolManifest(name: string, overrides: Partial<ToolManifest> = {}): 
     volatilityClass: "slow",
     freshness: { cachePolicy: "ttl", ttlSeconds: 3600, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
+    sourceDependencies: [],
     examples: [
       {
         description: "smoke",
