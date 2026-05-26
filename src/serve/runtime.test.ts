@@ -64,6 +64,7 @@ function baseToolManifest(name: string, overrides: Partial<ToolManifest> = {}): 
     freshness: { cachePolicy: "ttl", ttlSeconds: 3600, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
     sourceDependencies: [],
+    sampleUrls: [],
     examples: [
       {
         description: "smoke",

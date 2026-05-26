@@ -45,6 +45,7 @@ function manifest(overrides: Partial<ToolManifest> = {}): ToolManifest {
     },
     knowledgeUsage: { facts: true, ftsQuery: "substitute {q}", embeddings: false },
     sourceDependencies: [],
+    sampleUrls: [],
     examples: [
       {
         description: "buttermilk has a substitute",

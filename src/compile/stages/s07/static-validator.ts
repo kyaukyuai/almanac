@@ -4,24 +4,27 @@
  *
  * Why this exists: the LlmImplementer's retry loop runs `bun test` against the
  * generated `<tool>.test.ts`. That test typically mocks `ctx.fetch` so the
- * tool runs without network. If the LLM writes a fallback that hits the same
- * mock (e.g. `const attempts = [url1, url2, ...]; for (...) if (ok) break`)
- * the smoke passes because every URL resolves to the same mocked response.
- * At runtime the fallback URL is a real, always-200 page and the tool happily
- * returns its data under any input — a silent false-positive.
+ * tool runs without network. Two classes of bugs slip past this:
  *
- * The empirical case that motivated this check (`/tmp/almanac-rust-v032-smoke
- * /rust/tools/lookup_std_item.ts`):
+ *   1. Hardcoded URL fallback list. If the LLM writes
+ *      `const attempts = [url1, url2, ...]; for (...) if (ok) break`,
+ *      the smoke's url-symmetric mock resolves every URL to the same canned
+ *      response. At runtime the fallback URLs are real always-200 pages, so
+ *      the tool returns those pages' contents under any input.
+ *      Rule: `detectHardcodedFallbackUrls` flags ≥2 adjacent hardcoded URL
+ *      literals in the impl.
+ *      Empirical: v0.3.2 rust `lookup_std_item({item:"Frobnicator"})` →
+ *      Vec docs.
  *
- *     const attempts = [
- *       `https://doc.rust-lang.org/std/${itemPath}`,
- *       `https://doc.rust-lang.org/std/vec/struct.Vec.html`,
- *       `https://doc.rust-lang.org/std/iter/trait.Iterator.html`,
- *       `https://doc.rust-lang.org/std/sync/struct.Arc.html`,
- *       `https://doc.rust-lang.org/std/macro.println.html`,
- *     ];
- *
- * Asking `lookup_std_item({ item: "Frobnicator" })` returned the Vec docs.
+ *   2. Wrong URL template paired with a matching wrong mock. The LLM
+ *      confabulates a URL pattern, then writes a test mock against that
+ *      same wrong pattern, so the smoke passes — but at runtime real
+ *      upstream returns 404 because the URL doesn't exist.
+ *      Rule: `requireSampleUrlInTestCode` flags test code that doesn't
+ *      reference any `manifest.sampleUrls` substring. Stage 6 populates
+ *      sampleUrls with real documented URLs; Stage 7 must mock at least one.
+ *      Empirical: v0.3.4 rust `lookup_std_item("std::sync::Arc")` →
+ *      not-found (tried `/std/sync/Arc/...` instead of `/std/sync/struct.Arc.html`).
  *
  * Detection contract — high precision, low recall. We accept that some
  * hallucinations slip through; we won't reject legitimate code.
@@ -93,15 +96,66 @@ export function detectHardcodedFallbackUrls(
 }
 
 /**
+ * Reject test code that doesn't reference any of the manifest's sampleUrls
+ * — the ground-truth check.
+ *
+ * Stage 6 populates `sampleUrls` with real documented URLs the tool will
+ * plausibly fetch. Stage 7's prompt requires the generated test mock to
+ * register at least one of those URLs as a 200 response. If the LLM-generated
+ * test does not mention any sampleUrl, the test is operating against
+ * confabulated URLs and the smoke will pass without checking the impl
+ * against reality.
+ *
+ * Match is a simple `testCode.includes(url)` substring scan — the LLM can
+ * write the URL inside a string literal in the mock fetch handler, in a
+ * `Record<string, ...>` key, in an `expect(...).toContain(...)` arg, etc.
+ *
+ * Skipped (returns `ok:true`) when:
+ *   - `sampleUrls.length === 0` — tool doesn't fetch (e.g., knowledge-only)
+ *     OR Stage 6 didn't populate them (legacy / earlier-version manifest).
+ */
+export function requireSampleUrlInTestCode(input: {
+  testCode: string;
+  sampleUrls: readonly string[];
+}): StaticValidationResult {
+  if (input.sampleUrls.length === 0) return { ok: true };
+  const matched = input.sampleUrls.some((u) => input.testCode.includes(u));
+  if (matched) return { ok: true };
+  const sample = input.sampleUrls.slice(0, 3).join(", ");
+  const tail =
+    input.sampleUrls.length > 3
+      ? `, +${input.sampleUrls.length - 3} more`
+      : "";
+  return {
+    ok: false,
+    diagnostics:
+      `Stage 7 static validator: generated smoke test does not reference ` +
+      `any of the manifest's sampleUrls. Expected at least one of ` +
+      `[${sample}${tail}] to appear in the test source (as a mock fetch ` +
+      `key, in an includes() argument, etc.). Without this anchor the smoke ` +
+      `runs against confabulated URLs and won't catch a runtime URL-template ` +
+      `bug. Update mkCtx (or equivalent) so ctx.fetch returns a 200 for at ` +
+      `least one sampleUrl, and ensure one example input drives the impl to ` +
+      `fetch that URL.`,
+  };
+}
+
+/**
  * Run all static checks on a generated tool. Returns the first failure if any;
- * `{ ok: true }` if all pass. Today there is only one rule, but the surface is
- * shaped to let more rules land without changing the LlmImplementer wiring.
+ * `{ ok: true }` if all pass. The surface accepts the full input each rule
+ * might need so new rules can land without changing the LlmImplementer wiring.
  */
 export function validateGeneratedTool(input: {
   code: string;
   testCode: string;
+  sampleUrls?: readonly string[];
 }): StaticValidationResult {
   const r1 = detectHardcodedFallbackUrls(input.code);
   if (!r1.ok) return r1;
+  const r2 = requireSampleUrlInTestCode({
+    testCode: input.testCode,
+    sampleUrls: input.sampleUrls ?? [],
+  });
+  if (!r2.ok) return r2;
   return { ok: true };
 }

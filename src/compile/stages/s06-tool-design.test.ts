@@ -166,6 +166,7 @@ function buildCustomTool(name: string): ToolManifest {
     },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
     sourceDependencies: [],
+    sampleUrls: [],
     examples: [
       {
         description: "Pod returns a schema",

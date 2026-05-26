@@ -11,6 +11,42 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **`ToolManifest.sampleUrls`** — optional 0–5 array of real
+  documented URLs the tool will plausibly fetch. Defaults to `[]`
+  (back-compatible). Schema rule: must be empty when
+  `capabilities.network` is empty (the tool can't fetch).
+- **Stage 6 prompt v3 hard requirement #7** — when a custom tool has
+  network capability, populate `sampleUrls` with 1–3 verifiable real
+  URLs from public documentation. Explicit "do not invent URL
+  patterns you are unsure exist" guidance.
+- **Stage 7 prompt v1 contract #6** — when `manifest.sampleUrls` is
+  non-empty, the generated smoke MUST mock `ctx.fetch` to return 200
+  for at least one `sampleUrl`, and at least one example input must
+  drive the impl to fetch that URL. Includes a concrete `mkCtx`
+  example.
+- **Stage 7 static validator rule #2** — `requireSampleUrlInTestCode`
+  checks that the generated test source references at least one
+  `sampleUrl` substring. If not, surfaces as `validator-failed` and
+  retries. Skipped when `sampleUrls.length === 0` (back-compat with
+  legacy / knowledge-only tools).
+
+### Why
+
+The v0.3.4 (`std::sync::Arc`) and v0.3.5 (`Iterator::map`) Rust
+smokes both surfaced the same class of failure: the LLM-generated
+`lookup_std_item` impl built the wrong URL pattern AND wrote a test
+mock against that wrong pattern, so smoke passed by self-consistency
+but the real upstream returned 404. v0.3.4's static validator only
+catches hardcoded URL arrays — this class slipped through.
+
+Ground-truth `sampleUrls` from Stage 6 anchor the smoke against
+documented reality. If the impl confabulates a URL the test mock
+doesn't recognize, the smoke fails — exactly the discrimination that
+was missing. Stage 6 carries the URL knowledge (LLM training data on
+canonical doc patterns); Stage 7 enforces it.
+
 ## [0.3.5] — 2026-05-26
 
 ### Changed

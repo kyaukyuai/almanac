@@ -91,6 +91,7 @@ function baseManifest(name: string, overrides: Partial<ToolManifest> = {}): Tool
     freshness: { cachePolicy: "ttl", ttlSeconds: 3600, sourceTimestamp: false },
     knowledgeUsage: { facts: false, ftsQuery: null, embeddings: false },
     sourceDependencies: [],
+    sampleUrls: [],
     examples: [
       { description: "smoke", input: { q: "x" }, expectedShape: "match-outputSchema" },
     ],

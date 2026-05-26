@@ -2,6 +2,7 @@ import { describe, expect, test } from "bun:test";
 
 import {
   detectHardcodedFallbackUrls,
+  requireSampleUrlInTestCode,
   validateGeneratedTool,
 } from "./static-validator.ts";
 
@@ -98,6 +99,74 @@ const b = "file:///tmp/y";
   });
 });
 
+describe("requireSampleUrlInTestCode", () => {
+  test("empty sampleUrls always passes (legacy / knowledge-only tools)", () => {
+    const r = requireSampleUrlInTestCode({
+      testCode: "no urls here",
+      sampleUrls: [],
+    });
+    expect(r.ok).toBe(true);
+  });
+
+  test("test code referencing a sampleUrl as exact match passes", () => {
+    const sampleUrls = [
+      "https://doc.rust-lang.org/std/iter/trait.Iterator.html",
+      "https://doc.rust-lang.org/std/sync/struct.Arc.html",
+    ];
+    const testCode = `
+      if (url === "https://doc.rust-lang.org/std/iter/trait.Iterator.html") {
+        return new Response(html, { status: 200 });
+      }
+    `;
+    expect(requireSampleUrlInTestCode({ testCode, sampleUrls }).ok).toBe(true);
+  });
+
+  test("test code with no sampleUrl reference is flagged", () => {
+    const sampleUrls = [
+      "https://doc.rust-lang.org/std/iter/trait.Iterator.html",
+      "https://doc.rust-lang.org/std/sync/struct.Arc.html",
+    ];
+    // The mock returns 200 for a URL the LLM confabulated.
+    const testCode = `
+      if (url.includes("/std/sync/Arc/")) {
+        return new Response(html, { status: 200 });
+      }
+    `;
+    const r = requireSampleUrlInTestCode({ testCode, sampleUrls });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.diagnostics).toContain("sampleUrls");
+      expect(r.diagnostics).toContain("Iterator.html");
+    }
+  });
+
+  test("a single sampleUrl substring is sufficient (one mock anchor is enough)", () => {
+    const sampleUrls = [
+      "https://doc.rust-lang.org/std/iter/trait.Iterator.html",
+      "https://doc.rust-lang.org/std/sync/struct.Arc.html",
+      "https://doc.rust-lang.org/std/vec/struct.Vec.html",
+    ];
+    const testCode = `mock["https://doc.rust-lang.org/std/vec/struct.Vec.html"] = okHtml;`;
+    expect(requireSampleUrlInTestCode({ testCode, sampleUrls }).ok).toBe(true);
+  });
+
+  test("diagnostics truncate gracefully when many sampleUrls", () => {
+    const sampleUrls = [
+      "https://a.example/1",
+      "https://a.example/2",
+      "https://a.example/3",
+      "https://a.example/4",
+      "https://a.example/5",
+    ];
+    const r = requireSampleUrlInTestCode({ testCode: "", sampleUrls });
+    expect(r.ok).toBe(false);
+    if (!r.ok) {
+      expect(r.diagnostics).toContain("https://a.example/1");
+      expect(r.diagnostics).toContain("+2 more");
+    }
+  });
+});
+
 describe("validateGeneratedTool", () => {
   test("delegates to detectHardcodedFallbackUrls on impl code (not test code)", () => {
     const cleanImpl = `const u = \`https://x.com/\${id}\`; fetch(u);`;
@@ -110,5 +179,24 @@ describe("validateGeneratedTool", () => {
     const dirtyImpl = `const a = ["https://a.example", "https://b.example"];`;
     const r = validateGeneratedTool({ code: dirtyImpl, testCode: "" });
     expect(r.ok).toBe(false);
+  });
+
+  test("sampleUrls check runs after the URL-array rule", () => {
+    // Clean impl; test that doesn't reference sampleUrls.
+    const code = `const u = \`https://x.com/\${id}\`; fetch(u);`;
+    const testCode = `if (url.includes("wrong-pattern")) ...`;
+    const r = validateGeneratedTool({
+      code,
+      testCode,
+      sampleUrls: ["https://x.com/api/v1/items/42"],
+    });
+    expect(r.ok).toBe(false);
+    if (!r.ok) expect(r.diagnostics).toContain("sampleUrls");
+  });
+
+  test("no sampleUrls supplied → only URL-array rule fires (back-compat)", () => {
+    const code = `const u = \`https://x.com/\${id}\`; fetch(u);`;
+    const r = validateGeneratedTool({ code, testCode: "" });
+    expect(r.ok).toBe(true);
   });
 });

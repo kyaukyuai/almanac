@@ -2133,6 +2133,20 @@ export const ToolManifestSchema = z
       )
       .max(12)
       .default([]),
+    /**
+     * Real, documented URLs of pages this tool will plausibly fetch. Used by
+     * Stage 7 as ground truth: the generated smoke test must mock at least
+     * one of these to a 200 response, which forces the impl's URL builder to
+     * actually hit a real-world URL pattern (not a confabulated one) for the
+     * smoke to pass. Empty `[]` for tools that don't call out (knowledge-only,
+     * subprocess-only, etc.) — the validator skips the check in that case.
+     *
+     * Each URL's host SHOULD appear in `capabilities.network`; cross-validation
+     * is advisory because Stage 6 may sample URLs from documentation that
+     * lives on a host the tool reaches via a redirect (e.g., docs.rs → static
+     * doc CDN).
+     */
+    sampleUrls: z.array(z.string().url()).max(5).default([]),
   })
   .superRefine((m, ctx) => {
     // disabled ↔ disabledReason
@@ -2193,6 +2207,16 @@ export const ToolManifestSchema = z
         }
         seen.add(id);
       }
+    }
+
+    // sampleUrls only meaningful for tools that actually do network I/O.
+    if (m.sampleUrls.length > 0 && m.capabilities.network.length === 0) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["sampleUrls"],
+        message:
+          "sampleUrls is only meaningful when capabilities.network is non-empty (a tool with no network access cannot fetch URLs)",
+      });
     }
   });
 export type ToolManifest = z.infer<typeof ToolManifestSchema>;

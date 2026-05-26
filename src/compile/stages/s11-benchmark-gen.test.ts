@@ -126,6 +126,7 @@ function buildManifest(name: string, vol: "static" | "slow" | "fast" = "slow"): 
       embeddings: false,
     },
     sourceDependencies: [],
+    sampleUrls: [],
     examples: [
       {
         description: `${name} smoke`,

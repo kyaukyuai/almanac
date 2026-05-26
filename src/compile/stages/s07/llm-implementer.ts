@@ -208,6 +208,7 @@ export class LlmImplementer implements ToolImplementer {
       const validatorResult = validateGeneratedTool({
         code: generated.code,
         testCode: generated.testCode,
+        sampleUrls: manifest.sampleUrls,
       });
       if (!validatorResult.ok) {
         attempts.push(
