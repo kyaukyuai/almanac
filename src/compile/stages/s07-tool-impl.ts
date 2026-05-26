@@ -52,7 +52,12 @@ export interface LlmCodeWriter {
     previousAttempt?: {
       code: string;
       testCode: string;
-      outcome: "llm-failed" | "write-failed" | "tsc-failed" | "smoke-failed";
+      outcome:
+        | "llm-failed"
+        | "write-failed"
+        | "tsc-failed"
+        | "validator-failed"
+        | "smoke-failed";
       diagnostics: string;
     };
   }): Promise<{ code: string; testCode: string }>;

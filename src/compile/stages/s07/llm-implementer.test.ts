@@ -312,6 +312,68 @@ describe("LlmImplementer.implement (failure)", () => {
     expect(() => ToolImplementationResultSchema.parse(r)).not.toThrow();
   });
 
+  test("validator catches hardcoded URL fallback array → validator-failed; recovers on retry", async () => {
+    // First attempt: hardcoded URL fallback array → static validator rejects.
+    // Second attempt: clean code → validator passes → smoke passes.
+    let calls = 0;
+    const seenPrev: unknown[] = [];
+    const bag = makeCtx({
+      generate: async (input) => {
+        seenPrev.push(input.previousAttempt ?? null);
+        calls += 1;
+        if (calls === 1) {
+          return {
+            code: `const attempts = ["https://a.example/x", "https://b.example/y"];`,
+            testCode: "ok-test",
+          };
+        }
+        return {
+          code: `const u = \`https://x.com/\${id}\`; fetch(u);`,
+          testCode: "ok-test",
+        };
+      },
+    });
+    const r = await new LlmImplementer().implement(manifest(), bag.ctx, {
+      maxAttempts: 3,
+    });
+    expect(r.status).toBe("implemented");
+    expect(r.attempts).toHaveLength(2);
+    expect(r.attempts[0]!.outcome).toBe("validator-failed");
+    expect(r.attempts[0]!.diagnostics).toContain("hardcoded URL fallback");
+    expect(r.attempts[1]!.outcome).toBe("success");
+    // Validator diagnostics carried back to the next generate call.
+    expect(seenPrev[1]).toMatchObject({
+      outcome: "validator-failed",
+    });
+    expect((seenPrev[1] as { diagnostics: string }).diagnostics).toContain(
+      "hardcoded URL fallback",
+    );
+    // Smoke should NOT have run for the rejected attempt.
+    // (We can't directly count smoke calls without a counter, but we can
+    // verify the validator-failed attempt has no smoke-related diagnostics
+    // and the second attempt's success implies smoke ran exactly once.)
+    expect(r.attempts[0]!.diagnostics).not.toContain("bun test");
+    expect(() => ToolImplementationResultSchema.parse(r)).not.toThrow();
+  });
+
+  test("validator-failed exhausts attempts → disabled", async () => {
+    const bag = makeCtx({
+      generate: async () => ({
+        code: `const list = ["https://a.example", "https://b.example"];`,
+        testCode: "",
+      }),
+    });
+    const r = await new LlmImplementer().implement(manifest(), bag.ctx, {
+      maxAttempts: 2,
+    });
+    expect(r.status).toBe("disabled");
+    expect(r.attempts.every((a) => a.outcome === "validator-failed")).toBe(
+      true,
+    );
+    expect(r.finalManifest.disabled).toBe(true);
+    expect(r.finalManifest.disabledReason).toContain("validator-failed");
+  });
+
   test("throws ImplementerMisroutedError if given a default tool name", async () => {
     const bag = makeCtx();
     await expect(

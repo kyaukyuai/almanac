@@ -5,12 +5,15 @@
  * Strategy per tool:
  *
  *   for attempt in 1..maxAttempts:
- *     1. `ctx.llm.generate({ manifest, almanacDir, previousAttempt? })`
- *         → { code, testCode }                         (llm-failed on throw)
- *     2. `ctx.writeToolFiles({ toolName, code, testCode })`
- *         → { implPath, testPath }                     (write-failed on throw)
- *     3. `ctx.tsc.check([implPath, testPath])`         (tsc-failed on ok:false)
- *     4. `ctx.smoke.test(testPath)`                    (smoke-failed on ok:false)
+ *     1.  `ctx.llm.generate({ manifest, almanacDir, previousAttempt? })`
+ *          → { code, testCode }                         (llm-failed on throw)
+ *     2.  `ctx.writeToolFiles({ toolName, code, testCode })`
+ *          → { implPath, testPath }                     (write-failed on throw)
+ *     3.  `ctx.tsc.check([implPath, testPath])`         (tsc-failed on ok:false)
+ *     3.5 `validateGeneratedTool({ code, testCode })`   (validator-failed on ok:false)
+ *          Static check for hallucination patterns that pass smoke by
+ *          accident (e.g., hardcoded URL fallback lists).
+ *     4.  `ctx.smoke.test(testPath)`                    (smoke-failed on ok:false)
  *
  * Each failed step records an `ImplementationAttempt` and feeds the failure
  * context back into the next `generate` call as `previousAttempt`. When all
@@ -36,6 +39,7 @@ import {
   type ImplementationContext,
   type ToolImplementer,
 } from "../s07-tool-impl.ts";
+import { validateGeneratedTool } from "./static-validator.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Configuration
@@ -196,6 +200,35 @@ export class LlmImplementer implements ToolImplementer {
           tool: manifest.name,
           attempt: n,
           outcome: "tsc-failed",
+        });
+        continue;
+      }
+
+      // ── 3.5 static validator ────────────────────────────────────────────
+      const validatorResult = validateGeneratedTool({
+        code: generated.code,
+        testCode: generated.testCode,
+      });
+      if (!validatorResult.ok) {
+        attempts.push(
+          buildAttempt({
+            n,
+            llm: ctx.llm,
+            startedAt,
+            finishedAt: ctx.now(),
+            outcome: "validator-failed",
+            diagnostics: validatorResult.diagnostics,
+          }),
+        );
+        priorCode = generated.code;
+        priorTestCode = generated.testCode;
+        priorOutcome = "validator-failed";
+        priorDiagnostics = validatorResult.diagnostics;
+        ctx.log({
+          event: "tool:impl:llm:attempt",
+          tool: manifest.name,
+          attempt: n,
+          outcome: "validator-failed",
         });
         continue;
       }

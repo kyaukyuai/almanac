@@ -11,6 +11,49 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Stage 7 static validator — catches hallucinated URL fallback lists.**
+  After `tsc` and before `bun test`, the LlmImplementer now runs
+  `validateGeneratedTool({ code, testCode })`. The first rule flags
+  implementations that contain two or more adjacent hardcoded
+  `https?://...` string literals (template-interpolated URLs do not
+  count). Such "fallback arrays" pass the generated smoke test —
+  because the mock fetch resolves every URL the same way — but at
+  runtime the fallback URLs are real, always-200 pages, so the tool
+  silently returns those pages' contents for any input.
+- A new `ImplementationOutcome` variant `validator-failed` propagates
+  the static-check diagnostics back to the next `generate` call,
+  same retry mechanism as `tsc-failed` / `smoke-failed`.
+- Stage 7 prompt v1 gains hard requirement #9 ("no hardcoded URL
+  fallback lists") and a `validator-failed` entry in the Retry
+  feedback section, so the LLM avoids the pattern on the first
+  attempt where possible.
+
+### Why
+
+The v0.3.2 Rust smoke had `rust-neg-nonexistent-trait` returning 1
+spurious citation (expected 0). Reading
+`/tmp/almanac-rust-v032-smoke/rust/tools/lookup_std_item.ts` showed
+the LLM-generated impl carried a literal array of 5 `doc.rust-lang.org`
+URLs as fallbacks: `https://.../std/${itemPath}`, then four hardcoded
+pages (Vec, Iterator, Arc, println). The smoke test's mock fetch
+returned the same canned HTML for any URL, so all 5 candidates
+resolved equally and the smoke passed. At runtime, the first URL
+404s for "Frobnicator" and the next URL (`.../std/vec/struct.Vec.html`)
+is a real 200, so the tool returned Vec's docs as the answer to
+`lookup_std_item({ item: "Frobnicator" })`.
+
+This is one of the three v0.3.2 follow-ups; the other two (`Stage 5
+chunk-skip policy`, `Stage 11 negative fixtures`) were misdiagnoses
+of the same underlying class — Stage 7 implementer hallucination
+passing smoke because the smoke mock is too forgiving. The validator
+is the first structural countermeasure. The `version_diff` "no
+release notes" failure (wrong upstream URL template) is a different
+pattern not yet covered; future rules can land in
+`src/compile/stages/s07/static-validator.ts` without rewiring the
+LlmImplementer.
+
 ## [0.3.3] — 2026-05-26
 
 ### Changed

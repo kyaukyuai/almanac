@@ -2383,11 +2383,12 @@ export class ToolDesignSourceValidationError extends Error {
 
 /** Outcome bucket for one attempt within Stage 7's retry loop. */
 export const ImplementationOutcomeSchema = z.enum([
-  "success",       // wrote files, tsc passed, smoke passed
-  "llm-failed",    // LLM call errored or returned malformed code
-  "write-failed",  // could not write files (fs error)
-  "tsc-failed",    // type-check failed
-  "smoke-failed",  // tsc passed but `bun test` failed
+  "success",          // wrote files, tsc passed, validator passed, smoke passed
+  "llm-failed",       // LLM call errored or returned malformed code
+  "write-failed",     // could not write files (fs error)
+  "tsc-failed",       // type-check failed
+  "validator-failed", // static check on generated source flagged a hallucination pattern
+  "smoke-failed",     // tsc + validator passed but `bun test` failed
 ]);
 export type ImplementationOutcome = z.infer<typeof ImplementationOutcomeSchema>;
 
