@@ -158,6 +158,25 @@ export async function runSourceFetch(
     }
 
     entries.push(entry);
+
+    // Surface per-source failures via the run log so the CLI / replay can see
+    // them without parsing the manifest. Previously a fetcher returning
+    // status:"failed" (e.g., a no-fetcher-matched mismatch or an HTTP 404)
+    // was invisible outside the final manifest summary — the Rust v0.3.0
+    // smoke surfaced this because `gh-rust-lang-rust-releases` silently fell
+    // through to the orchestrator's catch block, and Stage 6 then designed a
+    // tool against an empty corpus without anyone noticing until benchmark
+    // time.
+    if (entry.status === "failed") {
+      fctx.log({
+        event: "stage4:fetch:failed",
+        sourceId: source.id,
+        fetcher: entry.fetcher,
+        errorCode: entry.error.code,
+        message: entry.error.message,
+      });
+    }
+
     if (entry.status === "failed" && !continueOnError) {
       throw new FetchAbortedError(source.id, entry);
     }

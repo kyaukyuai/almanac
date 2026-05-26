@@ -253,6 +253,74 @@ describe("runSourceFetch", () => {
     }
   });
 
+  test("emits stage4:fetch:failed for unknown-mode (no fetcher matched)", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const ctx = { ...stubCtx(), log: (e: object) => events.push(e as Record<string, unknown>) };
+    await runSourceFetch({
+      sourcesFile: approvedSourcesFile([
+        repoSource("orphan", "https://gitlab.com/x/x"),
+      ]),
+      almanacDir: "/tmp/x",
+      fetchers: [stubFetcher("html-only", (s) => s.kind === "docs")],
+      ctx,
+    });
+    const failure = events.find((e) => e.event === "stage4:fetch:failed");
+    expect(failure).toBeDefined();
+    expect(failure!.sourceId).toBe("orphan");
+    expect(failure!.errorCode).toBe("unknown-mode");
+    expect(typeof failure!.message).toBe("string");
+  });
+
+  test("emits stage4:fetch:failed when a fetcher returns status=\"failed\"", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const ctx = { ...stubCtx(), log: (e: object) => events.push(e as Record<string, unknown>) };
+    // Fetcher claims it can handle but returns a failed entry (e.g., HTTP 404).
+    const flaky: Fetcher = {
+      name: "flaky-http",
+      canHandle: () => true,
+      fetch: async (s) => ({
+        sourceId: s.id,
+        status: "failed",
+        attemptedAt: "2026-05-08T12:00:00.000Z",
+        fetcher: "flaky-http",
+        error: {
+          code: "http-error",
+          message: "HTTP 404 from somewhere",
+          httpStatusCode: 404,
+          retryable: false,
+          attempts: 1,
+        },
+      }),
+    };
+    await runSourceFetch({
+      sourcesFile: approvedSourcesFile([
+        repoSource("dead", "https://github.com/x/y"),
+      ]),
+      almanacDir: "/tmp/x",
+      fetchers: [flaky],
+      ctx,
+    });
+    const failure = events.find((e) => e.event === "stage4:fetch:failed");
+    expect(failure).toBeDefined();
+    expect(failure!.sourceId).toBe("dead");
+    expect(failure!.fetcher).toBe("flaky-http");
+    expect(failure!.errorCode).toBe("http-error");
+  });
+
+  test("does not emit stage4:fetch:failed for successful entries", async () => {
+    const events: Array<Record<string, unknown>> = [];
+    const ctx = { ...stubCtx(), log: (e: object) => events.push(e as Record<string, unknown>) };
+    await runSourceFetch({
+      sourcesFile: approvedSourcesFile([
+        docsSource("k8s-docs", "https://kubernetes.io/docs/"),
+      ]),
+      almanacDir: "/tmp/x",
+      fetchers: [stubFetcher("html", (s) => s.kind === "docs")],
+      ctx,
+    });
+    expect(events.find((e) => e.event === "stage4:fetch:failed")).toBeUndefined();
+  });
+
   test("continueOnError=false rethrows on the first failure", async () => {
     await expect(
       runSourceFetch({
