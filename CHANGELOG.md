@@ -11,7 +11,29 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
-— nothing yet.
+## [0.3.3] — 2026-05-26
+
+### Changed
+
+- **`GithubRepoFetcher` snapshot sorts matched paths descending
+  before `slice(0, SNAPSHOT_MAX_FILES=50)`.** GitHub's tree API
+  returns paths in ascending order. For repos with numeric-prefixed
+  paths the alphabetical slice took the *oldest* 50 files and
+  silently excluded everything modern.
+- One new test pins the behavior: a 70-entry numeric-prefixed
+  tree yields exactly RFC numbers 0021..0070 in the snapshot, with
+  `text/0001-rfc.md` excluded.
+
+### Why
+
+Diagnosed while investigating why `rfc_lookup("async await")` returned
+0 results in the Rust v0.3.2 smoke even though `gh-rust-lang-rfcs`
+snapshotted successfully with 50 docs and Stage 5 extracted 895 facts
+across them. The 50 docs were `text/0001-...` through `text/0168-...`
+— the *oldest* RFCs from 2014–2015. Async/await is RFC #2394 (2019),
+so it was never in the corpus. Reordering to descending picks up
+modern RFCs first; older fundamental RFCs are reachable through the
+cap-extension follow-up (deferred).
 
 ## [0.3.2] — 2026-05-26
 
