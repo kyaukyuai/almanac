@@ -396,6 +396,77 @@ describe("GithubRepoFetcher", () => {
     expect(ok).toBeDefined();
   });
 
+  test("snapshot mode sorts matched paths descending before slicing to SNAPSHOT_MAX_FILES", async () => {
+    // GitHub's tree API returns paths in ascending order; for repos with
+    // numeric-prefixed paths (e.g. rust-lang/rfcs: `text/0001-...` ..
+    // `text/3700-...`) a naive slice(0, 50) captures only the oldest 50.
+    // We sort descending so the *newest* numeric paths win — RFC #2394
+    // (async/await, 2019) was the motivating gap.
+    const dir = makeTmpDir("gh-snap-desc-");
+    const sha = "feed".padEnd(40, "0");
+    const total = 70; // > SNAPSHOT_MAX_FILES (50)
+    const tree = Array.from({ length: total }, (_, i) => ({
+      path: `text/${String(i + 1).padStart(4, "0")}-rfc.md`,
+      type: "blob" as const,
+      size: 100,
+    }));
+    const fetchedPaths: string[] = [];
+    const ctx = makeCtx(
+      dir,
+      asFetch((url) => {
+        if (url.endsWith("/repos/octo/rfcs")) {
+          return new Response(
+            JSON.stringify({ full_name: "octo/rfcs", default_branch: "main" }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.endsWith("/commits/main")) {
+          return new Response(
+            JSON.stringify({
+              sha,
+              commit: { author: { date: "2026-04-15T10:00:00Z" } },
+            }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.includes(`/git/trees/${sha}`)) {
+          return new Response(
+            JSON.stringify({ tree, truncated: false }),
+            { status: 200, headers: { "content-type": "application/json" } },
+          );
+        }
+        if (url.startsWith("https://raw.githubusercontent.com/octo/rfcs/")) {
+          fetchedPaths.push(url.split(`/${sha}/`)[1] ?? "");
+          return new Response("# body\n", {
+            status: 200,
+            headers: { "content-type": "text/markdown" },
+          });
+        }
+        return new Response("", { status: 404 });
+      }),
+    );
+    const snap: ApprovedSource = {
+      ...repoSource("octo-rfcs", "https://github.com/octo/rfcs"),
+      ingestion: {
+        mode: "snapshot",
+        scope: ["text/**"],
+        refreshIntervalHours: 24,
+      },
+    };
+    const entry = await new GithubRepoFetcher().fetch(snap, ctx);
+    expect(entry.status).toBe("fetched");
+    if (entry.status === "fetched") {
+      // Exactly SNAPSHOT_MAX_FILES (50) docs and they are the newest 50,
+      // i.e. RFC numbers 0021..0070.
+      expect(entry.documents).toHaveLength(50);
+      expect(fetchedPaths).toHaveLength(50);
+      expect(fetchedPaths[0]).toBe("text/0070-rfc.md");
+      expect(fetchedPaths[fetchedPaths.length - 1]).toBe("text/0021-rfc.md");
+      // RFC #0001 (the oldest) must have been excluded.
+      expect(fetchedPaths).not.toContain("text/0001-rfc.md");
+    }
+  });
+
   test("snapshot mode with empty scope match falls back to index-only", async () => {
     const events: object[] = [];
     const dir = makeTmpDir("gh-snap-empty-");

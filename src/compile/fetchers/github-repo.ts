@@ -160,9 +160,16 @@ export class GithubRepoFetcher implements Fetcher {
 
     const patterns =
       source.ingestion.scope.length > 0 ? source.ingestion.scope : ["/"];
+    // Sort by path descending so numeric-prefixed paths
+    // (`text/0001-...` .. `text/3700-...`) yield the *newest* slice.
+    // GitHub's tree API returns paths in ascending order, which for repos
+    // like rust-lang/rfcs means slice(0, 50) captures only the oldest 50
+    // RFCs and excludes anything modern (e.g. RFC #2394 async/await).
+    // For non-numeric repos this is a benign reordering.
     const matched = blobs
       .filter((b) => matchesAny(b.path, patterns))
       .filter((b) => b.size <= ctx.maxBytes)
+      .sort((a, b) => (a.path < b.path ? 1 : a.path > b.path ? -1 : 0))
       .slice(0, SNAPSHOT_MAX_FILES);
 
     if (matched.length === 0) {
