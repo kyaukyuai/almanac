@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.10] — 2026-05-27
+
 ### Changed
 
 - **Stage 5 prompt v1 — actively extract `tradeoff` facts from
