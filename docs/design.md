@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.3.10 shipped · v0.4 plan in §8** · last updated 2026-05-27.
+Status: **v0.3.11 shipped · v0.4 plan in §8** · last updated 2026-05-27.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -692,7 +692,7 @@ The remaining 20 % of failures clusters into two structural areas
 feature-complete — further patches at this stage would only nibble
 at edges. The real lift requires v0.3-class structural work.
 
-### v0.3 — **shipped through v0.3.10** (2026-05-26..27)
+### v0.3 — **shipped through v0.3.11** (2026-05-26..27)
 
 The v0.2.5 cross-domain validation surfaced one named failure mode
 (custom tool ↔ source-mode mismatch) plus 20% residual failures
@@ -799,9 +799,17 @@ Alternatives sections, `X vs Y` headings. Both sides go into
 Closing the loop downstream — Stage 11 tradeoff-aware fixture
 generation — is a v0.4 candidate.
 
+#### v0.3.11 — Product onboarding and operations polish
+
+v0.3.11 turns the compiler from a technical beta into a CLI product
+beta. It adds a no-key `almanac demo` path, richer `inspect` health
+and next-action summaries, `sources` review, human golden benchmark
+initialization and execution, `doctor` diagnostics, product docs, and
+a Node 24-capable CI checkout action.
+
 ### Empirical baseline — v0.3.x summary
 
-After eleven point releases:
+After the structural v0.3.0-v0.3.10 sequence:
 
 | domain | latest  | facts | tools (custom) | passed | citationRate | negatives passed |
 |-------:|--------:|------:|---------------:|-------:|-------------:|-----------------:|

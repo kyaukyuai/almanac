@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.11] — 2026-05-27
+
 ### Added
 
 - **Product onboarding commands.** `almanac demo` now creates a complete
@@ -592,7 +594,9 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.2.6...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...HEAD
+[0.3.11]: https://github.com/kyaukyuai/almanac/compare/v0.3.10...v0.3.11
+[0.3.10]: https://github.com/kyaukyuai/almanac/compare/v0.3.9...v0.3.10
 [0.2.6]: https://github.com/kyaukyuai/almanac/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/kyaukyuai/almanac/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/kyaukyuai/almanac/compare/v0.2.3...v0.2.4
