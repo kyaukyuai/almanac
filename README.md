@@ -19,6 +19,7 @@ Want to see the product without API keys first:
 tmp=$(mktemp -d)
 almanac demo --root "$tmp"
 almanac inspect sqlite-demo --root "$tmp"
+almanac profile sqlite-demo --root "$tmp"
 almanac sources sqlite-demo --root "$tmp"
 almanac benchmark sqlite-demo --root "$tmp"
 almanac doctor sqlite-demo --root "$tmp"
@@ -67,6 +68,10 @@ v0.3.11 adds the no-key product onboarding path: `almanac demo`,
 product-grade `inspect`, source review, human golden benchmark commands,
 `doctor`, and a warning-free CI workflow.
 
+Unreleased builds add `almanac profile`, a product-facing expertise summary
+that answers whether an almanac is usable, what evidence backs it, which
+query shapes it is meant to handle, and what validation gaps remain.
+
 The v0.3 series closed eight structural failure classes that surfaced
 in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
 for the per-release breakdown.
@@ -101,6 +106,8 @@ structurally closed.
   re-run the rest. Stage 7 GCs stale tool files from prior runs.
 - **`almanac sources <id>`** — review accepted/rejected sources, trust
   scores, ingestion modes, and coverage by kind.
+- **`almanac profile <id>`** — summarize expertise readiness, evidence
+  coverage, supported query shapes, benchmark status, and declared limits.
 - **`almanac benchmark <id> --init` / `almanac benchmark <id>`** — create
   editable human golden JSONL fixtures, then run them through the runtime.
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact

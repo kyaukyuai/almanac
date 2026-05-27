@@ -11,6 +11,14 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Expertise profile command.** `almanac profile <id>` summarizes whether an
+  almanac is usable as a specialist by combining domain scope, source
+  coverage, fact distribution, benchmark status, declared limits, readiness
+  gaps, and next actions. `inspect` and `demo` now point users to the profile
+  view.
+
 ## [0.3.11] — 2026-05-27
 
 ### Added

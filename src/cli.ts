@@ -13,6 +13,7 @@
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac inspect <id> [opts]            print manifest + per-stage state
+ *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
  *   almanac benchmark <id> [opts]          init/run human golden fixtures
  *   almanac doctor [id] [opts]             diagnose environment + artifacts
@@ -146,6 +147,7 @@ import {
   type BenchmarkReport,
   type CompileOptions,
   type CompileState,
+  type DomainSpec,
   type FactRecord,
   type FreshnessProfileId,
   type KnowledgeIndexManifest,
@@ -441,10 +443,25 @@ async function readFactsJsonlIfPresent(
   return out;
 }
 
+async function readDomainSpecIfPresent(
+  almanacDir: string,
+): Promise<DomainSpec | null> {
+  const path = domainSpecPath(almanacDir);
+  if (!existsSync(path)) return null;
+  return DomainSpecSchema.parse(await readJsonFile(path));
+}
+
 function nonZeroCoverage(coverage: SourcesFile["coverage"]): string {
   return Object.entries(coverage)
     .filter(([, count]) => count > 0)
     .map(([kind, count]) => `${kind}=${count}`)
+    .join(", ") || "none";
+}
+
+function nonZeroCounts(counts: Record<string, number>): string {
+  return Object.entries(counts)
+    .filter(([, count]) => count > 0)
+    .map(([key, count]) => `${key}=${count}`)
     .join(", ") || "none";
 }
 
@@ -1014,6 +1031,7 @@ async function cmdDemo(
       `    benchmark  ${report ? `${report.summary.passed}/${report.summary.total} passed` : "not run"}\n\n` +
       `Try:\n` +
       `    almanac inspect ${almanacId} --root ${opts.root}\n` +
+      `    almanac profile ${almanacId} --root ${opts.root}\n` +
       `    almanac sources ${almanacId} --root ${opts.root}\n` +
       `    almanac benchmark ${almanacId} --root ${opts.root}\n`,
   );
@@ -1400,6 +1418,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
     nextActions.push("create or restore sources/sources.json");
   } else {
     nextActions.push(`review sources: almanac sources ${id}${rootSuffix}`);
+    nextActions.push(`review expert profile: almanac profile ${id}${rootSuffix}`);
   }
   if (benchmarkSet === null) {
     nextActions.push(
@@ -1516,6 +1535,310 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
             ? `  (${s.skipReason})`
             : "";
     process.stdout.write(`  ${stageId.padEnd(34)} ${status}${tail}\n`);
+  }
+}
+
+type ExpertiseStatus = "usable" | "needs-validation" | "not-ready";
+
+interface ProfileOptions {
+  root: string;
+  json?: boolean;
+}
+
+function countFactsByType(facts: FactRecord[]): Record<string, number> {
+  const counts: Record<string, number> = {
+    fact: 0,
+    definition: 0,
+    procedure: 0,
+    opinion: 0,
+    reference: 0,
+    principle: 0,
+    heuristic: 0,
+    tradeoff: 0,
+    framework: 0,
+  };
+  for (const fact of facts) {
+    counts[fact.type] = (counts[fact.type] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function countFactsByFreshness(facts: FactRecord[]): Record<string, number> {
+  const counts: Record<string, number> = { static: 0, slow: 0 };
+  for (const fact of facts) {
+    counts[fact.freshnessClass] = (counts[fact.freshnessClass] ?? 0) + 1;
+  }
+  return counts;
+}
+
+function countFactsBySource(facts: FactRecord[]): Map<string, number> {
+  const counts = new Map<string, number>();
+  for (const fact of facts) {
+    counts.set(fact.source.sourceId, (counts.get(fact.source.sourceId) ?? 0) + 1);
+  }
+  return counts;
+}
+
+function clipText(value: string, max = 120): string {
+  return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
+}
+
+async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
+  const dir = almanacDirPath(opts.root, id);
+  if (!existsSync(dir)) {
+    fail(`almanac not found: ${dir}`);
+  }
+
+  const manifest = await readManifest(dir);
+  const state = await readCompileState(dir);
+  const knowledge = await readKnowledgeIndexManifest(dir);
+  const counts = await readDisplayCounts(dir, manifest, knowledge);
+  const domainSpec = await readDomainSpecIfPresent(dir);
+  const sources = await readSourcesFileIfPresent(dir);
+  const facts = await readFactsJsonlIfPresent(dir);
+  const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
+  const benchmarkReport = await readBenchmarkReportIfPresent(dir);
+
+  const failedStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "failed",
+  );
+  const runningStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "running",
+  );
+  const pendingStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "pending",
+  );
+
+  const blockingIssues: string[] = [];
+  const validationIssues: string[] = [];
+  if (failedStages.length > 0) {
+    blockingIssues.push(`failed stages: ${failedStages.join(", ")}`);
+  }
+  if (runningStages.length > 0) {
+    blockingIssues.push(`running stages: ${runningStages.join(", ")}`);
+  }
+  if (sources === null || sources.sources.length === 0) {
+    blockingIssues.push("no approved evidence sources");
+  }
+  if (knowledge === null) {
+    blockingIssues.push("knowledge index missing");
+  }
+  if (facts.length === 0) {
+    blockingIssues.push("no durable facts extracted");
+  }
+  if (domainSpec === null) {
+    validationIssues.push("domain spec missing; capability scope is unavailable");
+  }
+  if (pendingStages.length > 0) {
+    validationIssues.push(`pending stages: ${pendingStages.join(", ")}`);
+  }
+  if (countsMismatch(counts)) {
+    validationIssues.push("manifest counts differ from actual artifacts");
+  }
+  if (benchmarkSet === null) {
+    validationIssues.push("human benchmark fixtures missing");
+  } else if (benchmarkReport === null) {
+    validationIssues.push("human benchmark has not been run");
+  } else if (
+    benchmarkReport.summary.failed > 0 ||
+    benchmarkReport.summary.errored > 0
+  ) {
+    blockingIssues.push(
+      `benchmark has ${benchmarkReport.summary.failed} failed and ${benchmarkReport.summary.errored} errored fixture(s)`,
+    );
+  } else if (benchmarkReport.summary.citationRate < 1) {
+    validationIssues.push("not every positive benchmark result carried citations");
+  }
+
+  const status: ExpertiseStatus =
+    blockingIssues.length > 0
+      ? "not-ready"
+      : validationIssues.length > 0
+        ? "needs-validation"
+        : "usable";
+
+  const factsBySource = countFactsBySource(facts);
+  const uniqueFactSources = factsBySource.size;
+  const acceptedSources = sources?.sources ?? [];
+  const evidenceSources = acceptedSources
+    .map((source) => ({
+      id: source.id,
+      kind: source.kind,
+      trust: source.trust,
+      volatility: source.volatility,
+      ingestionMode: source.ingestion.mode,
+      refreshIntervalHours: source.ingestion.refreshIntervalHours,
+      facts: factsBySource.get(source.id) ?? 0,
+      url: source.url,
+    }))
+    .sort((a, b) => b.facts - a.facts || b.trust - a.trust || a.id.localeCompare(b.id));
+
+  const rootSuffix = rootArg(opts.root);
+  const nextActions: string[] = [];
+  if (failedStages.length > 0) {
+    nextActions.push(
+      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}${rootSuffix}`,
+    );
+  }
+  if (domainSpec === null) {
+    nextActions.push(`restore domain scope artifact: ${domainSpecPath(dir)}`);
+  }
+  if (sources === null) {
+    nextActions.push("create or restore sources/sources.json");
+  } else {
+    nextActions.push(`review evidence sources: almanac sources ${id}${rootSuffix}`);
+  }
+  if (facts.length === 0) {
+    nextActions.push(`add source-backed evidence: almanac feed ${id} <url> --apply${rootSuffix}`);
+  }
+  if (benchmarkSet === null) {
+    nextActions.push(
+      `create human fixtures: almanac benchmark ${id} --init${rootSuffix}`,
+    );
+  } else if (benchmarkReport === null) {
+    nextActions.push(`run human fixtures: almanac benchmark ${id}${rootSuffix}`);
+  } else {
+    nextActions.push(`rerun validation gate: almanac benchmark ${id}${rootSuffix}`);
+  }
+  nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
+
+  const profile = {
+    almanacDir: dir,
+    almanacId: manifest.almanacId,
+    displayName: manifest.displayName,
+    status,
+    issues: {
+      blocking: blockingIssues,
+      validation: validationIssues,
+    },
+    identity: {
+      domain: manifest.domain,
+      summary: domainSpec?.summary ?? null,
+      freshnessProfileId: manifest.freshnessProfileId,
+      subareas: domainSpec?.subareas ?? [],
+      intents: domainSpec?.intents ?? [],
+      verbs: domainSpec?.verbs ?? [],
+      entityTypes: domainSpec?.entityTypes ?? [],
+      cautions: domainSpec?.cautions ?? [],
+    },
+    evidence: {
+      facts: facts.length,
+      manifestFacts: counts.manifestFacts,
+      knowledgeFacts: knowledge?.factCount ?? null,
+      factSourceCount: uniqueFactSources,
+      acceptedSources: acceptedSources.length,
+      rejectedSources: sources?.rejected.length ?? null,
+      sourceCoverage: sources?.coverage ?? null,
+      factTypes: countFactsByType(facts),
+      freshnessClasses: countFactsByFreshness(facts),
+      sources: evidenceSources,
+    },
+    benchmark: {
+      fixtures:
+        benchmarkSet === null
+          ? null
+          : {
+              positive: benchmarkSet.positive.length,
+              negative: benchmarkSet.negative.length,
+            },
+      report:
+        benchmarkReport === null
+          ? null
+          : {
+              total: benchmarkReport.summary.total,
+              passed: benchmarkReport.summary.passed,
+              failed: benchmarkReport.summary.failed,
+              errored: benchmarkReport.summary.errored,
+              citationRate: benchmarkReport.summary.citationRate,
+            },
+    },
+    artifacts: {
+      domainSpec: domainSpec === null ? null : domainSpecPath(dir),
+      facts: factsJsonlPath(dir),
+      benchmarkReport: benchmarkReport === null ? null : benchmarkResultPath(dir),
+    },
+    nextActions,
+  };
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(profile, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(`expert profile: ${manifest.almanacId} (${manifest.displayName})\n`);
+  process.stdout.write(`  status         ${profile.status}\n`);
+  process.stdout.write(`  domain         ${manifest.domain}\n`);
+  if (domainSpec !== null) {
+    process.stdout.write(`  summary        ${clipText(domainSpec.summary)}\n`);
+  }
+  process.stdout.write(
+    `  evidence       ${facts.length} facts from ${uniqueFactSources} source${uniqueFactSources === 1 ? "" : "s"}\n`,
+  );
+  if (sources !== null) {
+    process.stdout.write(
+      `  source review  ${sources.status}, ${acceptedSources.length} accepted / ${sources.rejected.length} rejected (${nonZeroCoverage(sources.coverage)})\n`,
+    );
+  }
+  process.stdout.write(
+    `  freshness      ${nonZeroCounts(profile.evidence.freshnessClasses)}\n`,
+  );
+  process.stdout.write(
+    `  fact types     ${nonZeroCounts(profile.evidence.factTypes)}\n`,
+  );
+  if (benchmarkReport !== null) {
+    process.stdout.write(
+      `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}\n`,
+    );
+  } else if (benchmarkSet !== null) {
+    process.stdout.write(
+      `  benchmark      not run (${benchmarkSet.positive.length} positive / ${benchmarkSet.negative.length} negative fixtures)\n`,
+    );
+  } else {
+    process.stdout.write("  benchmark      fixtures missing\n");
+  }
+
+  if (domainSpec !== null) {
+    process.stdout.write(`\ncapabilities:\n`);
+    for (const subarea of domainSpec.subareas) {
+      process.stdout.write(`  - ${subarea}\n`);
+    }
+    process.stdout.write(`\nquery shapes:\n`);
+    for (const intent of domainSpec.intents) {
+      process.stdout.write(`  - ${intent.kind}: ${intent.example}\n`);
+    }
+  }
+
+  process.stdout.write(`\nevidence sources:\n`);
+  if (evidenceSources.length === 0) {
+    process.stdout.write("  (none)\n");
+  } else {
+    for (const source of evidenceSources.slice(0, 5)) {
+      process.stdout.write(
+        `  - ${source.id}  ${source.kind}  trust=${source.trust.toFixed(2)}  facts=${source.facts}  ${source.ingestionMode}/${source.refreshIntervalHours}h\n`,
+      );
+    }
+  }
+
+  process.stdout.write(`\nlimits:\n`);
+  if (domainSpec === null || domainSpec.cautions.length === 0) {
+    process.stdout.write("  - no explicit caution areas declared\n");
+  } else {
+    for (const caution of domainSpec.cautions) {
+      process.stdout.write(`  - ${caution.area}: ${caution.rationale}\n`);
+    }
+  }
+
+  const issues = [...blockingIssues, ...validationIssues];
+  if (issues.length > 0) {
+    process.stdout.write(`\nreadiness gaps:\n`);
+    for (const issue of issues) {
+      process.stdout.write(`  - ${issue}\n`);
+    }
+  }
+
+  process.stdout.write(`\nnext actions:\n`);
+  for (const action of nextActions) {
+    process.stdout.write(`  - ${action}\n`);
   }
 }
 
@@ -2621,6 +2944,13 @@ program
   .option("--json", "Emit JSON instead of a human-readable summary")
   .addOption(rootOption)
   .action(cmdInspect);
+
+program
+  .command("profile <id>")
+  .description("summarize expertise, evidence, validation, and limits")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdProfile);
 
 program
   .command("path <id>")

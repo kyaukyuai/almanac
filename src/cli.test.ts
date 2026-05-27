@@ -142,11 +142,13 @@ describe("almanac CLI product onboarding", () => {
     expect(demo.stderr).toBe("");
     expect(demo.stdout).toContain('creating offline demo almanac "sqlite-demo"');
     expect(demo.stdout).toContain("benchmark  2/2 passed");
+    expect(demo.stdout).toContain(`almanac profile sqlite-demo --root ${root}`);
 
     const inspect = runCli(["inspect", "sqlite-demo", "--root", root]);
     expect(inspect.status).toBe(0);
     expect(inspect.stderr).toBe("");
     expect(inspect.stdout).toContain("health         ok");
+    expect(inspect.stdout).toContain(`almanac profile sqlite-demo --root ${root}`);
     expect(inspect.stdout).toContain("sources        approved, 3 accepted / 0 rejected");
     expect(inspect.stdout).toContain("benchmark      2/2 passed");
     expect(inspect.stdout).toContain(`almanac benchmark sqlite-demo --root ${root}`);
@@ -154,6 +156,37 @@ describe("almanac CLI product onboarding", () => {
     expect(inspect.stdout).toContain(
       `almanac register sqlite-demo --client=claude-code --apply --root ${root}`,
     );
+
+    const profile = runCli(["profile", "sqlite-demo", "--root", root]);
+    expect(profile.status).toBe(0);
+    expect(profile.stderr).toBe("");
+    expect(profile.stdout).toContain("expert profile: sqlite-demo (SQLite Operations Demo)");
+    expect(profile.stdout).toContain("status         usable");
+    expect(profile.stdout).toContain("evidence       3 facts from 3 sources");
+    expect(profile.stdout).toContain("benchmark      2/2 passed, citationRate 100%");
+    expect(profile.stdout).toContain("sqlite-transactions");
+
+    const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
+    expect(profileJson.status).toBe(0);
+    expect(profileJson.stderr).toBe("");
+    const parsedProfile = JSON.parse(profileJson.stdout) as {
+      status: string;
+      evidence: {
+        facts: number;
+        factSourceCount: number;
+        acceptedSources: number;
+      };
+      benchmark: {
+        report: { passed: number; total: number; citationRate: number };
+      };
+    };
+    expect(parsedProfile.status).toBe("usable");
+    expect(parsedProfile.evidence.facts).toBe(3);
+    expect(parsedProfile.evidence.factSourceCount).toBe(3);
+    expect(parsedProfile.evidence.acceptedSources).toBe(3);
+    expect(parsedProfile.benchmark.report.passed).toBe(2);
+    expect(parsedProfile.benchmark.report.total).toBe(2);
+    expect(parsedProfile.benchmark.report.citationRate).toBe(1);
 
     const sources = runCli(["sources", "sqlite-demo", "--root", root]);
     expect(sources.status).toBe(0);

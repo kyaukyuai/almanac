@@ -1,8 +1,8 @@
 # Product guide
 
 This guide covers the product-facing path: prove the tool works without API
-keys, inspect the generated artifact, review sources, and gate changes with
-human golden fixtures.
+keys, inspect the generated artifact, review its expertise profile, review
+sources, and gate changes with human golden fixtures.
 
 ## Offline demo
 
@@ -47,6 +47,30 @@ almanac: sqlite-demo (SQLite Operations Demo)
 `inspect --json` includes the manifest, compile state, knowledge manifest,
 source summary, benchmark fixtures, benchmark report, health issues, and next
 actions.
+
+## Expertise profile
+
+```bash
+almanac profile sqlite-demo --root "$tmp"
+```
+
+`profile` is the product-readiness view. It answers whether the almanac is
+usable as a specialist, which evidence supports it, what query shapes it was
+compiled to handle, and which validation gaps remain.
+
+Expected shape:
+
+```text
+expert profile: sqlite-demo (SQLite Operations Demo)
+  status         usable
+  evidence       3 facts from 3 sources
+  source review  approved, 3 accepted / 0 rejected (docs=3)
+  benchmark      2/2 passed, citationRate 100%
+```
+
+Use `profile --json` in scripts or release gates. The JSON includes identity,
+evidence counts, source coverage, fact type/freshness distribution, benchmark
+status, readiness gaps, artifact paths, and next actions.
 
 ## Source review
 
