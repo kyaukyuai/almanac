@@ -452,6 +452,15 @@ function formatRate(value: number): string {
   return `${Math.round(value * 100)}%`;
 }
 
+function shellArg(value: string): string {
+  if (/^[A-Za-z0-9_./:=+-]+$/.test(value)) return value;
+  return `'${value.replace(/'/g, `'\\''`)}'`;
+}
+
+function rootArg(root: string): string {
+  return root === defaultAlmanacRoot() ? "" : ` --root ${shellArg(root)}`;
+}
+
 /**
  * Open `$EDITOR` (falls back to `vi`) on a temp file pre-filled with `content`.
  * Returns the user's saved contents. If the editor exits non-zero, throws.
@@ -1381,26 +1390,38 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
         ? "attention"
         : "ok";
   const nextActions: string[] = [];
+  const rootSuffix = rootArg(opts.root);
   if (failedStages.length > 0) {
     nextActions.push(
-      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}`,
+      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}${rootSuffix}`,
     );
   }
   if (sources === null) {
     nextActions.push("create or restore sources/sources.json");
   } else {
-    nextActions.push(`review sources: almanac sources ${id}`);
+    nextActions.push(`review sources: almanac sources ${id}${rootSuffix}`);
   }
   if (benchmarkSet === null) {
-    nextActions.push(`create human fixtures: almanac benchmark ${id} --init`);
+    nextActions.push(
+      `create human fixtures: almanac benchmark ${id} --init${rootSuffix}`,
+    );
   } else if (benchmarkReport === null) {
-    nextActions.push(`run human fixtures: almanac benchmark ${id}`);
+    nextActions.push(`run human fixtures: almanac benchmark ${id}${rootSuffix}`);
   } else if (
     benchmarkReport.summary.failed > 0 ||
     benchmarkReport.summary.errored > 0
   ) {
     nextActions.push(`inspect benchmark details: ${benchmarkResultPath(dir)}`);
+  } else {
+    nextActions.push(`rerun benchmark gate: almanac benchmark ${id}${rootSuffix}`);
   }
+  if (health === "ok") {
+    nextActions.push(`try MCP server: almanac serve ${id}${rootSuffix}`);
+    nextActions.push(
+      `register with Claude Code: almanac register ${id} --client=claude-code --apply${rootSuffix}`,
+    );
+  }
+  nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
 
   if (opts.json) {
     process.stdout.write(
@@ -1611,6 +1632,11 @@ async function cmdBenchmark(
       `benchmark fixtures written:\n` +
         `  ${positiveJsonlPath(almanacDir)}\n` +
         `  ${negativeJsonlPath(almanacDir)}\n\n` +
+        `Edit the JSONL fields you want to make authoritative:\n` +
+        `  - query: the human-facing test question\n` +
+        `  - invocation.input.q: the exact runtime search query\n` +
+        `  - expected.contains: substrings that must appear in positive results\n` +
+        `  - expected.expectedErrorCode: required refusal code for strict negatives\n\n` +
         `Edit those JSONL files as human golden tests, then run:\n` +
         `  almanac benchmark ${manifest.almanacId} --root ${opts.root}\n`,
     );

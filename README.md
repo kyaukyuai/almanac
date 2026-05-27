@@ -16,11 +16,12 @@ almanac new cooking
 Want to see the product without API keys first:
 
 ```bash
-almanac demo
-almanac inspect sqlite-demo
-almanac sources sqlite-demo
-almanac benchmark sqlite-demo
-almanac doctor sqlite-demo
+tmp=$(mktemp -d)
+almanac demo --root "$tmp"
+almanac inspect sqlite-demo --root "$tmp"
+almanac sources sqlite-demo --root "$tmp"
+almanac benchmark sqlite-demo --root "$tmp"
+almanac doctor sqlite-demo --root "$tmp"
 ```
 
 The demo creates a complete offline almanac with curated SQLite facts, source

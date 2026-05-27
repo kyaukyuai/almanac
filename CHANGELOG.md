@@ -19,9 +19,13 @@ examples for each version. This file is the concise index.
 - **Product-grade inspection and review.** `almanac inspect` now surfaces
   health, source, fixture, benchmark, issue, and next-action summaries;
   `almanac sources` prints accepted/rejected source review details.
+- **Guided next steps after inspection.** Healthy almanacs now point to source
+  review, benchmark reruns, `serve`, `register`, and `doctor`, preserving
+  `--root` when a non-default root is in use.
 - **Human golden benchmark workflow.** `almanac benchmark --init` writes
   editable JSONL fixtures, and `almanac benchmark` runs them through Stage 12
-  with a non-zero exit on fixture failure.
+  with a non-zero exit on fixture failure. The init output now names the
+  fields humans should edit.
 - **`almanac doctor`.** Checks local runtime, CLI version, environment keys,
   root existence, artifact counts, source file status, fixture status, and
   latest benchmark health.

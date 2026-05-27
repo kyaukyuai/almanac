@@ -149,6 +149,11 @@ describe("almanac CLI product onboarding", () => {
     expect(inspect.stdout).toContain("health         ok");
     expect(inspect.stdout).toContain("sources        approved, 3 accepted / 0 rejected");
     expect(inspect.stdout).toContain("benchmark      2/2 passed");
+    expect(inspect.stdout).toContain(`almanac benchmark sqlite-demo --root ${root}`);
+    expect(inspect.stdout).toContain(`almanac serve sqlite-demo --root ${root}`);
+    expect(inspect.stdout).toContain(
+      `almanac register sqlite-demo --client=claude-code --apply --root ${root}`,
+    );
 
     const sources = runCli(["sources", "sqlite-demo", "--root", root]);
     expect(sources.status).toBe(0);
@@ -161,6 +166,12 @@ describe("almanac CLI product onboarding", () => {
     expect(benchmark.stderr).toBe("");
     expect(benchmark.stdout).toContain("total         2");
     expect(benchmark.stdout).toContain("passed        2");
+
+    const init = runCli(["benchmark", "sqlite-demo", "--root", root, "--init", "--force"]);
+    expect(init.status).toBe(0);
+    expect(init.stderr).toBe("");
+    expect(init.stdout).toContain("invocation.input.q");
+    expect(init.stdout).toContain("expected.expectedErrorCode");
 
     const doctor = runCli(["doctor", "sqlite-demo", "--root", root]);
     expect(doctor.status).toBe(0);

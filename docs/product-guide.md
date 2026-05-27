@@ -83,6 +83,10 @@ Then edit:
 
 - `tests/positive.jsonl` for queries that must return sourced answers
 - `tests/negative.jsonl` for queries that must abstain or remain uncited
+- `query` for the human-facing question
+- `invocation.input.q` for the exact runtime search query
+- `expected.contains` for substrings that must appear in positive results
+- `expected.expectedErrorCode` for strict negative refusal checks
 
 Run them:
 
