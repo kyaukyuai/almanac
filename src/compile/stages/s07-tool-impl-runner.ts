@@ -403,7 +403,7 @@ const stubLlmCodeWriter: LlmCodeWriter = {
   promptVersion: "stub",
   async generate() {
     throw new Error(
-      "Stage 7 runner: LlmCodeWriter is unwired in v0.1 (custom tools are not implemented yet)",
+      "Stage 7 runner: LlmCodeWriter is not configured for this run",
     );
   },
 };
@@ -411,7 +411,7 @@ const stubLlmCodeWriter: LlmCodeWriter = {
 const stubTscRunner: TscRunner = {
   async check() {
     throw new Error(
-      "Stage 7 runner: TscRunner is unwired in v0.1 (custom tools are not implemented yet)",
+      "Stage 7 runner: TscRunner is not configured for this run",
     );
   },
 };
@@ -419,7 +419,7 @@ const stubTscRunner: TscRunner = {
 const stubSmokeTestRunner: SmokeTestRunner = {
   async test() {
     throw new Error(
-      "Stage 7 runner: SmokeTestRunner is unwired in v0.1 (custom tools are not implemented yet)",
+      "Stage 7 runner: SmokeTestRunner is not configured for this run",
     );
   },
 };

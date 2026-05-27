@@ -133,3 +133,39 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("knowledge      7 facts, sqlite 3.51.0");
   });
 });
+
+describe("almanac CLI product onboarding", () => {
+  test("demo creates an inspectable almanac with sources, fixtures, and benchmark report", () => {
+    const demo = runCli(["demo", "--root", root]);
+
+    expect(demo.status).toBe(0);
+    expect(demo.stderr).toBe("");
+    expect(demo.stdout).toContain('creating offline demo almanac "sqlite-demo"');
+    expect(demo.stdout).toContain("benchmark  2/2 passed");
+
+    const inspect = runCli(["inspect", "sqlite-demo", "--root", root]);
+    expect(inspect.status).toBe(0);
+    expect(inspect.stderr).toBe("");
+    expect(inspect.stdout).toContain("health         ok");
+    expect(inspect.stdout).toContain("sources        approved, 3 accepted / 0 rejected");
+    expect(inspect.stdout).toContain("benchmark      2/2 passed");
+
+    const sources = runCli(["sources", "sqlite-demo", "--root", root]);
+    expect(sources.status).toBe(0);
+    expect(sources.stderr).toBe("");
+    expect(sources.stdout).toContain("accepted      3 / 3 total");
+    expect(sources.stdout).toContain("sqlite-transactions");
+
+    const benchmark = runCli(["benchmark", "sqlite-demo", "--root", root]);
+    expect(benchmark.status).toBe(0);
+    expect(benchmark.stderr).toBe("");
+    expect(benchmark.stdout).toContain("total         2");
+    expect(benchmark.stdout).toContain("passed        2");
+
+    const doctor = runCli(["doctor", "sqlite-demo", "--root", root]);
+    expect(doctor.status).toBe(0);
+    expect(doctor.stderr).toBe("");
+    expect(doctor.stdout).toContain("doctor: sqlite-demo");
+    expect(doctor.stdout).toContain("fail=0");
+  });
+});

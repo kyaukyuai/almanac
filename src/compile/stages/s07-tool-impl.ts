@@ -8,7 +8,7 @@
  *     `disabled: true` + `disabledReason` (give-up after `maxAttempts`).
  *
  * The orchestrator delegates per-tool work to a `ToolImplementer`. Two
- * concrete implementers are anticipated:
+ * concrete implementers are registered by the Stage 7 runner:
  *
  *   - `TemplateImplementer` — for the four default tools (`query_facts`,
  *      `fetch_official_docs`, `web_search_recent`, `latest_releases`). No
@@ -18,8 +18,8 @@
  *      generate → write → tsc → bun-test → retry loop using
  *      `LlmCodeWriter`, `TscRunner`, and `SmokeTestRunner`.
  *
- * **Skeleton only.** Signatures are committed; the orchestrator body throws
- * `not implemented` until the per-implementer code lands.
+ * The orchestrator below is fully wired for template defaults and records
+ * unsupported custom tools as disabled when no implementer claims them.
  */
 
 import {

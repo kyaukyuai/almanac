@@ -5,8 +5,8 @@
  * completed | failed | skipped). Stages are pluggable: the caller registers
  * a `StageRunner` per `StageId`. Stages with no registered runner are
  * marked `skipped` with a `no-runner-registered` reason — this is what
- * lets us run the parts of the pipeline that exist today (Stage 0, 8, 9,
- * 10) while the LLM-driven stages are still skeletons.
+ * lets the CLI run deterministic stages even when optional LLM-backed
+ * stages are unavailable in the current environment.
  *
  * State is persisted via the injected `persist` callback after every
  * transition so a crash mid-pipeline leaves a recoverable on-disk state.

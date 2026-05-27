@@ -6,11 +6,16 @@
  *   almanac new <domain> [opts]            bootstrap and compile an almanac
  *                                          (supports --resume to continue an
  *                                          interrupted run)
+ *   almanac demo [id] [opts]               create a complete offline demo
+ *                                          almanac with curated fixtures
  *   almanac update <id> [opts]             refresh an existing almanac
  *                                          (resets stages from --from-stage
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac inspect <id> [opts]            print manifest + per-stage state
+ *   almanac sources <id> [opts]            review approved/rejected sources
+ *   almanac benchmark <id> [opts]          init/run human golden fixtures
+ *   almanac doctor [id] [opts]             diagnose environment + artifacts
  *   almanac path <id> [opts]               print the absolute almanac dir path
  *   almanac serve <id> [opts]              start the MCP server (stdio transport)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
@@ -35,12 +40,12 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
 import { fileURLToPath } from "node:url";
-import { join, resolve } from "node:path";
+import { dirname, join, resolve } from "node:path";
 
 import { Command, Option } from "commander";
 
@@ -58,14 +63,26 @@ import {
 } from "./compile/stages/s01-domain-analysis.ts";
 import { createSourceDiscoveryPlannerRunner } from "./compile/stages/s02a-source-discovery-planner.ts";
 import { createSourceDiscoveryExecutorRunner } from "./compile/stages/s02x-source-discovery-executor.ts";
-import { createSourceDiscoveryEvaluatorRunner } from "./compile/stages/s02b-source-discovery-evaluator.ts";
-import { createApproveRunner } from "./compile/stages/s03-approve-runner.ts";
+import {
+  createSourceDiscoveryEvaluatorRunner,
+  sourcesDraftPath,
+} from "./compile/stages/s02b-source-discovery-evaluator.ts";
+import {
+  approvedSourcesPath,
+  createApproveRunner,
+} from "./compile/stages/s03-approve-runner.ts";
 import {
   createSourceFetchRunner,
   defaultFetchers,
 } from "./compile/stages/s04-source-fetch-runner.ts";
-import { createFactExtractionRunner } from "./compile/stages/s05-fact-extraction.ts";
-import { createToolDesignRunner } from "./compile/stages/s06-tool-design.ts";
+import {
+  createFactExtractionRunner,
+  factsJsonlPath,
+} from "./compile/stages/s05-fact-extraction.ts";
+import {
+  createToolDesignRunner,
+  toolDesignPath,
+} from "./compile/stages/s06-tool-design.ts";
 import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
 import { createLlmCodeWriter } from "./compile/stages/s07/code-writer.ts";
 import { createBunxTscRunner } from "./compile/stages/s07/tsc-runner.ts";
@@ -75,7 +92,15 @@ import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index
 import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
 import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
 import { createBenchmarkGenRunner } from "./compile/stages/s11-benchmark-gen.ts";
-import { createBenchmarkRunRunner } from "./compile/stages/s12-benchmark-run-runner.ts";
+import {
+  negativeJsonlPath,
+  positiveJsonlPath,
+  stage11OutputPath,
+} from "./compile/stages/s11-benchmark-gen.ts";
+import {
+  benchmarkResultPath,
+  createBenchmarkRunRunner,
+} from "./compile/stages/s12-benchmark-run-runner.ts";
 import { createGithubSearcher } from "./compile/discovery/github-searcher.ts";
 import { createHttpUrlProber } from "./compile/discovery/url-prober.ts";
 import {
@@ -97,20 +122,36 @@ import {
 import {
   bumpSemver,
   markStageCompleted,
+  markStageFailed,
+  markStageRunning,
+  markStageSkipped,
   resetStagesForUpdate,
   runPipeline,
   sha256Hex,
+  type StageRunner,
   type StageRunners,
 } from "./compile/pipeline.ts";
 import {
+  BenchmarkReportSchema,
+  BenchmarkSetSchema,
   DomainSpecSchema,
+  FactRecordSchema,
+  NegativeFixtureSchema,
+  PositiveFixtureSchema,
+  SourcesFileSchema,
+  Stage11OutputSchema,
   STAGE_IDS,
+  ToolDesignResultSchema,
   type AlmanacManifest,
+  type BenchmarkReport,
   type CompileOptions,
   type CompileState,
+  type FactRecord,
   type FreshnessProfileId,
   type KnowledgeIndexManifest,
+  type SourcesFile,
   type StageId,
+  type ToolDesignResult,
 } from "./core/types.ts";
 import { createAnthropicProvider } from "./llm/anthropic.ts";
 import { createMockProvider } from "./llm/mock.ts";
@@ -225,6 +266,190 @@ function resolveProvider(): LlmProvider | null {
     return createAnthropicProvider();
   }
   return null;
+}
+
+async function writeJsonFile(path: string, value: unknown): Promise<void> {
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(value, null, 2) + "\n", "utf8");
+}
+
+async function readJsonFile(path: string): Promise<unknown> {
+  return JSON.parse(await readFile(path, "utf8")) as unknown;
+}
+
+function markStageCompletedFromArtifact(
+  state: CompileState,
+  stageId: StageId,
+  artifact: unknown,
+): CompileState {
+  return markStageCompleted(state, stageId, new Date(), {
+    outputHash: sha256Hex(JSON.stringify(artifact)),
+  });
+}
+
+async function runStandaloneStage(args: {
+  almanacDir: string;
+  state: CompileState;
+  manifest: AlmanacManifest;
+  stageId: StageId;
+  runner: StageRunner;
+  log?: (event: object) => void;
+}): Promise<CompileState> {
+  const now = () => new Date();
+  let state = markStageRunning(
+    args.state,
+    args.stageId,
+    now(),
+    args.runner.promptVersion,
+  );
+  await writeCompileState(args.almanacDir, state);
+
+  try {
+    const outcome = await args.runner.run({
+      almanacDir: args.almanacDir,
+      state,
+      manifest: args.manifest,
+      stageId: args.stageId,
+      log: args.log ?? (() => {}),
+      now,
+    });
+
+    if (outcome.kind === "skipped") {
+      state = markStageSkipped(state, args.stageId, now(), outcome.reason);
+    } else {
+      state = markStageCompleted(state, args.stageId, now(), {
+        outputHash: outcome.outputHash,
+        cost: outcome.cost,
+        llmCalls: outcome.llmCalls,
+      });
+    }
+    await writeCompileState(args.almanacDir, state);
+    return state;
+  } catch (e) {
+    const code = (e as { code?: string }).code ?? "stage-threw";
+    const message =
+      e instanceof Error ? e.message : `non-Error thrown: ${String(e)}`;
+    state = markStageFailed(state, args.stageId, now(), { code, message });
+    await writeCompileState(args.almanacDir, state);
+    throw e;
+  }
+}
+
+interface StageStatusSummary {
+  completed: number;
+  failed: number;
+  pending: number;
+  running: number;
+  skipped: number;
+}
+
+function stageStatusCounts(state: CompileState): StageStatusSummary {
+  const counts: StageStatusSummary = {
+    completed: 0,
+    failed: 0,
+    pending: 0,
+    running: 0,
+    skipped: 0,
+  };
+  for (const id of STAGE_IDS as readonly StageId[]) {
+    const status = state.stages[id].status;
+    counts[status] += 1;
+  }
+  return counts;
+}
+
+async function readSourcesFileIfPresent(
+  almanacDir: string,
+): Promise<SourcesFile | null> {
+  const path = approvedSourcesPath(almanacDir);
+  if (!existsSync(path)) return null;
+  return SourcesFileSchema.parse(await readJsonFile(path));
+}
+
+async function readBenchmarkReportIfPresent(
+  almanacDir: string,
+): Promise<BenchmarkReport | null> {
+  const path = benchmarkResultPath(almanacDir);
+  if (!existsSync(path)) return null;
+  return BenchmarkReportSchema.parse(await readJsonFile(path));
+}
+
+async function readBenchmarkSetIfPresent(
+  almanacDir: string,
+  almanacId: string,
+) {
+  const posPath = positiveJsonlPath(almanacDir);
+  const negPath = negativeJsonlPath(almanacDir);
+  if (existsSync(posPath) && existsSync(negPath)) {
+    const positive = await readFixtureJsonl(posPath, PositiveFixtureSchema);
+    const negative = await readFixtureJsonl(negPath, NegativeFixtureSchema);
+    return BenchmarkSetSchema.parse({
+      schemaVersion: "0.1.0" as const,
+      almanacId,
+      positive,
+      negative,
+    });
+  }
+
+  const stage11Path = stage11OutputPath(almanacDir);
+  if (existsSync(stage11Path)) {
+    const parsed = Stage11OutputSchema.parse(await readJsonFile(stage11Path));
+    return parsed.set;
+  }
+
+  return null;
+}
+
+async function readFixtureJsonl<T>(
+  path: string,
+  schema: typeof PositiveFixtureSchema | typeof NegativeFixtureSchema,
+): Promise<T[]> {
+  const body = await readFile(path, "utf8");
+  const out: T[] = [];
+  let lineNo = 0;
+  for (const line of body.split("\n")) {
+    lineNo += 1;
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(schema.parse(JSON.parse(line)) as T);
+    } catch (e) {
+      throw new Error(
+        `${path}:${lineNo}: invalid benchmark fixture: ${(e as Error).message}`,
+      );
+    }
+  }
+  return out;
+}
+
+async function readFactsJsonlIfPresent(
+  almanacDir: string,
+): Promise<FactRecord[]> {
+  const path = factsJsonlPath(almanacDir);
+  if (!existsSync(path)) return [];
+  const body = await readFile(path, "utf8");
+  const out: FactRecord[] = [];
+  let lineNo = 0;
+  for (const line of body.split("\n")) {
+    lineNo += 1;
+    if (line.trim().length === 0) continue;
+    try {
+      out.push(FactRecordSchema.parse(JSON.parse(line)));
+    } catch (e) {
+      throw new Error(`${path}:${lineNo}: invalid fact: ${(e as Error).message}`);
+    }
+  }
+  return out;
+}
+
+function nonZeroCoverage(coverage: SourcesFile["coverage"]): string {
+  return Object.entries(coverage)
+    .filter(([, count]) => count > 0)
+    .map(([kind, count]) => `${kind}=${count}`)
+    .join(", ") || "none";
+}
+
+function formatRate(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 /**
@@ -563,7 +788,6 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
     stateForFinalRun = await readCompileState(almanacDir);
   }
 
-  // Stages 2+ are still skeletons; they will be marked `no-runner-registered`.
   const result = await runPipeline({
     almanacDir,
     state: stateForFinalRun,
@@ -590,6 +814,449 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
 
   process.stdout.write(
     `\nDone. \`almanac inspect ${slug}\` to see status.\n`,
+  );
+}
+
+interface DemoOptions {
+  root: string;
+  force?: boolean;
+}
+
+async function cmdDemo(
+  requestedId: string | undefined,
+  opts: DemoOptions,
+): Promise<void> {
+  const almanacId = requestedId ? slugify(requestedId) : "sqlite-demo";
+  if (almanacId.length === 0) {
+    fail("demo id must contain at least one ASCII letter or number");
+  }
+
+  const almanacDir = almanacDirPath(opts.root, almanacId);
+  if (existsSync(almanacDir)) {
+    if (opts.force !== true) {
+      fail(
+        `demo target already exists: ${almanacDir} (re-run with --force to replace it)`,
+      );
+    }
+    await rm(almanacDir, { recursive: true, force: true });
+  }
+
+  process.stdout.write(
+    `▶ creating offline demo almanac "${almanacId}"\n` +
+      `    root   ${opts.root}\n` +
+      `    dir    ${almanacDir}\n`,
+  );
+
+  const options: CompileOptions = {
+    depth: "quick",
+    sourcesHint: [],
+    target: "both",
+    autoApprove: true,
+    language: "ts",
+  };
+  const boot = bootstrapAlmanac({
+    almanacId,
+    domain: "sqlite operations demo",
+    displayName: "SQLite Operations Demo",
+    freshnessProfileId: "static-heavy",
+    runId: generateRunId(),
+    forgerVersion: FORGER_VERSION,
+    options,
+  });
+
+  let manifest = boot.manifest;
+  let state = markStageCompletedFromArtifact(
+    boot.compileState,
+    "00-bootstrap",
+    boot.manifest,
+  );
+
+  await ensureAlmanacLayout(almanacDir);
+  await writeManifest(almanacDir, manifest);
+  await writeCompileState(almanacDir, state);
+
+  const domainSpec = demoDomainSpec(almanacId);
+  await writeJsonFile(domainSpecPath(almanacDir), domainSpec);
+  state = markStageCompletedFromArtifact(
+    state,
+    "01-domain-analysis",
+    domainSpec,
+  );
+  state = markStageSkipped(
+    state,
+    "02a-source-discovery-planner",
+    new Date(),
+    "demo-curated-sources",
+  );
+  state = markStageSkipped(
+    state,
+    "02x-source-discovery-executor",
+    new Date(),
+    "demo-curated-sources",
+  );
+
+  const draftSources = demoSourcesFile("draft");
+  await writeJsonFile(sourcesDraftPath(almanacDir), draftSources);
+  state = markStageCompletedFromArtifact(
+    state,
+    "02b-source-discovery-evaluator",
+    draftSources,
+  );
+  await writeCompileState(almanacDir, state);
+
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "03-source-approve",
+    runner: createApproveRunner(),
+  });
+
+  state = markStageSkipped(
+    state,
+    "04-source-fetch",
+    new Date(),
+    "demo-uses-curated-facts",
+  );
+
+  const facts = demoFacts();
+  await writeFile(
+    factsJsonlPath(almanacDir),
+    facts.map((f) => JSON.stringify(f)).join("\n") + "\n",
+    "utf8",
+  );
+  state = markStageCompletedFromArtifact(state, "05-fact-extraction", facts);
+
+  const toolDesign = demoToolDesign();
+  await writeJsonFile(toolDesignPath(almanacDir), toolDesign);
+  state = markStageCompletedFromArtifact(state, "06-tool-design", toolDesign);
+  await writeCompileState(almanacDir, state);
+
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "07-tool-impl",
+    runner: createToolImplRunner(),
+  });
+
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "08-knowledge-index",
+    runner: createKnowledgeIndexRunner(),
+  });
+
+  manifest = {
+    ...manifest,
+    factCount: facts.length,
+    toolCount: await readImplementedToolCount(almanacDir),
+    compiledAt: new Date().toISOString(),
+  };
+  await writeManifest(almanacDir, manifest);
+
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "09-contract-files",
+    runner: createContractFilesRunner(),
+  });
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "10-adapter-generation",
+    runner: createSkillAdapterRunner(),
+  });
+
+  state = markStageSkipped(
+    state,
+    "11-benchmark-gen",
+    new Date(),
+    "demo-uses-human-golden-fixtures",
+  );
+  await writeBenchmarkFixtures(almanacDir, demoBenchmarkSet(almanacId), {
+    force: true,
+  });
+  await writeCompileState(almanacDir, state);
+
+  state = await runStandaloneStage({
+    almanacDir,
+    state,
+    manifest,
+    stageId: "12-benchmark-run",
+    runner: createBenchmarkRunRunner(),
+  });
+
+  manifest = {
+    ...manifest,
+    compiledAt: new Date().toISOString(),
+  };
+  await writeManifest(almanacDir, manifest);
+  await writeCompileState(almanacDir, state);
+
+  const report = await readBenchmarkReportIfPresent(almanacDir);
+  process.stdout.write(
+    `\nDone.\n` +
+      `    facts      ${manifest.factCount}\n` +
+      `    tools      ${manifest.toolCount}\n` +
+      `    benchmark  ${report ? `${report.summary.passed}/${report.summary.total} passed` : "not run"}\n\n` +
+      `Try:\n` +
+      `    almanac inspect ${almanacId} --root ${opts.root}\n` +
+      `    almanac sources ${almanacId} --root ${opts.root}\n` +
+      `    almanac benchmark ${almanacId} --root ${opts.root}\n`,
+  );
+}
+
+function demoDomainSpec(almanacId: string) {
+  return DomainSpecSchema.parse({
+    domain: "sqlite operations demo",
+    canonicalSlug: almanacId,
+    displayName: "SQLite Operations Demo",
+    summary:
+      "A small offline demonstration almanac for SQLite transaction, query-plan, and pragma lookup workflows.",
+    subareas: [
+      "transactions",
+      "query planning",
+      "database pragmas",
+    ],
+    intents: [
+      { kind: "lookup", example: "What makes SQLite transactions atomic?" },
+      { kind: "explain", example: "Explain what EXPLAIN QUERY PLAN reports." },
+      { kind: "howto", example: "How do I inspect journal mode behavior?" },
+    ],
+    verbs: ["lookup", "explain", "inspect", "compare"],
+    entityTypes: ["SQL command", "pragma", "runtime behavior"],
+    freshnessProfile: {
+      profileId: "static-heavy",
+      defaultClass: "static",
+      classes: {
+        static: { examples: ["transaction semantics", "query plan output"] },
+        slow: {
+          examples: ["documentation wording", "recommended pragmas"],
+          maxAgeDays: 180,
+        },
+        fast: { examples: [] },
+        live: { examples: [] },
+      },
+    },
+    suggestedSources: [
+      { hint: "https://www.sqlite.org/lang_transaction.html", kind: "docs" },
+      { hint: "https://www.sqlite.org/eqp.html", kind: "docs" },
+      { hint: "https://www.sqlite.org/pragma.html", kind: "docs" },
+    ],
+    suggestedTools: [],
+    cautions: [],
+  });
+}
+
+function demoSourcesFile(status: "draft" | "approved"): SourcesFile {
+  const generatedAt = new Date().toISOString();
+  const base = {
+    schemaVersion: "0.1.0" as const,
+    status,
+    generatedAt,
+    generatedBy: {
+      stage: "02-source-discovery" as const,
+      evaluatorPromptVersion: "demo-curated-v1",
+      candidateCount: 3,
+      acceptedCount: 3,
+    },
+    coverage: {
+      docs: 3,
+      repo: 0,
+      news: 0,
+      community: 0,
+      academic: 0,
+      data: 0,
+      file: 0,
+      essay: 0,
+      book: 0,
+      talk: 0,
+    },
+    warnings: ["offline demo uses curated sources and facts; no network fetch was performed"],
+    sources: [
+      demoSource(
+        "sqlite-transactions",
+        "https://www.sqlite.org/lang_transaction.html",
+        "SQLite transaction semantics are canonical for this demo.",
+      ),
+      demoSource(
+        "sqlite-query-plan",
+        "https://www.sqlite.org/eqp.html",
+        "SQLite query-plan documentation backs lookup fixtures.",
+      ),
+      demoSource(
+        "sqlite-pragmas",
+        "https://www.sqlite.org/pragma.html",
+        "SQLite pragma documentation backs operational fixtures.",
+      ),
+    ],
+    rejected: [],
+  };
+  return SourcesFileSchema.parse(
+    status === "approved"
+      ? { ...base, approvedAt: generatedAt, approvedBy: "human" }
+      : base,
+  );
+}
+
+function demoSource(id: string, url: string, rationale: string) {
+  return {
+    id,
+    url,
+    kind: "docs" as const,
+    trust: 0.98,
+    volatility: "slow" as const,
+    rationale,
+    ingestion: {
+      mode: "snapshot" as const,
+      scope: [url],
+      refreshIntervalHours: 24 * 180,
+    },
+    notes: "Curated offline demo source.",
+  };
+}
+
+function demoFacts(): FactRecord[] {
+  const extractedAt = new Date().toISOString();
+  const rows: FactRecord[] = [
+    {
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAV",
+      text:
+        "SQLite transactions are atomic: either all changes inside COMMIT persist or none do after ROLLBACK.",
+      type: "fact",
+      entities: ["transaction", "COMMIT", "ROLLBACK"],
+      source: {
+        sourceId: "sqlite-transactions",
+        contentHash: sha256Hex("sqlite-transactions"),
+        url: "https://www.sqlite.org/lang_transaction.html",
+        excerpt:
+          "SQLite transactions are atomic, consistent, isolated, and durable within documented constraints.",
+      },
+      freshnessClass: "static",
+      validUntil: null,
+      confidence: 0.96,
+      extractedAt,
+      extractor: { model: "demo-curated", promptVersion: "v1" },
+    },
+    {
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAW",
+      text:
+        "SQLite EXPLAIN QUERY PLAN reports whether a statement scans or searches each table or index.",
+      type: "definition",
+      entities: ["EXPLAIN QUERY PLAN", "index", "scan"],
+      source: {
+        sourceId: "sqlite-query-plan",
+        contentHash: sha256Hex("sqlite-query-plan"),
+        url: "https://www.sqlite.org/eqp.html",
+        excerpt:
+          "EXPLAIN QUERY PLAN shows how SQLite plans to scan or search tables and indexes.",
+      },
+      freshnessClass: "static",
+      validUntil: null,
+      confidence: 0.94,
+      extractedAt,
+      extractor: { model: "demo-curated", promptVersion: "v1" },
+    },
+    {
+      id: "01ARZ3NDEKTSV4RRFFQ69G5FAX",
+      text:
+        "SQLite PRAGMA journal_mode controls rollback journal behavior, including WAL mode selection.",
+      type: "reference",
+      entities: ["PRAGMA journal_mode", "WAL", "rollback journal"],
+      source: {
+        sourceId: "sqlite-pragmas",
+        contentHash: sha256Hex("sqlite-pragmas"),
+        url: "https://www.sqlite.org/pragma.html#pragma_journal_mode",
+        excerpt:
+          "PRAGMA journal_mode queries or changes the journal mode for attached databases.",
+      },
+      freshnessClass: "static",
+      validUntil: null,
+      confidence: 0.93,
+      extractedAt,
+      extractor: { model: "demo-curated", promptVersion: "v1" },
+    },
+  ];
+  return rows.map((row) => FactRecordSchema.parse(row));
+}
+
+function demoToolDesign(): ToolDesignResult {
+  return ToolDesignResultSchema.parse({
+    schemaVersion: "0.1.0",
+    customTools: [],
+    rationale:
+      "The offline demo relies on the four default tools; no domain-specific custom tool is required.",
+  });
+}
+
+function demoBenchmarkSet(almanacId: string) {
+  return BenchmarkSetSchema.parse({
+    schemaVersion: "0.1.0",
+    almanacId,
+    positive: [
+      PositiveFixtureSchema.parse({
+        id: "transaction-atomicity",
+        intent: "lookup",
+        query: "transaction atomicity",
+        rationale:
+          "The curated fact corpus includes an explicit transaction atomicity fact.",
+        invocation: {
+          tool: "query_facts",
+          input: { q: "transactions atomic", limit: 3 },
+        },
+        expected: {
+          minCitations: 1,
+          contains: ["atomic"],
+          acceptableStaleness: ["fresh", "warm"],
+        },
+      }),
+    ],
+    negative: [
+      NegativeFixtureSchema.parse({
+        id: "out-of-domain-violin",
+        query: "quantum violin tuning",
+        rationale:
+          "This query is deliberately outside the SQLite operations domain.",
+        refusalReason: "out-of-scope",
+        invocation: {
+          tool: "query_facts",
+          input: { q: "quantum violin tuning", limit: 3 },
+        },
+        expected: {
+          maxCitations: 0,
+          expectedErrorCode: "no-results",
+        },
+      }),
+    ],
+  });
+}
+
+async function writeBenchmarkFixtures(
+  almanacDir: string,
+  set: ReturnType<typeof demoBenchmarkSet>,
+  opts: { force?: boolean } = {},
+): Promise<void> {
+  const posPath = positiveJsonlPath(almanacDir);
+  const negPath = negativeJsonlPath(almanacDir);
+  if (opts.force !== true && (existsSync(posPath) || existsSync(negPath))) {
+    fail(
+      `benchmark fixtures already exist under ${join(almanacDir, "tests")} (use --force to replace them)`,
+    );
+  }
+  await mkdir(dirname(posPath), { recursive: true });
+  await writeFile(
+    posPath,
+    set.positive.map((fixture) => JSON.stringify(fixture)).join("\n") + "\n",
+    "utf8",
+  );
+  await writeFile(
+    negPath,
+    set.negative.map((fixture) => JSON.stringify(fixture)).join("\n") + "\n",
+    "utf8",
   );
 }
 
@@ -672,11 +1339,88 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   const state = await readCompileState(dir);
   const knowledge = await readKnowledgeIndexManifest(dir);
   const counts = await readDisplayCounts(dir, manifest, knowledge);
+  const sources = await readSourcesFileIfPresent(dir);
+  const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
+  const benchmarkReport = await readBenchmarkReportIfPresent(dir);
+  const stageCounts = stageStatusCounts(state);
+  const failedStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "failed",
+  );
+  const runningStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "running",
+  );
+  const pendingStages = (STAGE_IDS as readonly StageId[]).filter(
+    (stageId) => state.stages[stageId].status === "pending",
+  );
+  const healthIssues: string[] = [];
+  if (failedStages.length > 0) {
+    healthIssues.push(`failed stages: ${failedStages.join(", ")}`);
+  }
+  if (runningStages.length > 0) {
+    healthIssues.push(`running stages: ${runningStages.join(", ")}`);
+  }
+  if (sources === null) healthIssues.push("no approved sources file");
+  if (knowledge === null) healthIssues.push("knowledge index missing");
+  if (benchmarkSet === null) healthIssues.push("benchmark fixtures missing");
+  if (benchmarkReport === null) healthIssues.push("benchmark report missing");
+  if (
+    benchmarkReport !== null &&
+    (benchmarkReport.summary.failed > 0 || benchmarkReport.summary.errored > 0)
+  ) {
+    healthIssues.push(
+      `benchmark has ${benchmarkReport.summary.failed} failed and ${benchmarkReport.summary.errored} errored fixture(s)`,
+    );
+  }
+  if (countsMismatch(counts)) {
+    healthIssues.push("manifest counts differ from actual artifacts");
+  }
+  const health =
+    failedStages.length > 0
+      ? "failed"
+      : healthIssues.length > 0 || pendingStages.length > 0
+        ? "attention"
+        : "ok";
+  const nextActions: string[] = [];
+  if (failedStages.length > 0) {
+    nextActions.push(
+      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}`,
+    );
+  }
+  if (sources === null) {
+    nextActions.push("create or restore sources/sources.json");
+  } else {
+    nextActions.push(`review sources: almanac sources ${id}`);
+  }
+  if (benchmarkSet === null) {
+    nextActions.push(`create human fixtures: almanac benchmark ${id} --init`);
+  } else if (benchmarkReport === null) {
+    nextActions.push(`run human fixtures: almanac benchmark ${id}`);
+  } else if (
+    benchmarkReport.summary.failed > 0 ||
+    benchmarkReport.summary.errored > 0
+  ) {
+    nextActions.push(`inspect benchmark details: ${benchmarkResultPath(dir)}`);
+  }
 
   if (opts.json) {
     process.stdout.write(
       JSON.stringify(
-        { almanacDir: dir, manifest, state, knowledge, counts },
+        {
+          almanacDir: dir,
+          manifest,
+          state,
+          knowledge,
+          counts,
+          sources,
+          benchmarkSet,
+          benchmarkReport,
+          health: {
+            status: health,
+            stageCounts,
+            issues: healthIssues,
+            nextActions,
+          },
+        },
         null,
         2,
       ) + "\n",
@@ -690,6 +1434,10 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   process.stdout.write(`  version        ${manifest.version}\n`);
   process.stdout.write(`  profile        ${manifest.freshnessProfileId}\n`);
   process.stdout.write(`  facts/tools    ${counts.facts} / ${counts.tools}\n`);
+  process.stdout.write(
+    `  health         ${health}` +
+      ` (${stageCounts.completed} completed, ${stageCounts.skipped} skipped, ${stageCounts.failed} failed, ${stageCounts.pending} pending)\n`,
+  );
   if (countsMismatch(counts)) {
     process.stdout.write(
       `  manifest       facts/tools ${counts.manifestFacts} / ${counts.manifestTools}\n`,
@@ -705,6 +1453,33 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
     process.stdout.write(
       `  knowledge      ${knowledge.factCount} facts, sqlite ${knowledge.sqliteVersion}\n`,
     );
+  }
+  if (sources !== null) {
+    process.stdout.write(
+      `  sources        ${sources.status}, ${sources.sources.length} accepted / ${sources.rejected.length} rejected (${nonZeroCoverage(sources.coverage)})\n`,
+    );
+  }
+  if (benchmarkSet !== null) {
+    process.stdout.write(
+      `  fixtures       ${benchmarkSet.positive.length} positive / ${benchmarkSet.negative.length} negative\n`,
+    );
+  }
+  if (benchmarkReport !== null) {
+    process.stdout.write(
+      `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}\n`,
+    );
+  }
+  if (healthIssues.length > 0) {
+    process.stdout.write(`\nhealth issues:\n`);
+    for (const issue of healthIssues) {
+      process.stdout.write(`  - ${issue}\n`);
+    }
+  }
+  if (nextActions.length > 0) {
+    process.stdout.write(`\nnext actions:\n`);
+    for (const action of nextActions) {
+      process.stdout.write(`  - ${action}\n`);
+    }
   }
 
   process.stdout.write(`\nstages:\n`);
@@ -729,6 +1504,366 @@ interface PathOptions {
 
 function cmdPath(id: string, opts: PathOptions): void {
   process.stdout.write(almanacDirPath(opts.root, id) + "\n");
+}
+
+interface SourcesOptions {
+  root: string;
+  json?: boolean;
+  rejected?: boolean;
+  kind?: SourceKind;
+}
+
+async function cmdSources(id: string, opts: SourcesOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  const manifest = await readManifest(almanacDir);
+  const sources = await readSourcesFileIfPresent(almanacDir);
+  if (sources === null) {
+    fail(`sources file not found: ${approvedSourcesPath(almanacDir)}`);
+  }
+
+  const accepted = opts.kind
+    ? sources.sources.filter((source) => source.kind === opts.kind)
+    : sources.sources;
+
+  if (opts.json) {
+    process.stdout.write(
+      JSON.stringify(
+        {
+          almanacDir,
+          almanacId: manifest.almanacId,
+          status: sources.status,
+          generatedAt: sources.generatedAt,
+          approvedAt: sources.approvedAt ?? null,
+          approvedBy: sources.approvedBy ?? null,
+          coverage: sources.coverage,
+          warnings: sources.warnings,
+          sources: accepted,
+          rejected: opts.rejected === true ? sources.rejected : [],
+        },
+        null,
+        2,
+      ) + "\n",
+    );
+    return;
+  }
+
+  process.stdout.write(
+    `sources: ${manifest.almanacId} (${manifest.displayName})\n` +
+      `  status        ${sources.status}` +
+      `${sources.approvedBy ? ` (${sources.approvedBy})` : ""}\n` +
+      `  accepted      ${accepted.length}${opts.kind ? ` of kind ${opts.kind}` : ""} / ${sources.sources.length} total\n` +
+      `  rejected      ${sources.rejected.length}\n` +
+      `  coverage      ${nonZeroCoverage(sources.coverage)}\n`,
+  );
+  if (sources.warnings.length > 0) {
+    process.stdout.write(`  warnings      ${sources.warnings.join("; ")}\n`);
+  }
+
+  process.stdout.write(`\naccepted:\n`);
+  if (accepted.length === 0) {
+    process.stdout.write(`  (none)\n`);
+  } else {
+    for (const source of accepted) {
+      process.stdout.write(
+        `  - ${source.id}  ${source.kind}  trust=${source.trust.toFixed(2)}  ${source.ingestion.mode}/${source.ingestion.refreshIntervalHours}h\n` +
+          `    ${source.url}\n` +
+          `    ${source.rationale}\n`,
+      );
+    }
+  }
+
+  if (sources.rejected.length > 0) {
+    process.stdout.write(`\nrejected:\n`);
+    if (opts.rejected === true) {
+      for (const source of sources.rejected) {
+        process.stdout.write(`  - ${source.reason}  ${source.url}\n`);
+      }
+    } else {
+      process.stdout.write(`  ${sources.rejected.length} hidden (use --rejected to show)\n`);
+    }
+  }
+}
+
+interface BenchmarkOptions {
+  root: string;
+  init?: boolean;
+  force?: boolean;
+  json?: boolean;
+}
+
+async function cmdBenchmark(
+  id: string,
+  opts: BenchmarkOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  const manifest = await readManifest(almanacDir);
+
+  if (opts.init === true) {
+    const set = await starterBenchmarkSet(almanacDir, manifest);
+    await writeBenchmarkFixtures(almanacDir, set, { force: opts.force });
+    process.stdout.write(
+      `benchmark fixtures written:\n` +
+        `  ${positiveJsonlPath(almanacDir)}\n` +
+        `  ${negativeJsonlPath(almanacDir)}\n\n` +
+        `Edit those JSONL files as human golden tests, then run:\n` +
+        `  almanac benchmark ${manifest.almanacId} --root ${opts.root}\n`,
+    );
+    return;
+  }
+
+  let state = await readCompileState(almanacDir);
+  const runner = createBenchmarkRunRunner();
+  try {
+    state = await runStandaloneStage({
+      almanacDir,
+      state,
+      manifest,
+      stageId: "12-benchmark-run",
+      runner,
+    });
+  } catch (e) {
+    if (e instanceof Error && e.name === "MissingBenchmarkSetError") {
+      fail(
+        `benchmark fixtures are missing. Run \`almanac benchmark ${id} --init --root ${opts.root}\`, edit the JSONL files, then run this command again.`,
+      );
+    }
+    throw e;
+  }
+  await writeCompileState(almanacDir, state);
+
+  const report = await readBenchmarkReportIfPresent(almanacDir);
+  if (report === null) {
+    fail(`benchmark report was not written: ${benchmarkResultPath(almanacDir)}`);
+  }
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+  } else {
+    process.stdout.write(
+      `benchmark: ${manifest.almanacId}\n` +
+        `  report        ${benchmarkResultPath(almanacDir)}\n` +
+        `  total         ${report.summary.total}\n` +
+        `  passed        ${report.summary.passed}\n` +
+        `  failed        ${report.summary.failed}\n` +
+        `  errored       ${report.summary.errored}\n` +
+        `  citationRate  ${formatRate(report.summary.citationRate)}\n`,
+    );
+  }
+
+  if (report.summary.failed > 0 || report.summary.errored > 0) {
+    process.exitCode = 1;
+  }
+}
+
+async function starterBenchmarkSet(
+  almanacDir: string,
+  manifest: AlmanacManifest,
+) {
+  const facts = await readFactsJsonlIfPresent(almanacDir);
+  const first = facts[0];
+  const query = first ? queryFromFact(first) : manifest.displayName;
+  const contains = first ? [first.text.split(/\s+/).find((w) => w.length >= 5) ?? query] : [];
+  return BenchmarkSetSchema.parse({
+    schemaVersion: "0.1.0",
+    almanacId: manifest.almanacId,
+    positive: [
+      PositiveFixtureSchema.parse({
+        id: "human-golden-positive-1",
+        intent: "lookup",
+        query,
+        rationale:
+          "Starter positive fixture generated from the current fact corpus; edit this into a real human golden query.",
+        invocation: {
+          tool: "query_facts",
+          input: { q: query, limit: 5 },
+        },
+        expected: {
+          minCitations: 1,
+          contains,
+          acceptableStaleness: ["fresh", "warm"],
+        },
+      }),
+    ],
+    negative: [
+      NegativeFixtureSchema.parse({
+        id: "human-golden-negative-1",
+        query: "intentionally out of scope placeholder",
+        rationale:
+          "Starter negative fixture; replace with a query this almanac should refuse or leave uncited.",
+        refusalReason: "out-of-scope",
+        invocation: {
+          tool: "query_facts",
+          input: { q: "intentionally out of scope placeholder", limit: 5 },
+        },
+        expected: { maxCitations: 0 },
+      }),
+    ],
+  });
+}
+
+function queryFromFact(fact: FactRecord): string {
+  const words = fact.text
+    .split(/[^A-Za-z0-9_]+/)
+    .filter((word) => word.length >= 5)
+    .slice(0, 2)
+    .join(" ");
+  if (words.length >= 5) return words;
+  const entity = fact.entities.find((value) => value.trim().length >= 5);
+  return entity ?? fact.text.slice(0, 80);
+}
+
+interface DoctorOptions {
+  root: string;
+  json?: boolean;
+  strict?: boolean;
+}
+
+type DoctorLevel = "ok" | "warn" | "fail";
+
+interface DoctorCheck {
+  level: DoctorLevel;
+  name: string;
+  message: string;
+}
+
+async function cmdDoctor(
+  id: string | undefined,
+  opts: DoctorOptions,
+): Promise<void> {
+  const checks: DoctorCheck[] = [];
+  const add = (level: DoctorLevel, name: string, message: string) => {
+    checks.push({ level, name, message });
+  };
+
+  const bunVersion = (process.versions as { bun?: string }).bun;
+  add(
+    bunVersion ? "ok" : "fail",
+    "runtime",
+    bunVersion ? `Bun ${bunVersion}` : "Bun runtime not detected",
+  );
+  add("ok", "cli", `almanac ${FORGER_VERSION}`);
+  add(
+    existsSync(opts.root) ? "ok" : "warn",
+    "root",
+    existsSync(opts.root)
+      ? `root exists: ${opts.root}`
+      : `root does not exist yet: ${opts.root}`,
+  );
+  for (const key of [
+    "ANTHROPIC_API_KEY",
+    "BRAVE_SEARCH_API_KEY",
+    "GITHUB_TOKEN",
+  ]) {
+    add(
+      process.env[key] ? "ok" : "warn",
+      `env:${key}`,
+      process.env[key] ? "set" : "unset",
+    );
+  }
+
+  if (id !== undefined) {
+    const almanacDir = almanacDirPath(opts.root, id);
+    add(
+      existsSync(almanacDir) ? "ok" : "fail",
+      "almanac",
+      existsSync(almanacDir) ? `found: ${almanacDir}` : `not found: ${almanacDir}`,
+    );
+    if (existsSync(almanacDir)) {
+      try {
+        const manifest = await readManifest(almanacDir);
+        add("ok", "manifest", `${manifest.almanacId} v${manifest.version}`);
+        const state = await readCompileState(almanacDir);
+        const stageCounts = stageStatusCounts(state);
+        add(
+          stageCounts.failed > 0 ? "fail" : stageCounts.pending > 0 ? "warn" : "ok",
+          "stages",
+          `${stageCounts.completed} completed, ${stageCounts.skipped} skipped, ${stageCounts.failed} failed, ${stageCounts.pending} pending`,
+        );
+        const knowledge = await readKnowledgeIndexManifest(almanacDir);
+        add(
+          knowledge === null ? "warn" : "ok",
+          "knowledge",
+          knowledge === null
+            ? "knowledge/index-manifest.json missing"
+            : `${knowledge.factCount} facts, sqlite ${knowledge.sqliteVersion}`,
+        );
+        const counts = await readDisplayCounts(almanacDir, manifest, knowledge);
+        add(
+          countsMismatch(counts) ? "warn" : "ok",
+          "counts",
+          countsMismatch(counts)
+            ? `manifest ${counts.manifestFacts}/${counts.manifestTools}, actual ${counts.facts}/${counts.tools}`
+            : `facts/tools ${counts.facts}/${counts.tools}`,
+        );
+        const sources = await readSourcesFileIfPresent(almanacDir);
+        add(
+          sources === null ? "warn" : "ok",
+          "sources",
+          sources === null
+            ? "sources/sources.json missing"
+            : `${sources.sources.length} accepted / ${sources.rejected.length} rejected`,
+        );
+        const set = await readBenchmarkSetIfPresent(
+          almanacDir,
+          manifest.almanacId,
+        );
+        add(
+          set === null ? "warn" : "ok",
+          "fixtures",
+          set === null
+            ? "benchmark fixtures missing"
+            : `${set.positive.length} positive / ${set.negative.length} negative`,
+        );
+        const report = await readBenchmarkReportIfPresent(almanacDir);
+        add(
+          report === null
+            ? "warn"
+            : report.summary.failed > 0 || report.summary.errored > 0
+              ? "fail"
+              : "ok",
+          "benchmark",
+          report === null
+            ? "benchmark report missing"
+            : `${report.summary.passed}/${report.summary.total} passed, failed=${report.summary.failed}, errored=${report.summary.errored}`,
+        );
+      } catch (e) {
+        add("fail", "almanac-read", (e as Error).message);
+      }
+    }
+  }
+
+  const summary = {
+    ok: checks.filter((check) => check.level === "ok").length,
+    warn: checks.filter((check) => check.level === "warn").length,
+    fail: checks.filter((check) => check.level === "fail").length,
+  };
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify({ summary, checks }, null, 2) + "\n");
+  } else {
+    process.stdout.write(
+      `doctor${id ? `: ${id}` : ""}\n` +
+        `  ok=${summary.ok} warn=${summary.warn} fail=${summary.fail}\n\n`,
+    );
+    for (const check of checks) {
+      process.stdout.write(
+        `  ${check.level.padEnd(4)} ${check.name.padEnd(24)} ${check.message}\n`,
+      );
+    }
+  }
+
+  if (
+    summary.fail > 0 ||
+    (opts.strict === true && (summary.warn > 0 || summary.fail > 0))
+  ) {
+    process.exitCode = 1;
+  }
 }
 
 interface UpdateOptions {
@@ -1441,6 +2576,13 @@ program
   .action(cmdNew);
 
 program
+  .command("demo [id]")
+  .description("create a complete offline demo almanac with curated fixtures")
+  .option("--force", "Replace an existing demo almanac at the same id")
+  .addOption(rootOption)
+  .action(cmdDemo);
+
+program
   .command("list")
   .description("list compiled almanacs under the root directory")
   .option("--json", "Emit JSON instead of a table")
@@ -1459,6 +2601,45 @@ program
   .description("print the absolute path to an almanac directory")
   .addOption(rootOption)
   .action(cmdPath);
+
+program
+  .command("sources <id>")
+  .description("review approved and rejected sources for an almanac")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--rejected", "Show rejected source candidates")
+  .addOption(
+    new Option("--kind <name>", "Filter accepted sources by kind").choices([
+      "docs",
+      "community",
+      "academic",
+      "data",
+      "news",
+      "repo",
+      "file",
+      "essay",
+      "book",
+      "talk",
+    ]),
+  )
+  .addOption(rootOption)
+  .action(cmdSources);
+
+program
+  .command("benchmark <id>")
+  .description("initialize or run human-authored golden benchmark fixtures")
+  .option("--init", "Write starter tests/positive.jsonl and tests/negative.jsonl")
+  .option("--force", "Replace existing fixtures when used with --init")
+  .option("--json", "Emit the benchmark report as JSON")
+  .addOption(rootOption)
+  .action(cmdBenchmark);
+
+program
+  .command("doctor [id]")
+  .description("diagnose CLI, environment, and optional almanac artifacts")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--strict", "Exit non-zero on warnings as well as failures")
+  .addOption(rootOption)
+  .action(cmdDoctor);
 
 program
   .command("update <id>")

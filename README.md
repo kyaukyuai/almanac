@@ -13,6 +13,20 @@ almanac new cooking
 # → Skill: almanac register cooking --client=claude-code   # installs SKILL.md + MCP entry
 ```
 
+Want to see the product without API keys first:
+
+```bash
+almanac demo
+almanac inspect sqlite-demo
+almanac sources sqlite-demo
+almanac benchmark sqlite-demo
+almanac doctor sqlite-demo
+```
+
+The demo creates a complete offline almanac with curated SQLite facts, source
+review metadata, default tools, contract files, a Skill adapter, and human
+golden benchmark fixtures.
+
 End-user querying happens through the host LLM (Claude Code, Cursor, Claude
 Desktop, …) after `register`. The `almanac` CLI itself is for build and
 management only — there is no built-in `run` orchestrator in v0.1.
@@ -73,11 +87,19 @@ structurally closed.
 ### Capabilities
 
 - **`almanac new <domain>`** — one-shot compile from a domain name.
+- **`almanac demo [id]`** — create a complete offline sample almanac with no
+  API keys required.
 - **`almanac feed <id> <url>`** — incrementally add one source to a
   compiled almanac without re-running the LLM-heavy upstream stages.
   Fetches, extracts, and reindexes in place.
 - **`almanac update <id> --from-stage=NN`** — rewind to any stage and
   re-run the rest. Stage 7 GCs stale tool files from prior runs.
+- **`almanac sources <id>`** — review accepted/rejected sources, trust
+  scores, ingestion modes, and coverage by kind.
+- **`almanac benchmark <id> --init` / `almanac benchmark <id>`** — create
+  editable human golden JSONL fixtures, then run them through the runtime.
+- **`almanac doctor [id]`** — check local runtime, environment keys, artifact
+  health, source coverage, and benchmark status.
 - **`almanac export <id>`** — package a compiled almanac as a
   portable `.tar.gz` archive (≈190 KiB for a 231-fact almanac).
   Unpack anywhere; `almanac serve` works immediately.
@@ -149,6 +171,9 @@ See [CHANGELOG.md](./CHANGELOG.md) for a concise version history.
 The [GitHub Releases](https://github.com/kyaukyuai/almanac/releases)
 page carries the long-form motivation and worked examples for each
 version.
+
+For product-oriented setup, source review, benchmark fixture editing, and
+example CLI output, see [docs/product-guide.md](./docs/product-guide.md).
 
 ## License
 

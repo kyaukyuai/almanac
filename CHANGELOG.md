@@ -11,6 +11,24 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Product onboarding commands.** `almanac demo` now creates a complete
+  offline sample almanac with curated SQLite facts, sources, default tools,
+  contract files, Skill adapter, and human golden benchmark fixtures.
+- **Product-grade inspection and review.** `almanac inspect` now surfaces
+  health, source, fixture, benchmark, issue, and next-action summaries;
+  `almanac sources` prints accepted/rejected source review details.
+- **Human golden benchmark workflow.** `almanac benchmark --init` writes
+  editable JSONL fixtures, and `almanac benchmark` runs them through Stage 12
+  with a non-zero exit on fixture failure.
+- **`almanac doctor`.** Checks local runtime, CLI version, environment keys,
+  root existence, artifact counts, source file status, fixture status, and
+  latest benchmark health.
+- **Product guide.** `docs/product-guide.md` documents the no-key demo,
+  inspection, source review, benchmark, and doctor workflows with CLI
+  transcript examples.
+
 ### Fixed
 
 - **CLI version now derives from `package.json`.** `almanac --version` and

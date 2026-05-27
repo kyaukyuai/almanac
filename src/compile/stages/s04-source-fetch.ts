@@ -5,15 +5,14 @@
  * first matching `Fetcher`. Concatenates per-source `SourceFetchEntry`
  * results into a `SourceFetchManifest`.
  *
- * Persistence (to be wired by the CLI in Stage 7+):
+ * Persistence (wired by the Stage 4 runner):
  *   - one `SourceFetchEntry` per line in `<almanacDir>/sources/manifest.jsonl`
  *   - the full `SourceFetchManifest` in `<almanacDir>/sources/manifest.summary.json`
  *   - raw bytes via `FetchContext.writeRaw` under
  *     `<almanacDir>/sources/raw/<contentHash>.<ext>`
  *
- * **Skeleton only.** The function signature is fixed so callers and tests can
- * be written and type-checked now. The body throws `NotImplementedError`
- * until the per-mode fetchers land.
+ * The pure orchestrator below is shared by the Stage 4 runner and tests; the
+ * concrete fetchers live under `compile/fetchers/`.
  */
 
 import {
