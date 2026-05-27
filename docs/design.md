@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.2.5 shipped · v0.3 plan in §8** · last updated 2026-05-25.
+Status: **v0.3.10 shipped · v0.4 plan in §8** · last updated 2026-05-27.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -692,58 +692,153 @@ The remaining 20 % of failures clusters into two structural areas
 feature-complete — further patches at this stage would only nibble
 at edges. The real lift requires v0.3-class structural work.
 
-### v0.3 main thrust — custom tool ↔ source-mode hygiene
+### v0.3 — **shipped through v0.3.10** (2026-05-26..27)
 
-Both `pragma_lookup` (sqlite) and `lookup_std_item` (Rust) failed
-their positive fixtures with `no-results` for the *same* root
-cause: Stage 6 designed each tool on the assumption of full
-fact-corpus content, while Stage 4 fetched the relevant source in
-`index-only` mode (URL + minimal metadata, no page body). Stage 7
-implemented exactly what was designed — faithfully but uselessly.
+The v0.2.5 cross-domain validation surfaced one named failure mode
+(custom tool ↔ source-mode mismatch) plus 20% residual failures
+that turned out, on closer inspection during v0.3 development, to
+be *eight distinct structural classes*. The eleven point releases
+shipped during v0.3 each closed one class empirically.
 
-Three resolution paths to evaluate, in order of preference:
+#### v0.3.0 — Stage 6 source-mode awareness (the original plan)
 
-1. **Stage 6 awareness.** Feed each approved source's `mode`
-   (`snapshot` vs `index-only`) into the tool-design prompt;
-   require every custom tool to enumerate the `sourceId`s it
-   reads from and refuse designs that depend solely on
-   index-only sources. Such tools must instead be designed
-   around `fetch_official_docs` at runtime.
-2. **Stage 7 fallback wiring.** Inside an LLM-designed tool that
-   currently calls `ctx.knowledge.searchFacts(q)`, auto-emit a
-   fallback path: if the fact search returns empty *and* the
-   tool's source-list contains an index-only entry, call
-   `ctx.fetch.docs(url)` against that source's URL and parse the
-   live page. This is a runtime-level mitigation requiring no
-   prompt change.
-3. **Stage 4 widening.** Default well-known-licensed sources
-   (`doc.rust-lang.org/*`, `sqlite.org/*`, `kubernetes.io/docs/*`,
-   `docs.djangoproject.com/*`) to `snapshot` rather than
-   `index-only`. Curated allowlist or an automated
-   `LICENSE`-detection helper at Stage 2.
+`ToolManifest.sourceDependencies` + Stage 6 prompt v2 awareness of
+each source's mode. Custom tools that depend solely on index-only
+sources are now refused at Stage 6. Stage 6 prompt v3 (v0.3.1)
+adds a pre-computed source-mode summary so the LLM doesn't
+re-derive it from the SourcesFile.
 
-Approach (1) + (2) together is the principled fix; (3) is the
-cheapest near-term reduction.
+This was the originally-planned "main thrust" of v0.3. It
+materialized as v0.3.0–v0.3.1.
 
-### v0.3 supporting thrusts
+#### v0.3.2 — HTTP fetcher fall-through for non-bare-github
+`kind:repo`
 
-- **Vector retrieval** (deferred from v0.2). Addresses terminology
-  gaps where the LLM-extracted fact uses one term but the
-  benchmark fixture or end-user query uses a synonym (e.g.
-  `vdbe` ↔ `virtual database engine`). Plan: `bun:sqlite` + a
-  cheap embedding model (Voyage `voyage-3-lite` default, OpenAI
-  `text-embedding-3-small` optional, local
-  `@xenova/transformers` for air-gapped); reciprocal rank fusion
-  (RRF) of cosine + FTS5 BM25.
-- **HTTP / SSE MCP transport** (deferred from v0.2). Unlocks
-  hosted / multi-tenant scenarios. Runtime-only — no compile-time
+`HttpIndexOnlyFetcher` and `GenericHttpFetcher` no longer reject
+sources with `kind:repo` when the URL is a github.io page or a
+github.com path URL (`/releases`, etc.). Closed two silent Stage 4
+failures from the v0.3.1 Rust smoke.
+
+#### v0.3.3 — GitHub repo snapshot path-desc sort
+
+`GithubRepoFetcher` sorts matched files by path descending before
+`slice(0, SNAPSHOT_MAX_FILES=50)`. The tree API returns paths
+ascending, so for numeric-prefixed paths (`text/0001-...` ..
+`text/3700-...` in rust-lang/rfcs) the previous slice took the
+*oldest* 50 RFCs. v0.3.3 swaps to the newest 50.
+
+#### v0.3.4 + v0.3.6 + v0.3.9 — Stage 7 static validator
+
+A new module `src/compile/stages/s07/static-validator.ts` runs
+between `tsc` and `bun test` in the LLM implementer retry loop.
+Three rules currently:
+
+1. **`detectHardcodedFallbackUrls`** — two-or-more adjacent
+   hardcoded `https?://...` string literals. Catches the v0.3.2
+   `lookup_std_item` Vec-fallback hallucination: an array of
+   fixed URLs the impl tried in sequence, always succeeding at
+   the second-attempt's hardcoded URL.
+2. **`requireSampleUrlInTestCode`** — when the manifest has
+   non-empty `sampleUrls`, the generated test mock must reference
+   at least one of them. Forces the smoke to anchor on documented
+   URLs, so an impl that confabulates a different URL pattern
+   gets caught.
+3. **`detectUnallowedHostInImpl`** — every literal `http(s)://HOST/`
+   in the impl must have `HOST` in `capabilities.network`. The
+   host is checked even when the *path* is template-interpolated
+   (the v0.3.8 case had `https://github.com/.../tag/${ver}` —
+   literal host, templated path).
+
+A new `ImplementationOutcome` variant `validator-failed` carries
+diagnostics back to the next `generate()` call. Stage 7 prompt v1
+gains hard requirements **#9** (no hardcoded URL fallback lists)
+and **#10** (only fetch hosts in `capabilities.network`; exact-match
+semantics, `github.com` ≠ `api.github.com`).
+
+#### v0.3.5 — Stage 11 canonical error-code taxonomy
+
+Stage 11 prompt v3 enumerates the ten canonical `error.code`
+strings Stage 7 tools emit and forbids near-synonyms like
+`invalid-input`. Closes the fixture-vs-impl vocab mismatch class.
+
+#### v0.3.6 + v0.3.7 — `ToolManifest.sampleUrls`
+
+New optional 0–5 array of real documented URLs the tool will
+fetch. Stage 6 populates them (when the tool has network
+capability), and Stage 7's smoke must mock at least one as a 200
+response. v0.3.7 adds anchor-fragment URLs
+(`...struct.Arc.html#method.clone`) for tools whose `inputSchema`
+accepts qualified names (`X::Y`). Closes the
+"impl-builds-wrong-URL-paired-with-matching-wrong-mock" class
+end-to-end.
+
+#### v0.3.8 — Stage 11 `contains` rules split by tool class
+
+Stage 11 prompt v3 distinguishes two regimes:
+
+- `query_facts` / fact-store-reading tools — keep picking
+  substrings from `factSample[i].text`.
+- Custom tools that fetch live — default `contains: []` and rely
+  on the envelope (`ok: true`, `minCitations`, staleness).
+  `contains` may only be used when anchored to a `sampleUrl`
+  substring, an `outputSchema` field name, or the full input
+  identifier.
+
+Documents v0.3.7's `["Residual"]`-for-`Option::Residual` /
+`["race"]`-for-thread-local anti-patterns explicitly.
+
+#### v0.3.10 — Stage 5 tradeoff extraction hint
+
+The `tradeoff` fact type was already in the schema enum but rarely
+emitted. v0.3.10 prompt v1 adds explicit guidance: scan for
+side-by-side comparison sections, "prefer X over Y when …", RFC
+Alternatives sections, `X vs Y` headings. Both sides go into
+`text`; both labels go into `entities`. Empirical:
+1438-fact Rust corpus now 6.1% tradeoff facts (88 / 1438).
+
+Closing the loop downstream — Stage 11 tradeoff-aware fixture
+generation — is a v0.4 candidate.
+
+### Empirical baseline — v0.3.x summary
+
+After eleven point releases:
+
+| domain | latest  | facts | tools (custom) | passed | citationRate | negatives passed |
+|-------:|--------:|------:|---------------:|-------:|-------------:|-----------------:|
+| sqlite |  v0.3.0 |   620 |              2 |  14/15 |         0.90 |              5/5 |
+| Rust   | v0.3.10 |  1438 |              3 |  11/15 |         0.60 |              5/5 |
+
+The Rust pass count fluctuated 11–13/15 across the v0.3.x runs
+because Stage 2 source-discovery is non-deterministic and fixture
+sets diverge. The stable signal: **all 5 negative fixtures pass for
+six consecutive Rust smokes** (v0.3.5 through v0.3.10). Spurious-citation
+hallucinations from the v0.2.x era are structurally closed.
+
+The original v0.3 supporting thrusts (vector retrieval, HTTP/SSE
+transport, auto-refresh, wiki export) were *deferred* to v0.4
+rather than dropped — see below.
+
+### v0.4 — planned
+
+Architectural items deferred from v0.2/v0.3, plus v0.3.10's
+downstream follow-up:
+
+- **Stage 11 tradeoff-aware fixture generation.** Now that the
+  corpus carries tradeoff density (6.1% on Rust), Stage 11 should
+  recognize comparison-shaped tools (`{a, b}` inputs, `whenToUse`
+  text mentioning 'compare' / 'X vs Y') and generate at least one
+  positive fixture drawing on `factSample[]` entities that
+  co-occur in a tradeoff fact. Prompt-only, small.
+- **Vector retrieval** — RRF of FTS5 BM25 + cosine. Voyage
+  `voyage-3-lite` default, OpenAI `text-embedding-3-small`
+  opt-in, local `@xenova/transformers` for air-gapped.
+- **HTTP / SSE MCP transport** — runtime only, no compile-time
   changes.
-- **Auto-refresh scheduler** (deferred from v0.2). Cron / launchd
-  helper that runs `almanac update` against TTL-stale sources.
-- **Wiki view export** (deferred from v0.2). HTML bundle for
-  human-readable `inspect` flows.
+- **Auto-refresh scheduler** — cron / launchd helper that runs
+  `almanac update` against TTL-stale sources.
+- **Wiki view export** — human-readable inspection bundle.
 
-### v0.4+ (long-tail)
+### v0.5+ (long-tail)
 
 - Slack adapter
 - Almanac marketplace
@@ -755,10 +850,9 @@ cheapest near-term reduction.
 
 ## 9. Open questions / next steps
 
-The original v0.1 deliverables listed here have all shipped
-(Stage 1 prompt, Stage 6 prompt, Stage 7 LLM implementer,
-`almanac-core` types, `savant-forge` → `almanac` rename). Active
-questions for v0.3:
+The original v0.1 deliverables listed here have all shipped, as
+have the v0.3-era structural fixes (eleven point releases,
+documented in §8 above). Active questions carrying into v0.4:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
@@ -770,17 +864,31 @@ questions for v0.3:
 2. **Hybrid retrieval recipe.** RRF (parameter-free, well-cited)
    vs a weighted linear blend (tunable per domain). Start with
    RRF; promote to weighted only if benchmark signals demand it.
-3. **Runtime tool budget under v0.3.** Adding live-fetch fallback
-   into LLM-designed tools (thrust 2 above) increases per-call
-   latency and may push tools beyond the current 4-default +
-   ≤3-custom envelope. Decide whether to raise the budget or
-   compress via richer default tools.
-4. **Snapshot allowlist.** Curated list of trusted hosts whose
+3. **Snapshot allowlist.** Curated list of trusted hosts whose
    docs default to `snapshot` rather than `index-only`. Needs to
    be additive (never *block* a source, only *upgrade* the
-   default mode) and explicit in `sources.json`.
-5. **Stage 11 `intent` enum coverage.** The Rust smoke produced
-   one schema retry because the LLM emitted `"diagnose-error"`,
-   which is not in the canonical six-value enum. Either
-   broaden the enum (`debug` / `diagnose`) or tighten the
-   prompt's enum framing.
+   default mode) and explicit in `sources.json`. Partially
+   relieved by v0.3.0 source-mode awareness but the curated list
+   is still missing.
+4. **Stage 11 `intent` enum coverage.** Stage 11 retries from
+   intermittent enum-mismatch emissions (`diagnose-error`,
+   `not-found` as a `refusalReason`, etc.) persisted into
+   v0.3.x. The canonical enums work but the prompt's
+   enum-framing is still weak enough that the LLM occasionally
+   reaches for a near-synonym. Candidate: explicit
+   "do-not-substitute" lists per enum, similar to the v0.3.5
+   error-code taxonomy fix.
+5. **Stage 2 source-discovery non-determinism.** The recurring
+   ±2 pass-count swing across Rust smokes traces back to Stage 2
+   picking partly different source sets each run. Stabilizing
+   this (e.g. canonical source sets per domain after the first
+   approval, or a seed-pinning option) would make benchmark
+   comparisons cross-version more meaningful.
+6. **Stage 7 prompt-vs-validator division of labor.** Through
+   v0.3.x, every new validator rule has been paired with a
+   prompt hard-requirement so the LLM avoids the pattern on the
+   first attempt (and the validator is a structural backstop).
+   Empirically, recent smokes have shown 0 `validator-failed`
+   events — the prompt carries the work. Worth deciding whether
+   the validator is permanent infrastructure or a transition aid
+   that can retire once the prompts mature.

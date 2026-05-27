@@ -41,27 +41,34 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.2.6.** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.3.10.** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs
 end-to-end against both mocked and real Anthropic LLMs. The runtime
 (`almanac serve`) is wired into the MCP ecosystem; `register`
 configures Claude Code / Claude Desktop / Cursor / Codex.
 
+The v0.3 series closed eight structural failure classes that surfaced
+in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
+for the per-release breakdown.
+
 ### Cross-domain benchmark
 
 Each almanac is shipped with its own LLM-authored benchmark set
-(Stage 11) executed end-to-end through the runtime (Stage 12). Two
+(Stage 11) executed end-to-end through the runtime (Stage 12). Latest
 real-Anthropic smokes at `--depth=standard`:
 
-| domain | facts | tools (custom) | passed |  citationRate |
-|-------:|------:|---------------:|-------:|--------------:|
-| sqlite |   620 |              2 |  12/15 |          0.70 |
-| Rust   |   779 |              2 |  13/15 |          0.80 |
+| domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
+|-------:|--------:|------:|---------------:|-------:|-------------:|-----------------:|
+| sqlite |  v0.3.0 |   620 |              2 |  14/15 |         0.90 |              5/5 |
+| Rust   | v0.3.10 |  1438 |              3 |  11/15 |         0.60 |              5/5 |
 
-The remaining 20 % of failures cluster into two structural areas
-(custom tool ↔ source-mode mismatch, and live-web variance) — see
-[`docs/design.md §8`](./docs/design.md) for the v0.3 plan.
+Rust's pass count fluctuates ±2 across v0.3.x runs due to Stage 2
+source-discovery non-determinism (different source sets pick up
+different fixture topics). The signal that *is* stable across all
+six recent Rust smokes: **all 5 negative fixtures pass.** The
+spurious-citation hallucinations that v0.2.x suffered from are
+structurally closed.
 
 ### Capabilities
 
@@ -83,20 +90,57 @@ The remaining 20 % of failures cluster into two structural areas
   `claude-desktop`, `cursor`, and `codex` (TOML config support via
   [`smol-toml`](https://github.com/squirrelchat/smol-toml)).
 - **GitHub repo snapshot** mirrors `ingestion.scope`-matched files
-  from permissively-licensed repos into `sources/raw/`.
+  from permissively-licensed repos into `sources/raw/`. Path-desc
+  sort favors newer numeric-prefixed paths (v0.3.3 — newest RFCs
+  / KEPs / SLEPs land in the corpus instead of the oldest).
+- **Stage 7 static validator** (v0.3.4 + v0.3.6 + v0.3.9) rejects
+  three classes of LLM-generated implementer code before they ship:
+  hardcoded URL fallback arrays, test mocks that don't reference
+  any documented `sampleUrl`, and impls that fetch hosts outside
+  `capabilities.network`.
+- **`ToolManifest.sampleUrls`** (v0.3.6 + v0.3.7) — Stage 6
+  populates real documented URLs (including anchor-fragment URLs
+  for tools accepting qualified names like `Arc::clone`). Stage 7's
+  generated smoke must mock at least one. Closes the
+  wrong-URL-template-paired-with-wrong-mock failure class
+  end-to-end.
 - **GitHub Actions CI** runs typecheck + the full test suite on
   every push and PR.
 
-### v0.3 — deferred / planned
+### v0.3 — shipped (2026-05-26..27)
 
-- **Custom tool ↔ source-mode hygiene** (the v0.3 main thrust;
-  closes the dominant remaining failure mode in both smokes).
-- Vector retrieval (FTS5 only in v0.2; embeddings come next).
-- HTTP / SSE MCP transport (stdio only today).
+Eleven point releases (v0.3.0 through v0.3.10) closed the following
+structural failure classes empirically validated across Rust smokes:
+
+1. Stage 4 silent fetch failures (v0.3.1, v0.3.2)
+2. Stage 4 github snapshot path-asc bias toward oldest files
+   (v0.3.3)
+3. Stage 7 hardcoded URL fallback array hallucination (v0.3.4)
+4. Stage 11 fixture error-code vocab mismatch (v0.3.5)
+5. Stage 7 wrong URL template for bare item names (v0.3.6)
+6. Stage 7 wrong URL template for qualified names like
+   `Arc::clone` (v0.3.7)
+7. Stage 11 `contains` substring-guessing for live-fetch tools
+   (v0.3.8)
+8. Stage 7 fetching hosts outside `capabilities.network` (v0.3.9)
+9. Stage 5 atomic-only extraction missing X-vs-Y tradeoff facts
+   (v0.3.10 — corpus tradeoff density 6.1%)
+
+The original v0.3 architectural thrusts (vector retrieval, HTTP
+transport, refresh, wiki) were deferred to v0.4 in favor of the
+structural fixes that the v0.2.5 smokes empirically motivated.
+
+### v0.4 — planned
+
+- Vector retrieval — RRF of FTS5 BM25 + cosine, with Voyage /
+  OpenAI / local embedding options.
+- HTTP / SSE MCP transport — stdio only today.
 - Auto-refresh scheduler (cron / launchd helper).
-- Wiki view export (human-readable inspection surface).
+- Wiki view export.
+- Stage 11 tradeoff-aware fixture generation (turn the v0.3.10
+  corpus density into measurable fixture coverage).
 
-See [`docs/design.md §8.4–§9`](./docs/design.md) for the worked
+See [`docs/design.md §8.5–§9`](./docs/design.md) for the worked
 plan and open questions.
 
 ## Changelog
