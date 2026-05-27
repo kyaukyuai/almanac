@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.9] — 2026-05-27
+
 ### Added
 
 - **Stage 7 static validator rule #3 — `detectUnallowedHostInImpl`.**
