@@ -11,6 +11,28 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage 5 prompt v1 — actively extract `tradeoff` facts from
+  X-vs-Y patterns.** Adds explicit guidance on what to scan for
+  (side-by-side comparison sections, "prefer X over Y when …",
+  RFC Alternatives sections, `X vs Y` headings) and requires that
+  the `entities` array list both sides so comparison tools at the
+  fact-store can find paired material. Also notes that
+  `fast-live-dominant` chunks may hide stable X-vs-Y claims —
+  extract those rather than skipping the whole chunk.
+
+### Why
+
+The v0.3.9 Rust smoke had `compare_async_runtimes('tokio',
+'async-std')` return `no-results`. The Rust corpus has tons of
+async-runtime comparison content in RFCs, blog posts, and the
+async-book — but Stage 5 atomizes content into single-side claims,
+so a query for "tokio vs async-std" finds individual statements
+about each but no paired comparison. Teaching Stage 5 to recognize
+and capture the comparison as a single `tradeoff` fact closes the
+loop for downstream comparison tools.
+
 ## [0.3.9] — 2026-05-27
 
 ### Added
