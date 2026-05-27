@@ -11,6 +11,20 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Changed
+
+- **Stage 11 prompt v3 — `contains` rules split by tool class.** The
+  existing `factSample[i].text` guidance now applies explicitly to
+  `query_facts` / fact-store-reading tools only. A new section for
+  custom tools that fetch live recommends
+  `expectedShape: "match-outputSchema"` as the default, and lists the
+  three reliable anchors when `contains` is unavoidable: substring of
+  any `sampleUrl`, an outputSchema field name the impl always
+  populates, or the full input identifier (with a caveat that impls
+  may normalize/split it). Documents the two v0.3.7 failure modes
+  (`contains: ["Residual"]` for `Option::Residual`, `contains:
+  ["race"]` for thread-local-race) as anti-patterns.
+
 ## [0.3.7] — 2026-05-27
 
 ### Changed
