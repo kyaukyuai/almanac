@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.8] — 2026-05-27
+
 ### Changed
 
 - **Stage 11 prompt v3 — `contains` rules split by tool class.** The

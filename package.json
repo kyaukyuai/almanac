@@ -1,6 +1,6 @@
 {
   "name": "almanac",
-  "version": "0.3.7",
+  "version": "0.3.8",
   "private": true,
   "type": "module",
   "description": "Compile a domain almanac. Always-fresh. Consumed via MCP and Claude Code Skill.",
