@@ -17,6 +17,8 @@ import {
   listAlmanacs,
   manifestPath,
   readCompileState,
+  readImplementedToolCount,
+  readKnowledgeIndexManifest,
   readManifest,
   writeCompileState,
   writeManifest,
@@ -185,5 +187,81 @@ describe("path helpers", () => {
     expect(knowledgeIndexManifestPath(dir)).toBe(
       join(dir, "knowledge", "index-manifest.json"),
     );
+  });
+});
+
+describe("readKnowledgeIndexManifest", () => {
+  test("fills v0.2/v0.3 legacy byType counters added later", async () => {
+    const dir = almanacDirPath(workDir, "legacy");
+    await ensureAlmanacLayout(dir);
+    await writeFile(
+      knowledgeIndexManifestPath(dir),
+      JSON.stringify(
+        {
+          schemaVersion: "0.1.0",
+          almanacId: "legacy",
+          dbRelPath: "knowledge/almanac.sqlite",
+          factCount: 2,
+          counts: {
+            byClass: { static: 1, slow: 1 },
+            byType: {
+              fact: 1,
+              definition: 1,
+              procedure: 0,
+              opinion: 0,
+              reference: 0,
+            },
+          },
+          builtAt: "2026-05-08T12:00:00.000Z",
+          sqliteVersion: "3.51.0",
+          factCorpusHash: "a".repeat(64),
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const manifest = await readKnowledgeIndexManifest(dir);
+    expect(manifest?.counts.byType).toEqual({
+      fact: 1,
+      definition: 1,
+      procedure: 0,
+      opinion: 0,
+      reference: 0,
+      principle: 0,
+      heuristic: 0,
+      tradeoff: 0,
+      framework: 0,
+    });
+  });
+});
+
+describe("readImplementedToolCount", () => {
+  test("counts enabled tool manifest/impl pairs and ignores tests/disabled/incomplete", async () => {
+    const dir = almanacDirPath(workDir, "tools");
+    await ensureAlmanacLayout(dir);
+    const toolsDir = join(dir, "tools");
+    await writeFile(
+      join(toolsDir, "query_facts.json"),
+      JSON.stringify({ disabled: false }),
+      "utf8",
+    );
+    await writeFile(join(toolsDir, "query_facts.ts"), "export default {}", "utf8");
+    await writeFile(
+      join(toolsDir, "disabled_tool.json"),
+      JSON.stringify({ disabled: true }),
+      "utf8",
+    );
+    await writeFile(join(toolsDir, "disabled_tool.ts"), "export default {}", "utf8");
+    await writeFile(
+      join(toolsDir, "manifest_only.json"),
+      JSON.stringify({ disabled: false }),
+      "utf8",
+    );
+    await writeFile(join(toolsDir, "impl_only.ts"), "export default {}", "utf8");
+    await writeFile(join(toolsDir, "query_facts.test.ts"), "test()", "utf8");
+
+    await expect(readImplementedToolCount(dir)).resolves.toBe(1);
   });
 });

@@ -15,9 +15,9 @@
  *   }
  *
  * Wire-format schemas for `ToolManifest`, `ToolResult`, and
- * `ResourceDescriptor` live in `./types.ts`. This file is the *interface*
- * layer: zero zod, zero runtime imports, no fs/network. The concrete
- * implementation lives in `src/serve/runtime.ts` (Stage 7+).
+ * `ResourceDescriptor` live in `./types.ts`. This file is the interface
+ * layer; the concrete filesystem-backed implementation lives in
+ * `src/serve/runtime.ts`.
  */
 
 import type {
@@ -229,7 +229,7 @@ export function computeStaleness(
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
-// Skeleton factory — concrete impl lands in `src/serve/runtime.ts`
+// Runtime factory
 // ──────────────────────────────────────────────────────────────────────────────
 
 export interface AlmanacRuntimeOptions {
@@ -250,17 +250,12 @@ export interface AlmanacRuntimeOptions {
 /**
  * Construct an `AlmanacRuntime` for a compiled almanac on disk.
  *
- * **Skeleton only.** Throws until the concrete implementation lands in
- * `src/serve/runtime.ts` (Stage 7+, when tools/loader/resource-loader exist).
- * The signature is fixed so adapter code can be written and type-checked
- * against it now.
+ * This dynamically imports the concrete serve-layer implementation so callers
+ * using the core entrypoint do not hit the old skeleton stub.
  */
-export function createAlmanacRuntime(
+export async function createAlmanacRuntime(
   options: AlmanacRuntimeOptions,
-): AlmanacRuntime {
-  void options;
-  throw new Error(
-    "createAlmanacRuntime: not implemented. " +
-      "The concrete runtime lives in src/serve/runtime.ts (Stage 7+).",
-  );
+): Promise<AlmanacRuntime> {
+  const { createAlmanacRuntimeAsync } = await import("../serve/runtime.ts");
+  return createAlmanacRuntimeAsync(options);
 }

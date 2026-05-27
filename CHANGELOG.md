@@ -11,6 +11,18 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Fixed
+
+- **CLI version now derives from `package.json`.** `almanac --version` and
+  MCP server metadata no longer drift from the package release version.
+- **`createAlmanacRuntime()` now delegates to the concrete runtime.** The
+  public core factory no longer exposes the old skeleton-only throw path.
+- **Legacy artifact counts render from actual artifacts.** `almanac list`
+  and `almanac inspect` now prefer `knowledge/index-manifest.json` and
+  implemented tool pairs when old manifests still report `0 / 0`, while
+  showing the stale manifest counts explicitly.
+- **Local `.antigravitycli/` metadata is ignored.**
+
 ## [0.3.10] — 2026-05-27
 
 ### Changed

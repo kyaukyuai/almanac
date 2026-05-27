@@ -2,12 +2,16 @@
  * Tests for `src/core/runtime.ts`:
  *   - `computeStaleness` rules across the 4 volatility classes
  *   - error classes
- *   - `createAlmanacRuntime` skeleton stub
+ *   - `createAlmanacRuntime` public factory
  *
  * The interfaces themselves (`AlmanacRuntime`, `ToolContext`, `KnowledgeReader`,
- * `ToolModule`) are zero-runtime — TypeScript compilation (`bun typecheck`) is
- * the test for those.
+ * `ToolModule`) are type-level contracts — TypeScript compilation
+ * (`bun typecheck`) is the test for those.
  */
+
+import { randomUUID } from "node:crypto";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { describe, expect, test } from "bun:test";
 
@@ -84,10 +88,11 @@ describe("error classes", () => {
   });
 });
 
-describe("createAlmanacRuntime (skeleton)", () => {
-  test("throws a clear 'not implemented' error", () => {
-    expect(() => createAlmanacRuntime({ almanacDir: "/tmp/x" })).toThrow(
-      /not implemented/i,
-    );
+describe("createAlmanacRuntime", () => {
+  test("delegates to the concrete async runtime factory", async () => {
+    const missingDir = join(tmpdir(), `almanac-missing-${randomUUID()}`);
+    await expect(
+      createAlmanacRuntime({ almanacDir: missingDir }),
+    ).rejects.toThrow(/almanac directory does not exist/);
   });
 });

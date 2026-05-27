@@ -88,6 +88,7 @@ import {
   ensureAlmanacLayout,
   listAlmanacs,
   readCompileState,
+  readImplementedToolCount,
   readKnowledgeIndexManifest,
   readManifest,
   writeCompileState,
@@ -108,6 +109,7 @@ import {
   type CompileOptions,
   type CompileState,
   type FreshnessProfileId,
+  type KnowledgeIndexManifest,
   type StageId,
 } from "./core/types.ts";
 import { createAnthropicProvider } from "./llm/anthropic.ts";
@@ -122,7 +124,57 @@ import {
 } from "./manage/export.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
-const FORGER_VERSION = "0.2.2";
+function readForgerVersion(): string {
+  const raw = JSON.parse(
+    readFileSync(new URL("../package.json", import.meta.url), "utf8"),
+  ) as { version?: unknown };
+  if (typeof raw.version !== "string" || raw.version.length === 0) {
+    throw new Error("package.json must contain a non-empty version string");
+  }
+  return raw.version;
+}
+
+const FORGER_VERSION = readForgerVersion();
+
+interface DisplayCounts {
+  facts: number;
+  tools: number;
+  manifestFacts: number;
+  manifestTools: number;
+  toolsReadable: boolean;
+}
+
+async function readDisplayCounts(
+  almanacDir: string,
+  manifest: AlmanacManifest,
+  knowledge?: KnowledgeIndexManifest | null,
+): Promise<DisplayCounts> {
+  const knowledgeManifest =
+    knowledge === undefined
+      ? await readKnowledgeIndexManifest(almanacDir)
+      : knowledge;
+  let toolCount: number | null = null;
+  try {
+    toolCount = await readImplementedToolCount(almanacDir);
+  } catch {
+    // Keep list/inspect usable even if a legacy tool manifest is malformed.
+  }
+
+  return {
+    facts: knowledgeManifest?.factCount ?? manifest.factCount,
+    tools: toolCount ?? manifest.toolCount,
+    manifestFacts: manifest.factCount,
+    manifestTools: manifest.toolCount,
+    toolsReadable: toolCount !== null,
+  };
+}
+
+function countsMismatch(counts: DisplayCounts): boolean {
+  return (
+    counts.facts !== counts.manifestFacts ||
+    counts.tools !== counts.manifestTools
+  );
+}
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -557,19 +609,31 @@ async function cmdList(opts: ListOptions): Promise<void> {
     return;
   }
   // Print a compact table.
-  const rows = items.map((it) => ({
-    id: it.almanacId,
-    name: it.manifest.displayName,
-    facts: it.manifest.factCount,
-    tools: it.manifest.toolCount,
-    profile: it.manifest.freshnessProfileId,
-    compiledAt: it.manifest.compiledAt,
-  }));
+  const rows = await Promise.all(
+    items.map(async (it) => {
+      const counts = await readDisplayCounts(it.almanacDir, it.manifest);
+      return {
+        id: it.almanacId,
+        name: it.manifest.displayName,
+        facts:
+          counts.facts !== counts.manifestFacts
+            ? `${counts.facts}*`
+            : String(counts.facts),
+        tools:
+          counts.tools !== counts.manifestTools
+            ? `${counts.tools}*`
+            : String(counts.tools),
+        profile: it.manifest.freshnessProfileId,
+        compiledAt: it.manifest.compiledAt,
+        counts,
+      };
+    }),
+  );
   const widths = {
     id: Math.max(2, ...rows.map((r) => r.id.length)),
     name: Math.max(4, ...rows.map((r) => r.name.length)),
-    facts: 6,
-    tools: 6,
+    facts: Math.max(6, ...rows.map((r) => r.facts.length)),
+    tools: Math.max(6, ...rows.map((r) => r.tools.length)),
     profile: Math.max(7, ...rows.map((r) => r.profile.length)),
     compiledAt: 24,
   };
@@ -580,8 +644,17 @@ async function cmdList(opts: ListOptions): Promise<void> {
   process.stdout.write("-".repeat(header.length) + "\n");
   for (const r of rows) {
     process.stdout.write(
-      `${pad(r.id, widths.id)}  ${pad(r.name, widths.name)}  ${pad(String(r.facts), widths.facts)}  ${pad(String(r.tools), widths.tools)}  ${pad(r.profile, widths.profile)}  ${pad(r.compiledAt, widths.compiledAt)}\n`,
+      `${pad(r.id, widths.id)}  ${pad(r.name, widths.name)}  ${pad(r.facts, widths.facts)}  ${pad(r.tools, widths.tools)}  ${pad(r.profile, widths.profile)}  ${pad(r.compiledAt, widths.compiledAt)}\n`,
     );
+  }
+  const mismatched = rows.filter((r) => countsMismatch(r.counts));
+  if (mismatched.length > 0) {
+    process.stdout.write("\n* shown counts are actual filesystem/index counts; manifest differs:\n");
+    for (const r of mismatched) {
+      process.stdout.write(
+        `  ${r.id}: manifest facts/tools ${r.counts.manifestFacts} / ${r.counts.manifestTools}, actual ${r.counts.facts} / ${r.counts.tools}\n`,
+      );
+    }
   }
 }
 
@@ -598,10 +671,15 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   const manifest = await readManifest(dir);
   const state = await readCompileState(dir);
   const knowledge = await readKnowledgeIndexManifest(dir);
+  const counts = await readDisplayCounts(dir, manifest, knowledge);
 
   if (opts.json) {
     process.stdout.write(
-      JSON.stringify({ almanacDir: dir, manifest, state, knowledge }, null, 2) + "\n",
+      JSON.stringify(
+        { almanacDir: dir, manifest, state, knowledge, counts },
+        null,
+        2,
+      ) + "\n",
     );
     return;
   }
@@ -611,7 +689,15 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   process.stdout.write(`  domain         ${manifest.domain}\n`);
   process.stdout.write(`  version        ${manifest.version}\n`);
   process.stdout.write(`  profile        ${manifest.freshnessProfileId}\n`);
-  process.stdout.write(`  facts/tools    ${manifest.factCount} / ${manifest.toolCount}\n`);
+  process.stdout.write(`  facts/tools    ${counts.facts} / ${counts.tools}\n`);
+  if (countsMismatch(counts)) {
+    process.stdout.write(
+      `  manifest       facts/tools ${counts.manifestFacts} / ${counts.manifestTools}\n`,
+    );
+  }
+  if (!counts.toolsReadable) {
+    process.stdout.write("  tools          count unavailable; using manifest value\n");
+  }
   process.stdout.write(`  bootstrapped   ${manifest.bootstrappedAt}\n`);
   process.stdout.write(`  compiled       ${manifest.compiledAt}\n`);
   process.stdout.write(`  forger         ${manifest.forgerVersion}\n`);

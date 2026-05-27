@@ -72,6 +72,10 @@ export function knowledgeIndexManifestPath(almanacDir: string): string {
   return join(almanacDir, "knowledge", "index-manifest.json");
 }
 
+export function toolsDirPath(almanacDir: string): string {
+  return join(almanacDir, "tools");
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Directory layout
 // ──────────────────────────────────────────────────────────────────────────────
@@ -139,7 +143,76 @@ export async function readKnowledgeIndexManifest(
   const path = knowledgeIndexManifestPath(almanacDir);
   if (!existsSync(path)) return null;
   const raw = await readJsonOrThrow<unknown>(path);
-  return KnowledgeIndexManifestSchema.parse(raw);
+  return KnowledgeIndexManifestSchema.parse(normalizeKnowledgeIndexManifest(raw));
+}
+
+function normalizeKnowledgeIndexManifest(raw: unknown): unknown {
+  if (raw === null || typeof raw !== "object" || Array.isArray(raw)) {
+    return raw;
+  }
+  const manifest = raw as Record<string, unknown>;
+  const counts = manifest["counts"];
+  if (counts === null || typeof counts !== "object" || Array.isArray(counts)) {
+    return raw;
+  }
+  const countsObj = counts as Record<string, unknown>;
+  const byType = countsObj["byType"];
+  if (byType === null || typeof byType !== "object" || Array.isArray(byType)) {
+    return raw;
+  }
+
+  return {
+    ...manifest,
+    counts: {
+      ...countsObj,
+      byType: {
+        fact: 0,
+        definition: 0,
+        procedure: 0,
+        opinion: 0,
+        reference: 0,
+        principle: 0,
+        heuristic: 0,
+        tradeoff: 0,
+        framework: 0,
+        ...(byType as Record<string, unknown>),
+      },
+    },
+  };
+}
+
+export async function readImplementedToolCount(
+  almanacDir: string,
+): Promise<number> {
+  const dir = toolsDirPath(almanacDir);
+  if (!existsSync(dir)) return 0;
+  const entries = await readdir(dir);
+  const jsonNames = new Set<string>();
+  const implNames = new Set<string>();
+
+  for (const e of entries) {
+    if (e.endsWith(".test.ts") || e.endsWith(".test.js")) continue;
+    if (e.endsWith(".json")) {
+      jsonNames.add(e.slice(0, -".json".length));
+    } else if (e.endsWith(".ts")) {
+      implNames.add(e.slice(0, -".ts".length));
+    } else if (e.endsWith(".js")) {
+      implNames.add(e.slice(0, -".js".length));
+    }
+  }
+
+  let count = 0;
+  for (const name of jsonNames) {
+    if (!implNames.has(name)) continue;
+    const raw = await readJsonOrThrow<unknown>(join(dir, `${name}.json`));
+    const disabled =
+      raw !== null &&
+      typeof raw === "object" &&
+      !Array.isArray(raw) &&
+      (raw as Record<string, unknown>)["disabled"] === true;
+    if (!disabled) count += 1;
+  }
+  return count;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
