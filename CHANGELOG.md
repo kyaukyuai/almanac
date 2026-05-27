@@ -11,6 +11,34 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Stage 7 static validator rule #3 — `detectUnallowedHostInImpl`.**
+  Scans the generated impl for `http(s)://HOST/...` string literals
+  and rejects when any literal `HOST` is not in
+  `manifest.capabilities.network`. The host is checked even when the
+  *path* is template-interpolated (the v0.3.8 empirical case had
+  `https://github.com/rust-lang/rust/releases/tag/${ver}` — literal
+  host, templated path). Skipped when the *host* itself is interpolated
+  (`https://${host}/...`) or when allowedHosts is empty (back-compat).
+- Stage 7 prompt v1 hard requirement #10 — "only fetch hosts in
+  capabilities.network. Note exact-match: `github.com` and
+  `api.github.com` are distinct."
+
+### Why
+
+The v0.3.8 Rust smoke had `version_changelog` fetch
+`https://github.com/rust-lang/rust/releases/tag/...` while
+`manifest.capabilities.network = ["api.github.com",
+"raw.githubusercontent.com"]`. The runtime correctly threw
+`NetworkNotAllowedError`. The smoke mock had no allowlist
+restriction, so the unit test passed; the runtime call failed.
+Static analysis on `:Stage 7 impl source catches this before ship.
+
+Cross-version empirical scan: 16 historical custom tools (sqlite +
+rust × multiple versions). 15 pass clean, 1 flagged — exactly the
+v0.3.8 `version_changelog`. **0 false positives.**
+
 ## [0.3.8] — 2026-05-27
 
 ### Changed

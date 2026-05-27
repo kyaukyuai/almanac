@@ -26,6 +26,19 @@
  *      Empirical: v0.3.4 rust `lookup_std_item("std::sync::Arc")` →
  *      not-found (tried `/std/sync/Arc/...` instead of `/std/sync/struct.Arc.html`).
  *
+ *   3. Impl fetches a host not in `capabilities.network`. The smoke mocks
+ *      `ctx.fetch` so any host appears to work at smoke time, but the
+ *      runtime wraps `ctx.fetch` with an allowlist check and denies hosts
+ *      outside the manifest's declared `network`. The impl looks correct
+ *      to the smoke and fails at first real call.
+ *      Rule: `detectUnallowedHostInImpl` flags any `http(s)://HOST/...`
+ *      string literal in the impl whose `HOST` is not in
+ *      `manifest.capabilities.network`. Template-interpolated URLs are
+ *      skipped (the host may be input-driven).
+ *      Empirical: v0.3.8 rust `version_changelog` fetched
+ *      `https://github.com/...` while allowlist was
+ *      `[api.github.com, raw.githubusercontent.com]`.
+ *
  * Detection contract — high precision, low recall. We accept that some
  * hallucinations slip through; we won't reject legitimate code.
  */
@@ -140,6 +153,65 @@ export function requireSampleUrlInTestCode(input: {
   };
 }
 
+const URL_LITERAL_SINGLE_RE = /(['"`])(https?:\/\/[^'"`\n]+?)\1/g;
+
+/**
+ * Reject impls that fetch hosts outside the manifest's declared
+ * `capabilities.network` allowlist. The runtime enforces this at request
+ * time (throwing `NetworkNotAllowedError`); this static check catches the
+ * miss before the impl ships.
+ *
+ * Detection: scan the impl for `'http(s)://HOST/...'` string literals,
+ * extract `HOST`, and verify it appears in `allowedHosts`. Template-
+ * interpolated URLs (`${...}`) are skipped because the host may be
+ * input-driven and we have no way to know what value it resolves to.
+ *
+ * Skipped (returns `ok:true`) when:
+ *   - `allowedHosts.length === 0` — the tool has no network capability
+ *     (a separate concern; the runtime won't even inject `ctx.fetch`).
+ */
+export function detectUnallowedHostInImpl(input: {
+  code: string;
+  allowedHosts: readonly string[];
+}): StaticValidationResult {
+  if (input.allowedHosts.length === 0) return { ok: true };
+  const allowed = new Set(input.allowedHosts);
+  const violations = new Map<string, string>(); // host -> sample URL
+  for (const m of input.code.matchAll(URL_LITERAL_SINGLE_RE)) {
+    const url = m[2]!;
+    // Extract just the host portion: the substring after `://` up to the
+    // first `/`, `?`, `#`, `$` (start of template interpolation), or
+    // whitespace. We check the *host* even when the *path* has
+    // `${...}` interpolation — Stage 6's allowlist is host-only, and
+    // a literal host with a templated path is the v0.3.8 empirical case
+    // (`https://github.com/rust-lang/rust/releases/tag/${ver}`).
+    const afterScheme = url.slice(url.indexOf("://") + 3);
+    const hostMatch = afterScheme.match(/^([^/?#$\s]+)/);
+    if (!hostMatch) continue;
+    const host = hostMatch[1]!;
+    if (host.includes("${")) continue; // host itself is interpolated
+    if (!allowed.has(host) && !violations.has(host)) {
+      violations.set(host, url);
+    }
+  }
+  if (violations.size === 0) return { ok: true };
+  const hostList = Array.from(violations.keys()).join(", ");
+  const allowedList = input.allowedHosts.join(", ");
+  return {
+    ok: false,
+    diagnostics:
+      `Stage 7 static validator: impl fetches host(s) outside the manifest's ` +
+      `capabilities.network allowlist. Found: [${hostList}]. Declared ` +
+      `allowlist: [${allowedList}]. At runtime, ctx.fetch wraps an allowlist ` +
+      `check and denies non-allowlisted hosts with NetworkNotAllowedError — ` +
+      `the impl will return ok:false on first real call. Either build the ` +
+      `URL using an allowlisted host (e.g., \`api.github.com\` for the ` +
+      `GitHub REST API, not \`github.com\`), or — if the offending host is ` +
+      `genuinely required — surface that at Stage 6 instead (you cannot ` +
+      `add hosts here; the manifest is upstream).`,
+  };
+}
+
 /**
  * Run all static checks on a generated tool. Returns the first failure if any;
  * `{ ok: true }` if all pass. The surface accepts the full input each rule
@@ -149,6 +221,7 @@ export function validateGeneratedTool(input: {
   code: string;
   testCode: string;
   sampleUrls?: readonly string[];
+  allowedHosts?: readonly string[];
 }): StaticValidationResult {
   const r1 = detectHardcodedFallbackUrls(input.code);
   if (!r1.ok) return r1;
@@ -157,5 +230,10 @@ export function validateGeneratedTool(input: {
     sampleUrls: input.sampleUrls ?? [],
   });
   if (!r2.ok) return r2;
+  const r3 = detectUnallowedHostInImpl({
+    code: input.code,
+    allowedHosts: input.allowedHosts ?? [],
+  });
+  if (!r3.ok) return r3;
   return { ok: true };
 }

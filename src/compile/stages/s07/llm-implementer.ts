@@ -209,6 +209,7 @@ export class LlmImplementer implements ToolImplementer {
         code: generated.code,
         testCode: generated.testCode,
         sampleUrls: manifest.sampleUrls,
+        allowedHosts: manifest.capabilities.network,
       });
       if (!validatorResult.ok) {
         attempts.push(
