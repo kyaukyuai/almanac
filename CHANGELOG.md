@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.3.7] — 2026-05-27
+
 ### Changed
 
 - **Stage 6 prompt v3 — anchor-fragment `sampleUrls` for tools that
