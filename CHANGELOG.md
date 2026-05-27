@@ -35,6 +35,9 @@ examples for each version. This file is the concise index.
 
 ### Fixed
 
+- **CI checkout action updated to Node 24-capable major.** GitHub Actions now
+  uses `actions/checkout@v6` to avoid the Node.js 20 action runtime
+  deprecation warning.
 - **CLI version now derives from `package.json`.** `almanac --version` and
   MCP server metadata no longer drift from the package release version.
 - **`createAlmanacRuntime()` now delegates to the concrete runtime.** The
