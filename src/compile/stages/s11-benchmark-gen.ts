@@ -70,6 +70,8 @@ export const STAGE11_DEFAULT_MAX_ATTEMPTS = 3;
  * the ~6 KB ToolManifest payload.
  */
 export const STAGE11_DEFAULT_FACT_SAMPLE_SIZE = 60;
+export const STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES = 8;
+export const STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES = 4;
 
 export const STAGE11_OUTPUT_REL_PATH = ".compile/stage11-output.json";
 export const POSITIVE_JSONL_REL_PATH = "tests/positive.jsonl";
@@ -205,17 +207,91 @@ function preflightFailures(report: BenchmarkReport): BenchmarkReport["results"] 
   return report.results.filter((r) => r.status !== "pass");
 }
 
+export function isPreflightSafeToolManifest(manifest: ToolManifest): boolean {
+  return (
+    manifest.knowledgeUsage.facts === true &&
+    manifest.capabilities.network.length === 0 &&
+    manifest.capabilities.subprocess.length === 0 &&
+    manifest.volatilityClass !== "fast" &&
+    manifest.volatilityClass !== "live"
+  );
+}
+
+export interface PreflightBenchmarkSetPlan {
+  set: BenchmarkSet | null;
+  includedFixtureIds: string[];
+  skippedFixtureIds: string[];
+}
+
+export function buildPreflightBenchmarkSet(
+  set: BenchmarkSet,
+  manifests: readonly ToolManifest[],
+): PreflightBenchmarkSetPlan {
+  const byName = new Map(manifests.map((m) => [m.name, m]));
+  const positive = set.positive.filter((fixture) => {
+    const manifest = byName.get(fixture.invocation.tool);
+    return manifest !== undefined && isPreflightSafeToolManifest(manifest);
+  });
+  const negative = set.negative.filter((fixture) => {
+    const manifest = byName.get(fixture.invocation.tool);
+    return manifest !== undefined && isPreflightSafeToolManifest(manifest);
+  });
+
+  const includedFixtureIds =
+    positive.length > 0 && negative.length > 0
+      ? [...positive.map((f) => f.id), ...negative.map((f) => f.id)]
+      : [];
+  const included = new Set(includedFixtureIds);
+  const allFixtureIds = [
+    ...set.positive.map((f) => f.id),
+    ...set.negative.map((f) => f.id),
+  ];
+  const skippedFixtureIds = allFixtureIds.filter((id) => !included.has(id));
+
+  if (positive.length === 0 || negative.length === 0) {
+    return {
+      set: null,
+      includedFixtureIds: [],
+      skippedFixtureIds,
+    };
+  }
+
+  return {
+    set: {
+      ...set,
+      positive,
+      negative,
+    },
+    includedFixtureIds,
+    skippedFixtureIds,
+  };
+}
+
 function stabilizeFromPreflight(
   output: Stage11Output,
   report: BenchmarkReport,
-): { output: Stage11Output; droppedFixtureIds: string[] } {
+): { output: Stage11Output; droppedFixtureIds: string[]; blockedReason?: string } {
   const failedIds = new Set(preflightFailures(report).map((r) => r.fixtureId));
   if (failedIds.size === 0) return { output, droppedFixtureIds: [] };
 
   const positive = output.set.positive.filter((f) => !failedIds.has(f.id));
   const negative = output.set.negative.filter((f) => !failedIds.has(f.id));
-  if (positive.length === 0 || negative.length === 0) {
-    return { output, droppedFixtureIds: [] };
+  const minPositive = Math.min(
+    output.set.positive.length,
+    STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES,
+  );
+  const minNegative = Math.min(
+    output.set.negative.length,
+    STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES,
+  );
+  if (positive.length < minPositive || negative.length < minNegative) {
+    return {
+      output,
+      droppedFixtureIds: [],
+      blockedReason:
+        `dropping failed fixtures would leave ${positive.length} positive / ${negative.length} negative, ` +
+        `below required ${minPositive} positive / ${minNegative} negative`,
+    };
   }
 
   return {
@@ -257,7 +333,7 @@ function formatPreflightFailures(
     "Runtime preflight failed these fixtures:",
     ...lines,
     "",
-    "For positives, use only invocations that can pass against the available fact store or deterministic live sources.",
+    "For positives, use only invocations that can pass against deterministic facts-backed tools.",
     "Avoid positive fixtures for facts-backed custom tools with empty sampleUrls unless the exact invocation passed preflight.",
     "Use refusalReason \"no-source\" for no-result negatives; \"no-results\" is an error code, not a refusalReason.",
   ].join("\n");
@@ -484,14 +560,38 @@ export function createBenchmarkGenRunner(
           }
 
           if (opts.preflightGeneratedSet === true) {
+            const preflightPlan = buildPreflightBenchmarkSet(
+              normalized.output.set,
+              manifests,
+            );
+            if (preflightPlan.skippedFixtureIds.length > 0) {
+              ctx.log({
+                event: "stage11:preflight:filtered",
+                included: preflightPlan.includedFixtureIds.length,
+                skipped: preflightPlan.skippedFixtureIds.length,
+                skippedFixtureIds: preflightPlan.skippedFixtureIds,
+              });
+            }
+            if (preflightPlan.set === null) {
+              ctx.log({
+                event: "stage11:preflight:skipped",
+                reason: "no-deterministic-fixtures",
+                fixtures: normalized.output.set.positive.length +
+                  normalized.output.set.negative.length,
+              });
+              output = normalized.output;
+              lastError = null;
+              break;
+            }
+
             ctx.log({
               event: "stage11:preflight:start",
-              positives: normalized.output.set.positive.length,
-              negatives: normalized.output.set.negative.length,
+              positives: preflightPlan.set.positive.length,
+              negatives: preflightPlan.set.negative.length,
             });
             const report = await preflightBenchmarkSet(
               ctx.almanacDir,
-              normalized.output.set,
+              preflightPlan.set,
               ctx.now(),
             );
             const failed = preflightFailures(report);
@@ -533,6 +633,13 @@ export function createBenchmarkGenRunner(
                 normalized.output,
                 report,
               );
+              if (stabilized.blockedReason !== undefined) {
+                ctx.log({
+                  event: "stage11:preflight:stabilization-skipped",
+                  reason: stabilized.blockedReason,
+                  failedFixtureIds: failed.map((f) => f.fixtureId),
+                });
+              }
               if (stabilized.droppedFixtureIds.length > 0) {
                 ctx.log({
                   event: "stage11:preflight:stabilized",
@@ -540,9 +647,18 @@ export function createBenchmarkGenRunner(
                   positives: stabilized.output.set.positive.length,
                   negatives: stabilized.output.set.negative.length,
                 });
+                const stabilizedPlan = buildPreflightBenchmarkSet(
+                  stabilized.output.set,
+                  manifests,
+                );
+                if (stabilizedPlan.set === null) {
+                  output = stabilized.output;
+                  lastError = null;
+                  break;
+                }
                 const stabilizedReport = await preflightBenchmarkSet(
                   ctx.almanacDir,
-                  stabilized.output.set,
+                  stabilizedPlan.set,
                   ctx.now(),
                 );
                 const stabilizedFailed = preflightFailures(stabilizedReport);
