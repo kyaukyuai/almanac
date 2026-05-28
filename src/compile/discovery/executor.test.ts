@@ -318,6 +318,38 @@ describe("web search queries", () => {
     });
     expect(out.candidates[0]!.kind).toBe("docs");
   });
+
+  test("clamps oversized title and snippet fallbacks before validation", async () => {
+    const out = await runDiscoveryExecutor({
+      plan: plan({
+        webSearchQueries: [
+          {
+            query: "long enterprise ai result",
+            targetKind: "any",
+            rationale: "x",
+            recencyDays: null,
+          },
+        ],
+      }),
+      prober: mockProber({
+        "https://long.example.com": { title: null, snippet: null },
+      }),
+      webSearcher: mockWebSearcher({
+        "long enterprise ai result": [
+          {
+            url: "https://long.example.com",
+            title: "T".repeat(350),
+            snippet: "S".repeat(700),
+          },
+        ],
+      }),
+      githubSearcher: mockGithubSearcher({}),
+      now: NOW,
+    });
+
+    expect(out.candidates[0]!.title).toHaveLength(300);
+    expect(out.candidates[0]!.snippet).toHaveLength(500);
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -358,6 +390,31 @@ describe("github queries", () => {
     expect(c.meta.githubLicense).toBe("Apache-2.0");
     expect(c.meta.githubLastCommitAt).toBe("2026-04-01T00:00:00Z");
     expect(c.origin).toEqual({ type: "github", queryIndex: 0, rank: 0 });
+  });
+
+  test("clamps oversized repo metadata before validation", async () => {
+    const out = await runDiscoveryExecutor({
+      plan: plan({
+        githubQueries: [
+          { query: "topic:enterprise-ai", type: "repos", rationale: "x" },
+        ],
+      }),
+      prober: mockProber({}),
+      webSearcher: mockWebSearcher({}),
+      githubSearcher: mockGithubSearcher({
+        "topic:enterprise-ai": [
+          {
+            url: "https://github.com/foo/enterprise-ai",
+            fullName: `${"owner".repeat(80)}/enterprise-ai`,
+            description: "D".repeat(700),
+          },
+        ],
+      }),
+      now: NOW,
+    });
+
+    expect(out.candidates[0]!.title).toHaveLength(300);
+    expect(out.candidates[0]!.snippet).toHaveLength(500);
   });
 });
 
@@ -466,6 +523,30 @@ describe("dedup + caps + failure isolation", () => {
     expect(out.candidates.length).toBe(1);
     expect(out.candidates[0]!.fetchStatus).toBe("network-error");
     expect(out.candidates[0]!.preview).toBeNull();
+  });
+
+  test("clamps oversized probe metadata before validation", async () => {
+    const out = await runDiscoveryExecutor({
+      plan: plan({
+        directProbes: [
+          { hint: "https://long.example.com/", kind: "docs", rationale: "x" },
+        ],
+      }),
+      prober: mockProber({
+        "https://long.example.com/": {
+          title: "T".repeat(350),
+          snippet: "S".repeat(700),
+          preview: "P".repeat(2500),
+        },
+      }),
+      webSearcher: mockWebSearcher({}),
+      githubSearcher: mockGithubSearcher({}),
+      now: NOW,
+    });
+
+    expect(out.candidates[0]!.title).toHaveLength(300);
+    expect(out.candidates[0]!.snippet).toHaveLength(500);
+    expect(out.candidates[0]!.preview).toHaveLength(2000);
   });
 
   test("a thrown searcher contributes zero candidates and does not abort", async () => {

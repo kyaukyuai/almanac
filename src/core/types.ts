@@ -628,6 +628,9 @@ export const SourcesFileSchema = z
   });
 export type SourcesFile = z.infer<typeof SourcesFileSchema>;
 
+const SOURCES_FILE_MAX_ACCEPTED = 12;
+const SOURCES_FILE_MAX_REJECTED = 50;
+
 /**
  * Parse the evaluator's raw JSON output into a validated `SourcesFile`.
  * Stage 2b emits `status: "draft"`; the function asserts that.
@@ -666,7 +669,8 @@ export function normalizeDerivableCounts(raw: unknown): unknown {
     return raw;
   }
   const r = raw as Record<string, unknown>;
-  const sources = Array.isArray(r.sources) ? r.sources : [];
+  const rawSources = Array.isArray(r.sources) ? r.sources : [];
+  const sources = rawSources.slice(0, SOURCES_FILE_MAX_ACCEPTED);
 
   const coverage: CoverageMap = {
     docs: 0,
@@ -697,7 +701,37 @@ export function normalizeDerivableCounts(raw: unknown): unknown {
       : ({} as Record<string, unknown>);
   generatedBy.acceptedCount = sources.length;
 
-  return { ...r, generatedBy, coverage };
+  const warnings = Array.isArray(r.warnings) ? [...r.warnings] : [];
+  const rejected = Array.isArray(r.rejected) ? [...r.rejected] : [];
+  if (rawSources.length > SOURCES_FILE_MAX_ACCEPTED) {
+    warnings.push(
+      `sources_truncated: evaluator emitted ${rawSources.length} accepted sources; kept ${SOURCES_FILE_MAX_ACCEPTED} and marked the rest over-budget`,
+    );
+    for (const source of rawSources.slice(SOURCES_FILE_MAX_ACCEPTED)) {
+      const url =
+        typeof source === "object" &&
+        source !== null &&
+        typeof (source as Record<string, unknown>).url === "string"
+          ? ((source as Record<string, unknown>).url as string)
+          : "(unknown)";
+      rejected.push({ url, reason: "over-budget" as const });
+    }
+  }
+  const cappedRejected = rejected.slice(0, SOURCES_FILE_MAX_REJECTED);
+  if (rejected.length > SOURCES_FILE_MAX_REJECTED) {
+    warnings.push(
+      `rejected_truncated: ${rejected.length} rejected sources produced, ${SOURCES_FILE_MAX_REJECTED} shown`,
+    );
+  }
+
+  return {
+    ...r,
+    generatedBy,
+    coverage,
+    warnings,
+    sources,
+    rejected: cappedRejected,
+  };
 }
 
 // ── Candidate (input to Stage 2b) ────────────────────────────────────────────
@@ -3331,4 +3365,3 @@ export const ResourceDescriptorSchema = z.object({
   size: z.number().int().nonnegative().optional(),
 });
 export type ResourceDescriptor = z.infer<typeof ResourceDescriptorSchema>;
-

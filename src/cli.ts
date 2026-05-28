@@ -212,6 +212,18 @@ async function readDisplayCounts(
   };
 }
 
+async function writeManifestWithActualCounts(
+  almanacDir: string,
+  manifest: AlmanacManifest,
+): Promise<void> {
+  const counts = await readDisplayCounts(almanacDir, manifest);
+  await writeManifest(almanacDir, {
+    ...manifest,
+    factCount: counts.facts,
+    toolCount: counts.tools,
+  });
+}
+
 function countsMismatch(counts: DisplayCounts): boolean {
   return (
     counts.facts !== counts.manifestFacts ||
@@ -793,7 +805,7 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
       manifest,
       runners,
       persistState: (s) => writeCompileState(almanacDir, s),
-      persistManifest: (m) => writeManifest(almanacDir, m),
+      persistManifest: (m) => writeManifestWithActualCounts(almanacDir, m),
       stopAfterStageId: "01-domain-analysis",
       log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
     });
@@ -820,7 +832,7 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
     manifest,
     runners,
     persistState: (s) => writeCompileState(almanacDir, s),
-    persistManifest: (m) => writeManifest(almanacDir, m),
+    persistManifest: (m) => writeManifestWithActualCounts(almanacDir, m),
     log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
   });
 
@@ -1539,6 +1551,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
 }
 
 type ExpertiseStatus = "usable" | "needs-validation" | "not-ready";
+const HIGH_TRUST_ZERO_FACT_THRESHOLD = 0.9;
 
 interface ProfileOptions {
   root: string;
@@ -1583,6 +1596,12 @@ function clipText(value: string, max = 120): string {
   return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
 }
 
+function listWithRemainder(items: string[], max = 5): string {
+  const shown = items.slice(0, max);
+  const remainder = items.length - shown.length;
+  return remainder > 0 ? `${shown.join(", ")} (+${remainder} more)` : shown.join(", ");
+}
+
 async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const dir = almanacDirPath(opts.root, id);
   if (!existsSync(dir)) {
@@ -1598,6 +1617,21 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const facts = await readFactsJsonlIfPresent(dir);
   const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
+  const factsBySource = countFactsBySource(facts);
+  const acceptedSources = sources?.sources ?? [];
+  const highTrustZeroFactSources = acceptedSources
+    .filter(
+      (source) =>
+        source.trust >= HIGH_TRUST_ZERO_FACT_THRESHOLD &&
+        (factsBySource.get(source.id) ?? 0) === 0,
+    )
+    .map((source) => ({
+      id: source.id,
+      trust: source.trust,
+      ingestionMode: source.ingestion.mode,
+      kind: source.kind,
+      url: source.url,
+    }));
 
   const failedStages = (STAGE_IDS as readonly StageId[]).filter(
     (stageId) => state.stages[stageId].status === "failed",
@@ -1635,6 +1669,15 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   if (countsMismatch(counts)) {
     validationIssues.push("manifest counts differ from actual artifacts");
   }
+  if (highTrustZeroFactSources.length > 0) {
+    validationIssues.push(
+      `high-trust accepted sources contribute no facts: ${listWithRemainder(
+        highTrustZeroFactSources.map(
+          (source) => `${source.id} (${source.ingestionMode})`,
+        ),
+      )}`,
+    );
+  }
   if (benchmarkSet === null) {
     validationIssues.push("human benchmark fixtures missing");
   } else if (benchmarkReport === null) {
@@ -1657,9 +1700,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
         ? "needs-validation"
         : "usable";
 
-  const factsBySource = countFactsBySource(facts);
   const uniqueFactSources = factsBySource.size;
-  const acceptedSources = sources?.sources ?? [];
   const evidenceSources = acceptedSources
     .map((source) => ({
       id: source.id,
@@ -1731,6 +1772,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       sourceCoverage: sources?.coverage ?? null,
       factTypes: countFactsByType(facts),
       freshnessClasses: countFactsByFreshness(facts),
+      zeroFactHighTrustSources: highTrustZeroFactSources,
       sources: evidenceSources,
     },
     benchmark: {
@@ -2294,7 +2336,7 @@ async function cmdUpdate(id: string, opts: UpdateOptions): Promise<void> {
     manifest: nextManifest,
     runners,
     persistState: (s) => writeCompileState(almanacDir, s),
-    persistManifest: (m) => writeManifest(almanacDir, m),
+    persistManifest: (m) => writeManifestWithActualCounts(almanacDir, m),
     log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
   });
 

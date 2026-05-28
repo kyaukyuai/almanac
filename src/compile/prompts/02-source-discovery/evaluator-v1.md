@@ -33,6 +33,11 @@ You also enforce the `coverageGoals` from the plan: keep at least `min`
 accepted per kind, do not exceed `max`, and stop adding when
 `targetAcceptedSources` is hit.
 
+Hard cap: `sources[]` MUST contain at most 12 accepted sources. This is an
+absolute schema limit. If the coverage goals and target would otherwise select
+more than 12, keep the best 12 by trust and domain coverage, move the rest to
+`rejected[]` with `reason: "over-budget"`, and add a warning.
+
 ### Output schema
 
 Emit a single strict JSON object. No prose, no markdown, no code fences.
@@ -196,7 +201,8 @@ Walk candidates ordered by trust descending. For each candidate:
 3. After the main pass, check that every `coverageGoals[kind].min` is met.
    If a `min` is unmet and there are remaining candidates of that kind,
    accept the highest-trust ones until satisfied (this may push
-   `acceptedCount` above `targetAcceptedSources`; that is acceptable).
+   `acceptedCount` above `targetAcceptedSources`; that is acceptable, but
+   `sources[]` still MUST NOT exceed the absolute 12-source schema cap).
 4. Add a `warnings` entry for any unmet `min` after step 3.
 
 ### Output discipline

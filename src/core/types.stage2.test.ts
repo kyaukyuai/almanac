@@ -409,6 +409,30 @@ describe("SourcesFile — evaluator-v1 worked example", () => {
     expect(file.coverage.docs).toBe(actualDocs);
     expect(file.coverage.repo).toBe(actualRepo);
   });
+
+  test("parseDraftSourcesFile caps over-emitted accepted sources (regression)", () => {
+    const raw = structuredClone(EVALUATOR_KUBERNETES) as SourcesFile;
+    const template = raw.sources[0]!;
+    raw.sources = Array.from({ length: 14 }, (_, i) => ({
+      ...template,
+      id: `clone-${i}`,
+      url: `https://example.com/${i}`,
+    }));
+    raw.generatedBy.acceptedCount = 14;
+    raw.coverage.docs = 14;
+    raw.rejected = [];
+
+    const file = parseDraftSourcesFile(raw);
+
+    expect(file.sources.length).toBe(12);
+    expect(file.generatedBy.acceptedCount).toBe(12);
+    expect(file.coverage.docs).toBe(12);
+    expect(file.rejected).toEqual([
+      { url: "https://example.com/12", reason: "over-budget" },
+      { url: "https://example.com/13", reason: "over-budget" },
+    ]);
+    expect(file.warnings.join("\n")).toContain("sources_truncated");
+  });
 });
 
 describe("SourcesFile — validation rejections", () => {

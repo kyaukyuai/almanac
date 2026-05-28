@@ -67,6 +67,9 @@ export interface DiscoveryExecutorResult {
 
 /** Hard cap from `CandidatesSchema`. */
 export const CANDIDATES_MAX = 200;
+const CANDIDATE_TITLE_MAX_CHARS = 300;
+const CANDIDATE_SNIPPET_MAX_CHARS = 500;
+const CANDIDATE_PREVIEW_MAX_CHARS = 2000;
 
 /**
  * Run the discovery executor end-to-end. The returned `candidates` array is
@@ -175,8 +178,8 @@ export async function runDiscoveryExecutor(
       const candidate: Candidate = {
         url: hit.url,
         kind: "repo",
-        title: hit.fullName,
-        snippet: hit.description,
+        title: clampNullableText(hit.fullName, CANDIDATE_TITLE_MAX_CHARS),
+        snippet: clampNullableText(hit.description, CANDIDATE_SNIPPET_MAX_CHARS),
         // Repos don't get an HTML preview — see CandidateSchema docs.
         preview: null,
         fetchedAt: now().toISOString(),
@@ -241,15 +244,20 @@ function buildCandidate(input: {
   return {
     url: r.url,
     kind,
-    title: r.title,
-    snippet: r.snippet,
-    preview,
+    title: clampNullableText(r.title, CANDIDATE_TITLE_MAX_CHARS),
+    snippet: clampNullableText(r.snippet, CANDIDATE_SNIPPET_MAX_CHARS),
+    preview: clampNullableText(preview, CANDIDATE_PREVIEW_MAX_CHARS),
     fetchedAt: now().toISOString(),
     fetchStatus: r.fetchStatus,
     ...(r.finalUrl !== undefined ? { finalUrl: r.finalUrl } : {}),
     origin,
     meta: r.meta,
   };
+}
+
+function clampNullableText(value: string | null, maxChars: number): string | null {
+  if (value === null) return null;
+  return value.length > maxChars ? value.slice(0, maxChars) : value;
 }
 
 /**

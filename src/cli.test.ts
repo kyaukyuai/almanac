@@ -5,12 +5,13 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
+import { STAGE_IDS } from "./core/types.ts";
 import {
   almanacDirPath,
   ensureAlmanacLayout,
@@ -19,6 +20,7 @@ import {
   writeManifest,
 } from "./compile/storage.ts";
 import { bootstrapAlmanac } from "./compile/stages/s00-bootstrap.ts";
+import { markStageCompleted } from "./compile/pipeline.ts";
 
 let root: string;
 
@@ -43,7 +45,9 @@ function runCli(args: string[]) {
   };
 }
 
-async function writeLegacyCountFixture(): Promise<void> {
+async function writeLegacyCountFixture(
+  opts: { completed?: boolean } = {},
+): Promise<void> {
   const dir = almanacDirPath(root, "legacy");
   const { manifest, compileState } = bootstrapAlmanac({
     almanacId: "legacy",
@@ -62,9 +66,18 @@ async function writeLegacyCountFixture(): Promise<void> {
     now: new Date("2026-05-08T12:00:00.000Z"),
   });
 
+  let state = compileState;
+  if (opts.completed === true) {
+    for (const stageId of STAGE_IDS) {
+      state = markStageCompleted(state, stageId, new Date("2026-05-08T12:02:00.000Z"), {
+        outputHash: "a".repeat(64),
+      });
+    }
+  }
+
   await ensureAlmanacLayout(dir);
   await writeManifest(dir, manifest);
-  await writeCompileState(dir, compileState);
+  await writeCompileState(dir, state);
   await writeFile(
     knowledgeIndexManifestPath(dir),
     JSON.stringify(
@@ -131,6 +144,28 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("facts/tools    7 / 2");
     expect(result.stdout).toContain("manifest       facts/tools 0 / 0");
     expect(result.stdout).toContain("knowledge      7 facts, sqlite 3.51.0");
+  });
+
+  test("resume refreshes stale manifest counts from actual artifacts", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli([
+      "new",
+      "legacy domain",
+      "--slug",
+      "legacy",
+      "--resume",
+      "--root",
+      root,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const manifest = JSON.parse(
+      await readFile(join(almanacDirPath(root, "legacy"), "manifest.json"), "utf8"),
+    ) as { factCount: number; toolCount: number };
+    expect(manifest.factCount).toBe(7);
+    expect(manifest.toolCount).toBe(2);
   });
 });
 
@@ -211,5 +246,60 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stderr).toBe("");
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
+  });
+
+  test("profile flags high-trust accepted sources with no extracted facts", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const sourcesPath = join(
+      almanacDirPath(root, "sqlite-demo"),
+      "sources",
+      "sources.json",
+    );
+    const sources = JSON.parse(await readFile(sourcesPath, "utf8")) as {
+      generatedBy: { acceptedCount: number };
+      coverage: { docs: number };
+      sources: unknown[];
+    };
+    sources.sources.push({
+      id: "sqlite-latest-docs",
+      url: "https://www.sqlite.org/changes.html",
+      kind: "docs",
+      trust: 0.95,
+      volatility: "slow",
+      rationale: "High-trust SQLite documentation that is not in the fact corpus.",
+      ingestion: {
+        mode: "index-only",
+        scope: [],
+        refreshIntervalHours: 168,
+      },
+      notes: null,
+    });
+    sources.generatedBy.acceptedCount = sources.sources.length;
+    sources.coverage.docs += 1;
+    await writeFile(sourcesPath, JSON.stringify(sources, null, 2) + "\n", "utf8");
+
+    const profile = runCli(["profile", "sqlite-demo", "--root", root]);
+
+    expect(profile.status).toBe(0);
+    expect(profile.stderr).toBe("");
+    expect(profile.stdout).toContain("status         needs-validation");
+    expect(profile.stdout).toContain(
+      "high-trust accepted sources contribute no facts: sqlite-latest-docs (index-only)",
+    );
+
+    const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
+    const parsedProfile = JSON.parse(profileJson.stdout) as {
+      evidence: {
+        zeroFactHighTrustSources: Array<{ id: string; ingestionMode: string }>;
+      };
+    };
+    expect(parsedProfile.evidence.zeroFactHighTrustSources).toEqual([
+      expect.objectContaining({
+        id: "sqlite-latest-docs",
+        ingestionMode: "index-only",
+      }),
+    ]);
   });
 });
