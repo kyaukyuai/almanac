@@ -3,11 +3,12 @@
  *
  * The deterministic step that sits between Stage 2a (planner) and Stage 2b
  * (evaluator) consumes a `SourceDiscoveryPlan` and emits `Candidate[]`. It
- * does this by fanning each plan item out through three injectable
+ * does this by fanning each plan item out through injectable
  * strategies:
  *
  *   - `UrlProber`        : HEAD/GET a URL → title + snippet + preview + meta
  *   - `WebSearcher`      : query string → ordered list of search hits
+ *   - `CommunitySearcher`: query string → ordered public community hits
  *   - `GithubSearcher`   : query string → ordered list of github repo hits
  *
  * Concrete adapters live alongside this file:
@@ -15,6 +16,7 @@
  *   - `./url-prober.ts`        — `createHttpUrlProber`     (real HTTP)
  *   - `./web-searcher.ts`      — `createNullWebSearcher`   (no-op for keyless dev)
  *                              — `createBraveWebSearcher`  (Brave Search API)
+ *   - `./community-searcher.ts` — HN + Reddit public JSON adapters
  *   - `./github-searcher.ts`   — `createGithubSearcher`    (REST search API)
  *
  * The executor itself has no network code; this lets unit tests stub every
@@ -93,6 +95,42 @@ export interface WebSearchInput {
 export interface WebSearcher {
   readonly name: string;
   search(input: WebSearchInput): Promise<WebSearchHit[]>;
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// CommunitySearcher
+// ──────────────────────────────────────────────────────────────────────────────
+
+export interface CommunitySearchInput extends WebSearchInput {
+  /**
+   * Source of the query in the planner. Providers do not need this for HTTP
+   * requests, but the executor uses it to produce precise provenance.
+   */
+  origin: { type: "direct-probe" | "web-search"; index: number };
+}
+
+export interface CommunitySearchHit {
+  url: string;
+  title: string | null;
+  snippet: string | null;
+  /**
+   * Optional lightweight body text returned by the public API. It is still
+   * capped by the executor before becoming `Candidate.preview`.
+   */
+  preview?: string | null;
+  author?: string;
+  container?: string;
+  publishedAt?: string;
+  engagement?: Record<string, number>;
+}
+
+/**
+ * Performs provider-specific public community search. Implementations should
+ * return [] for non-community target kinds and on routine HTTP failures.
+ */
+export interface CommunitySearcher {
+  readonly name: string;
+  search(input: CommunitySearchInput): Promise<CommunitySearchHit[]>;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

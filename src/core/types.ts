@@ -781,6 +781,20 @@ export const CandidateOriginSchema = z.discriminatedUnion("type", [
     queryIndex: z.number().int().nonnegative(),
     rank: z.number().int().nonnegative(),
   }),
+  z.object({
+    type: z.literal("community-search"),
+    /** Stable adapter name, e.g. `hackernews` or `reddit`. */
+    provider: z
+      .string()
+      .regex(/^[a-z][a-z0-9-]*$/)
+      .max(32),
+    /** Which planner input produced this search. */
+    inputType: z.enum(["direct-probe", "web-search"]),
+    /** Index into the corresponding planner array. */
+    inputIndex: z.number().int().nonnegative(),
+    /** 0-based result rank returned by the provider. */
+    rank: z.number().int().nonnegative(),
+  }),
 ]);
 export type CandidateOrigin = z.infer<typeof CandidateOriginSchema>;
 
@@ -798,6 +812,19 @@ export const CandidateMetaSchema = z.object({
   githubLastCommitAt: z.string().regex(ISO_8601).optional(),
   /** ISO 639-1 (e.g., "en", "ja") if detected. */
   languageDetected: z.string().min(2).max(8).optional(),
+  /** Public community provider that supplied this candidate, if any. */
+  discoveryProvider: z.string().regex(/^[a-z][a-z0-9-]*$/).max(32).optional(),
+  /** Source-level author / handle when returned by a community provider. */
+  author: z.string().max(120).optional(),
+  /** Source container, e.g. `r/kubernetes` or `news.ycombinator.com`. */
+  container: z.string().max(160).optional(),
+  /** Original publication timestamp returned by a community provider. */
+  publishedAt: z.string().regex(ISO_8601).optional(),
+  /**
+   * Provider-native engagement metrics. Used as salience hints by Stage 2b;
+   * not a substitute for trust.
+   */
+  engagement: z.record(z.number()).optional(),
 });
 export type CandidateMeta = z.infer<typeof CandidateMetaSchema>;
 

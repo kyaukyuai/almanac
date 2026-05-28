@@ -108,6 +108,7 @@ import {
   createBraveWebSearcher,
   createNullWebSearcher,
 } from "./compile/discovery/web-searcher.ts";
+import { createDefaultCommunitySearchers } from "./compile/discovery/community-searcher.ts";
 import {
   defaultAlmanacRoot,
   almanacDirPath,
@@ -626,6 +627,7 @@ function buildRunners(): {
       webSearcher: process.env["BRAVE_SEARCH_API_KEY"]
         ? createBraveWebSearcher()
         : createNullWebSearcher(),
+      communitySearchers: createDefaultCommunitySearchers(),
       githubSearcher: createGithubSearcher(),
     }),
     "03-source-approve": createApproveRunner(),
@@ -646,7 +648,10 @@ function buildRunners(): {
       createSourceDiscoveryEvaluatorRunner({ provider });
     runners["05-fact-extraction"] = createFactExtractionRunner({ provider });
     runners["06-tool-design"] = createToolDesignRunner({ provider });
-    runners["11-benchmark-gen"] = createBenchmarkGenRunner({ provider });
+    runners["11-benchmark-gen"] = createBenchmarkGenRunner({
+      provider,
+      preflightGeneratedSet: true,
+    });
     // Stage 7 with LLM-driven custom-tool generation: re-register the runner
     // with a real LlmCodeWriter + TscRunner + SmokeTestRunner so custom
     // tools designed in Stage 6 actually get implemented.

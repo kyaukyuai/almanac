@@ -1,7 +1,8 @@
 /**
  * Tests for `Candidate` and `Candidates` zod schemas — the input contract for
  * Stage 2b (evaluator). The first test parses a representative candidate set
- * covering all three origin types (direct-probe, web-search, github) plus a
+ * covering all origin types (direct-probe, web-search, community-search,
+ * github) plus a
  * few non-ok fetch statuses.
  */
 
@@ -69,7 +70,31 @@ const REPRESENTATIVE_SET: unknown[] = [
       rssUrl: "https://www.cncf.io/feed/",
     },
   },
-  // 4. github / ok with stars + license
+  // 4. community-search / ok with native engagement metadata
+  {
+    url: "https://news.ycombinator.com/item?id=123",
+    kind: "community",
+    title: "Show HN: Kubernetes thing",
+    snippet: "Hacker News discussion; 120 points; 42 comments",
+    preview: "Discussion text",
+    fetchedAt: "2026-05-08T10:00:03Z",
+    fetchStatus: "ok",
+    origin: {
+      type: "community-search",
+      provider: "hackernews",
+      inputType: "web-search",
+      inputIndex: 0,
+      rank: 1,
+    },
+    meta: {
+      discoveryProvider: "hackernews",
+      author: "alice",
+      container: "news.ycombinator.com",
+      publishedAt: "2026-05-07T18:24:11Z",
+      engagement: { points: 120, comments: 42 },
+    },
+  },
+  // 5. github / ok with stars + license
   {
     url: "https://github.com/kubernetes-sigs/cluster-api",
     kind: "repo",
@@ -77,7 +102,7 @@ const REPRESENTATIVE_SET: unknown[] = [
     snippet:
       "Home for Cluster API, a subproject of sig-cluster-lifecycle.",
     preview: null,
-    fetchedAt: "2026-05-08T10:00:03Z",
+    fetchedAt: "2026-05-08T10:00:04Z",
     fetchStatus: "ok",
     origin: { type: "github", queryIndex: 0, rank: 2 },
     meta: {
@@ -86,26 +111,26 @@ const REPRESENTATIVE_SET: unknown[] = [
       githubLastCommitAt: "2026-05-07T18:24:11Z",
     },
   },
-  // 5. web-search / 404 (dead link) — preview must be null
+  // 6. web-search / 404 (dead link) — preview must be null
   {
     url: "https://example.com/dead-link",
     kind: "community",
     title: null,
     snippet: "Some old result still in the index",
     preview: null,
-    fetchedAt: "2026-05-08T10:00:04Z",
+    fetchedAt: "2026-05-08T10:00:05Z",
     fetchStatus: "client-error",
     origin: { type: "web-search", queryIndex: 0, rank: 5 },
     meta: { httpStatusCode: 404 },
   },
-  // 6. direct-probe / blocked
+  // 7. direct-probe / blocked
   {
     url: "https://www.example-paywalled.com/article",
     kind: "news",
     title: null,
     snippet: null,
     preview: null,
-    fetchedAt: "2026-05-08T10:00:05Z",
+    fetchedAt: "2026-05-08T10:00:06Z",
     fetchStatus: "blocked",
     origin: { type: "direct-probe", probeIndex: 5 },
     meta: {},
@@ -113,9 +138,9 @@ const REPRESENTATIVE_SET: unknown[] = [
 ];
 
 describe("Candidate / Candidates — representative set", () => {
-  test("all six representative candidates parse", () => {
+  test("all representative candidates parse", () => {
     const parsed = CandidatesSchema.parse(REPRESENTATIVE_SET);
-    expect(parsed.length).toBe(6);
+    expect(parsed.length).toBe(7);
 
     // discriminator narrowing sanity
     const githubCandidate = parsed.find((c) => c.origin.type === "github");
@@ -125,6 +150,11 @@ describe("Candidate / Candidates — representative set", () => {
       expect(githubCandidate.origin.rank).toBe(2);
     }
     expect(githubCandidate?.meta.githubLicense).toBe("Apache-2.0");
+
+    const communityCandidate = parsed.find(
+      (c) => c.origin.type === "community-search",
+    );
+    expect(communityCandidate?.meta.engagement?.points).toBe(120);
 
     const redirectCandidate = parsed.find(
       (c) => c.fetchStatus === "redirect",
@@ -163,7 +193,7 @@ describe("Candidate — validation rejections", () => {
   });
 
   test("rejects non-null preview when fetchStatus is client-error", () => {
-    const bad = clone(4); // dead-link
+    const bad = clone(5); // dead-link
     bad.preview = "this should not be allowed";
     expect(() => CandidateSchema.parse(bad)).toThrow(z.ZodError);
   });

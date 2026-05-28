@@ -21,9 +21,12 @@ import {
   PositiveFixtureSchema,
   NegativeFixtureSchema,
   Stage11OutputSchema,
+  buildBenchmarkReport,
   normalizeStage11Output,
   parseStage11Output,
   type AlmanacManifest,
+  type BenchmarkResult,
+  type BenchmarkSet,
   type CompileState,
   type DomainSpec,
   type Stage11Output,
@@ -38,11 +41,13 @@ import { ensureAlmanacLayout } from "../storage.ts";
 import { bootstrapAlmanac } from "./s00-bootstrap.ts";
 import { domainSpecPath } from "./s01-domain-analysis.ts";
 import {
+  BenchmarkPreflightValidationError,
   InvalidFixtureInvocationError,
   NoEnabledToolsError,
   STAGE11_PROMPT_VERSION,
   createBenchmarkGenRunner,
   defaultReadFactSample,
+  normalizePositiveContainsForFactsTools,
   negativeJsonlPath,
   positiveJsonlPath,
   stage11OutputPath,
@@ -175,6 +180,41 @@ function buildStage11Output(toolName: string): Stage11Output {
   });
 }
 
+function benchmarkReportFor(
+  set: BenchmarkSet,
+  failedFixtureIds: readonly string[] = [],
+) {
+  const failed = new Set(failedFixtureIds);
+  const results: BenchmarkResult[] = [
+    ...set.positive.map((f) => ({
+      fixtureId: f.id,
+      kind: "positive" as const,
+      status: failed.has(f.id) ? "fail" as const : "pass" as const,
+      observed: failed.has(f.id)
+        ? { ok: false, citationsCount: 0, staleness: null, errorCode: "no-results" }
+        : { ok: true, citationsCount: 1, staleness: "fresh" as const, errorCode: null },
+      durationMs: 0,
+      reason: failed.has(f.id) ? "preflight fixture failed" : "preflight passed",
+    })),
+    ...set.negative.map((f) => ({
+      fixtureId: f.id,
+      kind: "negative" as const,
+      status: failed.has(f.id) ? "fail" as const : "pass" as const,
+      observed: failed.has(f.id)
+        ? { ok: true, citationsCount: 1, staleness: "fresh" as const, errorCode: null }
+        : { ok: false, citationsCount: 0, staleness: null, errorCode: "no-results" },
+      durationMs: 0,
+      reason: failed.has(f.id) ? "preflight fixture failed" : "preflight passed",
+    })),
+  ];
+  return buildBenchmarkReport({
+    almanacId: set.almanacId,
+    ranAt: new Date("2026-05-08T12:00:03.000Z"),
+    set,
+    results,
+  });
+}
+
 async function freshFixture(): Promise<{
   almanacDir: string;
   manifest: AlmanacManifest;
@@ -243,6 +283,31 @@ describe("validateInvocations", () => {
     expect(() =>
       validateInvocations(out.set, new Set(["query_facts"])),
     ).toThrow(InvalidFixtureInvocationError);
+  });
+});
+
+describe("normalizePositiveContainsForFactsTools", () => {
+  test("clears brittle contains checks for facts-backed positive fixtures", () => {
+    const out = buildStage11Output("query_facts");
+    const normalized = normalizePositiveContainsForFactsTools(out, [
+      buildManifest("query_facts", "slow"),
+    ]);
+
+    expect(normalized.changedFixtureIds).toEqual(["k8s-pos-001"]);
+    expect(normalized.output.set.positive[0]!.expected.contains).toEqual([]);
+  });
+
+  test("leaves live-fetch positive fixtures unchanged", () => {
+    const out = buildStage11Output("fetch_docs");
+    const manifest = buildManifest("fetch_docs", "fast");
+    manifest.capabilities = {
+      ...manifest.capabilities,
+      network: ["docs.example.com"],
+    };
+    const normalized = normalizePositiveContainsForFactsTools(out, [manifest]);
+
+    expect(normalized.changedFixtureIds).toEqual([]);
+    expect(normalized.output.set.positive[0]!.expected.contains).toEqual(["pod"]);
   });
 });
 
@@ -342,6 +407,152 @@ describe("createBenchmarkGenRunner", () => {
     expect(negLines).toHaveLength(1);
     expect(() => PositiveFixtureSchema.parse(JSON.parse(posLines[0]!))).not.toThrow();
     expect(() => NegativeFixtureSchema.parse(JSON.parse(negLines[0]!))).not.toThrow();
+  });
+
+  test("passes runtime-relevant manifest fields to the prompt", async () => {
+    const fx = await freshFixture();
+    const manifest = buildManifest("fetch_docs", "fast");
+    manifest.capabilities = {
+      ...manifest.capabilities,
+      network: ["docs.example.com"],
+    };
+    manifest.knowledgeUsage = {
+      facts: false,
+      ftsQuery: null,
+      embeddings: false,
+    };
+    manifest.sourceDependencies = ["kubernetes-docs"];
+    manifest.sampleUrls = ["https://docs.example.com/kubernetes/operator"];
+
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("fetch_docs")),
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      readEnabledManifests: async () => [manifest],
+    });
+
+    const outcome = await runner.run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const prompt = provider.callLog[0]!.request.messages
+      .map((m) => m.content)
+      .join("\n");
+    expect(prompt).toContain('"outputSchema"');
+    expect(prompt).toContain('"capabilities"');
+    expect(prompt).toContain('"knowledgeUsage"');
+    expect(prompt).toContain('"sourceDependencies"');
+    expect(prompt).toContain('"sampleUrls"');
+    expect(prompt).toContain("https://docs.example.com/kubernetes/operator");
+  });
+
+  test("preflights a normalized benchmark set before persisting", async () => {
+    const fx = await freshFixture();
+    const observedSets: BenchmarkSet[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => {
+        observedSets.push(set);
+        return benchmarkReportFor(set);
+      },
+      readEnabledManifests: async () => [buildManifest("query_facts", "slow")],
+    });
+
+    const outcome = await runner.run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    expect(observedSets).toHaveLength(1);
+    expect(observedSets[0]!.positive[0]!.expected.contains).toEqual([]);
+    const persisted = Stage11OutputSchema.parse(
+      JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
+    );
+    expect(persisted.set.positive[0]!.expected.contains).toEqual([]);
+  });
+
+  test("retries when runtime preflight fails, then persists the repaired set", async () => {
+    const fx = await freshFixture();
+    let call = 0;
+    const provider = createMockProvider({
+      defaultResponse: () => {
+        call += 1;
+        return JSON.stringify(buildStage11Output("query_facts"));
+      },
+    });
+    let preflightCall = 0;
+    const logs: object[] = [];
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 2,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => {
+        preflightCall += 1;
+        return benchmarkReportFor(
+          set,
+          preflightCall === 1 ? ["k8s-pos-001"] : [],
+        );
+      },
+      readEnabledManifests: async () => [buildManifest("query_facts", "slow")],
+    });
+
+    const outcome = await runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    expect(call).toBe(2);
+    expect(preflightCall).toBe(2);
+    expect(outcome.llmCalls).toBe(2);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:llm:retry",
+        reason: "preflight-failed",
+      }),
+    );
+  });
+
+  test("drops still-failing fixtures on the final preflight attempt", async () => {
+    const fx = await freshFixture();
+    const out = buildStage11Output("query_facts");
+    out.set.positive.push({
+      ...out.set.positive[0]!,
+      id: "k8s-pos-002",
+      query: "what is a controller?",
+      invocation: { tool: "query_facts", input: { q: "controller" } },
+    });
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(out),
+      },
+    });
+    const logs: object[] = [];
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 1,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) =>
+        benchmarkReportFor(set, ["k8s-pos-001"]),
+      readEnabledManifests: async () => [buildManifest("query_facts", "slow")],
+    });
+
+    const outcome = await runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const persisted = Stage11OutputSchema.parse(
+      JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
+    );
+    expect(persisted.set.positive.map((f) => f.id)).toEqual(["k8s-pos-002"]);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:preflight:stabilized",
+        dropped: ["k8s-pos-001"],
+      }),
+    );
   });
 
   test("throws NoEnabledToolsError when zero manifests are enabled", async () => {

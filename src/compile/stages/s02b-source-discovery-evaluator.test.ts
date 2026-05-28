@@ -43,6 +43,7 @@ import {
 import { candidatesPath } from "./s02x-source-discovery-executor.ts";
 import {
   STAGE2B_PROMPT_VERSION,
+  applyKnownPermissiveDocsSnapshotPolicy,
   createSourceDiscoveryEvaluatorRunner,
   sourcesDraftPath,
 } from "./s02b-source-discovery-evaluator.ts";
@@ -358,6 +359,91 @@ describe("createSourceDiscoveryEvaluatorRunner", () => {
     expect(userMsg.content).toContain("plan: |");
     expect(userMsg.content).toContain("candidates: |");
     expect(userMsg.content).toContain("kubernetes");
+  });
+
+  test("promotes known permissive docs from index-only to snapshot", async () => {
+    const fx = await freshFixture();
+    const draft = buildDraftSourcesFile();
+    draft.sources[0] = {
+      ...draft.sources[0]!,
+      ingestion: {
+        ...draft.sources[0]!.ingestion,
+        mode: "index-only",
+      },
+      notes: null,
+    };
+    const events: object[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "02-source-discovery@evaluator-v1": JSON.stringify(draft),
+      },
+    });
+    const runner = createSourceDiscoveryEvaluatorRunner({ provider });
+
+    await runner.run(makeCtx({ ...fx, log: (e) => events.push(e) }));
+
+    const draftBody = readFileSync(sourcesDraftPath(fx.almanacDir), "utf8");
+    const persisted = SourcesFileSchema.parse(JSON.parse(draftBody));
+    const docs = persisted.sources.find((s) => s.id === "k8s-docs")!;
+    expect(docs.ingestion.mode).toBe("snapshot");
+    expect(docs.notes).toContain("CC-BY-4.0");
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "stage2b:source-mode-adjusted",
+        sourceId: "k8s-docs",
+        from: "index-only",
+        to: "snapshot",
+        license: "CC-BY-4.0",
+      }),
+    );
+  });
+});
+
+describe("applyKnownPermissiveDocsSnapshotPolicy", () => {
+  test("does not promote unknown external docs", () => {
+    const draft = buildDraftSourcesFile();
+    draft.sources[0] = {
+      ...draft.sources[0]!,
+      url: "https://example.com/docs/",
+      ingestion: {
+        ...draft.sources[0]!.ingestion,
+        mode: "index-only",
+      },
+    };
+    const candidates: Candidates = [
+      {
+        ...VALID_CANDIDATES[0]!,
+        url: "https://example.com/docs/",
+      },
+    ];
+
+    const result = applyKnownPermissiveDocsSnapshotPolicy(draft, candidates);
+
+    expect(result.adjustments).toEqual([]);
+    expect(result.file.sources[0]!.ingestion.mode).toBe("index-only");
+  });
+
+  test("requires an ok or redirected candidate for the same docs URL", () => {
+    const draft = buildDraftSourcesFile();
+    draft.sources[0] = {
+      ...draft.sources[0]!,
+      ingestion: {
+        ...draft.sources[0]!.ingestion,
+        mode: "index-only",
+      },
+    };
+    const candidates: Candidates = [
+      {
+        ...VALID_CANDIDATES[0]!,
+        fetchStatus: "client-error",
+        preview: null,
+      },
+    ];
+
+    const result = applyKnownPermissiveDocsSnapshotPolicy(draft, candidates);
+
+    expect(result.adjustments).toEqual([]);
+    expect(result.file.sources[0]!.ingestion.mode).toBe("index-only");
   });
 });
 
