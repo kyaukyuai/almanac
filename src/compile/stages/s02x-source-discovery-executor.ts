@@ -21,6 +21,7 @@ import {
 } from "../../core/types.ts";
 import { runDiscoveryExecutor } from "../discovery/executor.ts";
 import type {
+  CommunitySearcher,
   GithubSearcher,
   UrlProber,
   WebSearcher,
@@ -40,6 +41,7 @@ export function candidatesPath(almanacDir: string): string {
 export interface CreateSourceDiscoveryExecutorRunnerOptions {
   prober: UrlProber;
   webSearcher: WebSearcher;
+  communitySearchers?: CommunitySearcher[];
   githubSearcher: GithubSearcher;
   /** Test seam: read plan from a custom location. */
   readPlan?: (almanacDir: string) => Promise<SourceDiscoveryPlan>;
@@ -62,12 +64,14 @@ export function createSourceDiscoveryExecutorRunner(
         event: "stage02x:start",
         directProbes: plan.directProbes.length,
         webSearchQueries: plan.webSearchQueries.length,
+        communitySearchers: opts.communitySearchers?.map((s) => s.name) ?? [],
         githubQueries: plan.githubQueries.length,
       });
       const out = await runDiscoveryExecutor({
         plan,
         prober: opts.prober,
         webSearcher: opts.webSearcher,
+        communitySearchers: opts.communitySearchers ?? [],
         githubSearcher: opts.githubSearcher,
         now: ctx.now,
         log: ctx.log,

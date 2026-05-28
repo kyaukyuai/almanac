@@ -32,11 +32,21 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-function runCli(args: string[]) {
+function runCli(
+  args: string[],
+  envOverrides: Record<string, string | undefined> = {},
+) {
   const cliPath = join(import.meta.dirname, "cli.ts");
+  const env = { ...process.env, ...envOverrides };
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (value === undefined) {
+      delete env[key];
+    }
+  }
   const result = spawnSync("bun", [cliPath, ...args], {
     cwd: join(import.meta.dirname, ".."),
     encoding: "utf8",
+    env,
   });
   return {
     status: result.status,
@@ -166,6 +176,43 @@ describe("almanac CLI legacy artifact counts", () => {
     ) as { factCount: number; toolCount: number };
     expect(manifest.factCount).toBe(7);
     expect(manifest.toolCount).toBe(2);
+  });
+
+  test("feed --replace requires an explicit --source-id", async () => {
+    await writeLegacyCountFixture();
+
+    const result = runCli([
+      "feed",
+      "legacy",
+      "https://example.com/source.pdf",
+      "--replace",
+      "--root",
+      root,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("feed: --replace requires --source-id");
+  });
+
+  test("feed dry-run does not require LLM credentials", () => {
+    const demo = runCli(["demo", "--root", root], {
+      ALMANAC_LLM: undefined,
+      ANTHROPIC_API_KEY: undefined,
+    });
+    expect(demo.status).toBe(0);
+
+    const result = runCli(
+      ["feed", "sqlite-demo", "https://example.com/new-source", "--root", root],
+      {
+        ALMANAC_LLM: undefined,
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("DRY RUN");
+    expect(result.stdout).toContain("Would add source");
   });
 });
 

@@ -46,6 +46,8 @@ import {
   appendSourceToSourcesFile,
   buildApprovedSource,
   deriveSourceId,
+  removeFactsForSource,
+  replaceSourceInSourcesFile,
   runFeed,
 } from "./feed.ts";
 
@@ -198,6 +200,94 @@ describe("appendSourceToSourcesFile", () => {
     expect(next.generatedBy.acceptedCount).toBe(2);
     expect(next.coverage.docs).toBe(1);
     expect(next.coverage.repo).toBe(1);
+  });
+});
+
+describe("replaceSourceInSourcesFile", () => {
+  function twoKindFile(): SourcesFile {
+    return SourcesFileSchema.parse({
+      schemaVersion: "0.1.0",
+      status: "approved",
+      generatedAt: "2026-05-08T12:00:00.000Z",
+      approvedAt: "2026-05-08T12:00:01.000Z",
+      approvedBy: "auto",
+      generatedBy: {
+        stage: "02-source-discovery",
+        evaluatorPromptVersion: "evaluator-v1",
+        candidateCount: 2,
+        acceptedCount: 2,
+      },
+      coverage: {
+        docs: 1,
+        repo: 1,
+        news: 0,
+        community: 0,
+        academic: 0,
+        data: 0,
+        file: 0,
+        essay: 0,
+        book: 0,
+        talk: 0,
+      },
+      warnings: [],
+      sources: [
+        sourceLiteral("doc-1", "https://a.example/", "docs"),
+        sourceLiteral("repo-1", "https://github.com/x/y", "repo"),
+      ],
+      rejected: [],
+    });
+  }
+
+  test("replaces by id and recomputes coverage without changing source count", () => {
+    const next = replaceSourceInSourcesFile(
+      twoKindFile(),
+      sourceLiteral("doc-1", "https://a.example/replacement.pdf", "repo"),
+    );
+
+    expect(next.sources).toHaveLength(2);
+    expect(next.sources[0]!.url).toBe("https://a.example/replacement.pdf");
+    expect(next.generatedBy.acceptedCount).toBe(2);
+    expect(next.coverage.docs).toBe(0);
+    expect(next.coverage.repo).toBe(2);
+  });
+
+  test("throws when the source id is not present", () => {
+    expect(() =>
+      replaceSourceInSourcesFile(
+        twoKindFile(),
+        sourceLiteral("missing-source", "https://a.example/", "docs"),
+      ),
+    ).toThrow(/not found/);
+  });
+});
+
+describe("removeFactsForSource", () => {
+  test("drops only facts attributed to the replaced source id", () => {
+    const body = [
+      EXISTING_FACTS_BODY.trimEnd(),
+      JSON.stringify({
+        id: "01H8Q5Z2QJK4VXNTRWP3M7XYZ1",
+        text: "Other source fact.",
+        type: "fact",
+        entities: ["other"],
+        source: {
+          sourceId: "other-docs",
+          contentHash: "c".repeat(64),
+          url: "https://other.example/",
+          excerpt: "Other source fact.",
+        },
+        freshnessClass: "static",
+        validUntil: null,
+        confidence: 0.9,
+        extractedAt: "2026-05-08T12:00:00.000Z",
+        extractor: { model: "x", promptVersion: "v1" },
+      }),
+    ].join("\n");
+
+    const next = removeFactsForSource(body, "tinytool-docs");
+
+    expect(next).not.toContain("Tinytool is configured");
+    expect(next).toContain("Other source fact");
   });
 });
 
@@ -528,6 +618,53 @@ describe("runFeed (integration)", () => {
     expect(eventTypes).toContain("feed:fetched");
     expect(eventTypes).toContain("feed:facts-merged");
     expect(eventTypes).toContain("feed:done");
+  });
+
+  test("replace path: promotes an existing source without increasing source count or keeping stale facts", async () => {
+    const fx = await freshFeedFixture();
+    const provider = createMockProvider({
+      responses: {
+        "05-fact-extraction@v1": JSON.stringify(FACT_EXTRACTION_RESPONSE),
+      },
+    });
+
+    const result = await runFeed({
+      almanacDir: fx.almanacDir,
+      url: "https://tinytool.example/reference.pdf",
+      sourceId: "tinytool-docs",
+      mode: "snapshot",
+      apply: true,
+      replaceExisting: true,
+      llm: provider,
+      fetchers: [stubFetcher()],
+    });
+
+    expect(result.kind).toBe("applied");
+    if (result.kind !== "applied") throw new Error("expected applied");
+    expect(result.operation).toBe("replace");
+    expect(result.replacedSource?.id).toBe("tinytool-docs");
+
+    const sourcesAfter = SourcesFileSchema.parse(
+      JSON.parse(readFileSync(approvedSourcesPath(fx.almanacDir), "utf8")),
+    );
+    expect(sourcesAfter.sources).toHaveLength(1);
+    expect(sourcesAfter.sources[0]!.id).toBe("tinytool-docs");
+    expect(sourcesAfter.sources[0]!.url).toBe(
+      "https://tinytool.example/reference.pdf",
+    );
+
+    const fetchManifest = SourceFetchManifestSchema.parse(
+      JSON.parse(readFileSync(sourceFetchManifestPath(fx.almanacDir), "utf8")),
+    );
+    expect(fetchManifest.entries).toHaveLength(1);
+    expect(fetchManifest.entries[0]!.sourceId).toBe("tinytool-docs");
+    expect(fetchManifest.summary.fetched).toBe(1);
+
+    const factsBody = readFileSync(factsJsonlPath(fx.almanacDir), "utf8");
+    expect(factsBody).not.toContain("single TOML file");
+    expect(factsBody).toContain("--verbose flag enables debug logging");
+    expect(result.factsAdded).toBe(1);
+    expect(result.newFactCount).toBe(1);
   });
 
   test("malformed LLM output: existing facts preserved, factsAdded=0", async () => {

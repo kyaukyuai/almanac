@@ -19,7 +19,9 @@ import {
   CandidatesSchema,
   DomainSpecSchema,
   SourceDiscoveryPlanSchema,
+  SourcesFileSchema,
   parseDraftSourcesFile,
+  type ApprovedSource,
   type Candidates,
   type DomainSpec,
   type SourceDiscoveryPlan,
@@ -178,6 +180,23 @@ export function createSourceDiscoveryEvaluatorRunner(
         );
       }
 
+      const normalized = applyKnownPermissiveDocsSnapshotPolicy(
+        draft,
+        candidates,
+      );
+      draft = normalized.file;
+      for (const adjustment of normalized.adjustments) {
+        ctx.log({
+          event: "stage2b:source-mode-adjusted",
+          sourceId: adjustment.sourceId,
+          url: adjustment.url,
+          from: adjustment.from,
+          to: adjustment.to,
+          reason: adjustment.reason,
+          license: adjustment.license,
+        });
+      }
+
       const canonicalText = JSON.stringify(draft, null, 2);
       const outPath = sourcesDraftPath(ctx.almanacDir);
       await mkdir(dirname(outPath), { recursive: true });
@@ -208,6 +227,165 @@ export function createSourceDiscoveryEvaluatorRunner(
       };
     },
   };
+}
+
+// ──────────────────────────────────────────────────────────────────────────────
+// Deterministic source-mode normalization
+// ──────────────────────────────────────────────────────────────────────────────
+
+interface PermissiveDocsSnapshotPolicy {
+  readonly hostname: string;
+  readonly pathPrefixes: readonly string[];
+  readonly license: string;
+  readonly reason: string;
+}
+
+export interface SourceModeAdjustment {
+  sourceId: string;
+  url: string;
+  from: "index-only";
+  to: "snapshot";
+  reason: string;
+  license: string;
+}
+
+const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPolicy[] =
+  [
+    {
+      hostname: "kubernetes.io",
+      pathPrefixes: ["/docs/"],
+      license: "CC-BY-4.0",
+      reason: "known-permissive-docs",
+    },
+    {
+      hostname: "book.kubebuilder.io",
+      pathPrefixes: ["/"],
+      license: "Apache-2.0",
+      reason: "known-permissive-docs",
+    },
+    {
+      hostname: "kubebuilder.io",
+      pathPrefixes: ["/"],
+      license: "Apache-2.0",
+      reason: "known-permissive-docs",
+    },
+    {
+      hostname: "master.book.kubebuilder.io",
+      pathPrefixes: ["/"],
+      license: "Apache-2.0",
+      reason: "known-permissive-docs",
+    },
+  ];
+
+export function applyKnownPermissiveDocsSnapshotPolicy(
+  file: SourcesFile,
+  candidates: Candidates,
+): { file: SourcesFile; adjustments: SourceModeAdjustment[] } {
+  const probedDocsUrls = new Set<string>();
+  for (const candidate of candidates) {
+    if (candidate.kind !== "docs") continue;
+    if (
+      candidate.fetchStatus !== "ok" &&
+      candidate.fetchStatus !== "redirect"
+    ) {
+      continue;
+    }
+    const primary = canonicalUrlKey(candidate.url);
+    if (primary !== undefined) probedDocsUrls.add(primary);
+    if (candidate.finalUrl !== undefined) {
+      const finalUrl = canonicalUrlKey(candidate.finalUrl);
+      if (finalUrl !== undefined) probedDocsUrls.add(finalUrl);
+    }
+  }
+
+  const adjustments: SourceModeAdjustment[] = [];
+  const sources = file.sources.map((source) => {
+    const policy = findPermissiveDocsSnapshotPolicy(source);
+    if (policy === undefined) return source;
+
+    const sourceUrlKey = canonicalUrlKey(source.url);
+    if (sourceUrlKey === undefined || !probedDocsUrls.has(sourceUrlKey)) {
+      return source;
+    }
+
+    adjustments.push({
+      sourceId: source.id,
+      url: source.url,
+      from: "index-only",
+      to: "snapshot",
+      reason: policy.reason,
+      license: policy.license,
+    });
+
+    return {
+      ...source,
+      ingestion: {
+        ...source.ingestion,
+        mode: "snapshot" as const,
+      },
+      notes: appendNote(
+        source.notes,
+        `Snapshot promoted by ${policy.reason} policy (${policy.license}).`,
+      ),
+    };
+  });
+
+  if (adjustments.length === 0) return { file, adjustments };
+
+  return {
+    file: SourcesFileSchema.parse({ ...file, sources }),
+    adjustments,
+  };
+}
+
+function findPermissiveDocsSnapshotPolicy(
+  source: ApprovedSource,
+): PermissiveDocsSnapshotPolicy | undefined {
+  if (source.kind !== "docs") return undefined;
+  if (source.ingestion.mode !== "index-only") return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(source.url);
+  } catch {
+    return undefined;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  return KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES.find((policy) => {
+    if (policy.hostname !== hostname) return false;
+    return policy.pathPrefixes.some((prefix) =>
+      pathnameStartsWithPrefix(url.pathname, prefix),
+    );
+  });
+}
+
+function canonicalUrlKey(raw: string): string | undefined {
+  try {
+    const url = new URL(raw);
+    url.hash = "";
+    url.search = "";
+    url.hostname = url.hostname.toLowerCase();
+    if (url.pathname.length > 1) {
+      url.pathname = url.pathname.replace(/\/+$/, "");
+    }
+    return url.toString();
+  } catch {
+    return undefined;
+  }
+}
+
+function pathnameStartsWithPrefix(pathname: string, prefix: string): boolean {
+  if (prefix === "/") return true;
+  if (pathname.startsWith(prefix)) return true;
+  if (prefix.endsWith("/") && pathname === prefix.slice(0, -1)) return true;
+  return false;
+}
+
+function appendNote(existing: string | null, note: string): string {
+  if (existing === null || existing.trim().length === 0) return note;
+  if (existing.includes(note)) return existing;
+  return `${existing} ${note}`;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────

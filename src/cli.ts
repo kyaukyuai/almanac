@@ -108,6 +108,7 @@ import {
   createBraveWebSearcher,
   createNullWebSearcher,
 } from "./compile/discovery/web-searcher.ts";
+import { createDefaultCommunitySearchers } from "./compile/discovery/community-searcher.ts";
 import {
   defaultAlmanacRoot,
   almanacDirPath,
@@ -626,6 +627,7 @@ function buildRunners(): {
       webSearcher: process.env["BRAVE_SEARCH_API_KEY"]
         ? createBraveWebSearcher()
         : createNullWebSearcher(),
+      communitySearchers: createDefaultCommunitySearchers(),
       githubSearcher: createGithubSearcher(),
     }),
     "03-source-approve": createApproveRunner(),
@@ -646,7 +648,10 @@ function buildRunners(): {
       createSourceDiscoveryEvaluatorRunner({ provider });
     runners["05-fact-extraction"] = createFactExtractionRunner({ provider });
     runners["06-tool-design"] = createToolDesignRunner({ provider });
-    runners["11-benchmark-gen"] = createBenchmarkGenRunner({ provider });
+    runners["11-benchmark-gen"] = createBenchmarkGenRunner({
+      provider,
+      preflightGeneratedSet: true,
+    });
     // Stage 7 with LLM-driven custom-tool generation: re-register the runner
     // with a real LlmCodeWriter + TscRunner + SmokeTestRunner so custom
     // tools designed in Stage 6 actually get implemented.
@@ -2454,6 +2459,7 @@ interface FeedOptions {
   sourceId?: string;
   scope?: string[];
   apply?: boolean;
+  replace?: boolean;
 }
 
 async function cmdFeed(
@@ -2478,8 +2484,14 @@ async function cmdFeed(
   if (trust !== undefined && (!Number.isFinite(trust) || trust < 0 || trust > 1)) {
     fail(`feed: --trust must be a number in [0, 1] (got "${opts.trust}")`);
   }
+  const replace = opts.replace === true;
+  if (replace && opts.sourceId === undefined) {
+    fail("feed: --replace requires --source-id so the existing source is explicit");
+  }
 
-  const provider = resolveProvider();
+  const provider = apply
+    ? resolveProvider()
+    : createMockProvider({ defaultResponse: "" });
   if (provider === null) {
     fail(
       "feed: ANTHROPIC_API_KEY is not set, but Stage 5 fact extraction needs an LLM. " +
@@ -2489,7 +2501,15 @@ async function cmdFeed(
 
   process.stdout.write(
     `▶ feed almanac "${id}" ← ${url}\n` +
-      `    mode          ${apply ? "APPLY (writes will be made)" : "DRY RUN (re-run with --apply to write)"}\n\n`,
+      `    mode          ${
+        replace
+          ? apply
+            ? "REPLACE (writes will be made)"
+            : "REPLACE DRY RUN (re-run with --apply to write)"
+          : apply
+            ? "APPLY (writes will be made)"
+            : "DRY RUN (re-run with --apply to write)"
+      }\n\n`,
   );
 
   try {
@@ -2503,6 +2523,7 @@ async function cmdFeed(
       ...(opts.sourceId !== undefined ? { sourceId: opts.sourceId } : {}),
       ...(opts.scope !== undefined ? { scope: opts.scope } : {}),
       apply,
+      replaceExisting: replace,
       llm: provider,
       fetchers: defaultFetchers(),
       log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
@@ -2510,14 +2531,21 @@ async function cmdFeed(
 
     process.stdout.write("\n");
     if (result.kind === "dry-run") {
+      const nextCount =
+        result.operation === "replace"
+          ? result.existingSourcesCount
+          : result.existingSourcesCount + 1;
       process.stdout.write(
-        `Would add source:\n` +
+        `Would ${result.operation} source:\n` +
           `    id            ${result.newSource.id}\n` +
           `    url           ${result.newSource.url}\n` +
           `    kind          ${result.newSource.kind}\n` +
           `    mode          ${result.newSource.ingestion.mode}\n` +
           `    trust         ${result.newSource.trust}\n` +
-          `    sources       ${result.existingSourcesCount} → ${result.existingSourcesCount + 1}\n\n` +
+          (result.replacedSource !== null
+            ? `    replaces      ${result.replacedSource.id} (${result.replacedSource.ingestion.mode})\n`
+            : "") +
+          `    sources       ${result.existingSourcesCount} → ${nextCount}\n\n` +
           `Re-run with --apply to fetch + extract + reindex.\n`,
       );
     } else if (result.kind === "skipped") {
@@ -2525,7 +2553,8 @@ async function cmdFeed(
     } else {
       process.stdout.write(
         `Done.\n` +
-          `    new source    ${result.newSource.id}\n` +
+          `    operation     ${result.operation}\n` +
+          `    source        ${result.newSource.id}\n` +
           `    fetch status  ${result.fetchEntry.status}\n` +
           `    facts added   ${result.factsAdded}\n` +
           `    total facts   ${result.newFactCount}\n` +
@@ -3140,6 +3169,10 @@ program
   .option("--trust <n>", "Trust score in [0, 1] (default: 0.85)")
   .option("--rationale <text>", "One-line reason for adding this source")
   .option("--source-id <id>", "Override the derived source id (must be lowercase kebab-case)")
+  .option(
+    "--replace",
+    "Replace the existing source matching --source-id instead of adding",
+  )
   .option(
     "--scope <glob...>",
     "ingestion.scope globs (repeatable; default per-kind)",

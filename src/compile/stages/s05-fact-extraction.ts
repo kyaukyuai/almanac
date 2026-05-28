@@ -154,7 +154,7 @@ export interface CreateFactExtractionRunnerOptions {
 
 export interface DocumentText {
   text: string;
-  method: "utf8" | "pdftotext";
+  method: "utf8" | "html-text" | "pdftotext";
 }
 
 /**
@@ -584,6 +584,11 @@ export async function defaultReadDocumentText(
     return readPdfText(almanacDir, document);
   }
   const bytes = await readDocument(almanacDir, document.relPath);
+  if (isHtmlDocument(document)) {
+    const html = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+    const text = htmlToExtractableText(html);
+    return text.length === 0 ? null : { text, method: "html-text" };
+  }
   return {
     text: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
     method: "utf8",
@@ -595,6 +600,78 @@ function isPdfDocument(document: FetchedDocument): boolean {
     document.mediaType === "application/pdf" ||
     document.relPath.toLowerCase().endsWith(".pdf")
   );
+}
+
+function isHtmlDocument(document: FetchedDocument): boolean {
+  const rel = document.relPath.toLowerCase();
+  return (
+    document.mediaType === "text/html" ||
+    document.mediaType === "application/xhtml+xml" ||
+    rel.endsWith(".html") ||
+    rel.endsWith(".htm")
+  );
+}
+
+export function htmlToExtractableText(html: string): string {
+  const content =
+    extractElementHtml(html, "main") ??
+    extractElementHtml(html, "article") ??
+    extractElementHtml(html, "body") ??
+    html;
+
+  return decodeHtmlEntities(
+    content
+      .replace(/<!--[\s\S]*?-->/g, " ")
+      .replace(/<script\b[\s\S]*?<\/script>/gi, " ")
+      .replace(/<style\b[\s\S]*?<\/style>/gi, " ")
+      .replace(/<noscript\b[\s\S]*?<\/noscript>/gi, " ")
+      .replace(/<svg\b[\s\S]*?<\/svg>/gi, " ")
+      .replace(/<nav\b[\s\S]*?<\/nav>/gi, " ")
+      .replace(/<aside\b[\s\S]*?<\/aside>/gi, " ")
+      .replace(/<header\b[\s\S]*?<\/header>/gi, " ")
+      .replace(/<footer\b[\s\S]*?<\/footer>/gi, " ")
+      .replace(/<form\b[\s\S]*?<\/form>/gi, " ")
+      .replace(/<br\s*\/?>/gi, "\n")
+      .replace(/<\/(p|div|section|article|main|h[1-6]|li|ul|ol|pre|table|tr|blockquote)>/gi, "\n")
+      .replace(/<(p|div|section|article|main|h[1-6]|li|ul|ol|pre|table|tr|blockquote)\b[^>]*>/gi, "\n")
+      .replace(/<[^>]+>/g, " "),
+  )
+    .split("\n")
+    .map((line) => line.replace(/[ \t\f\v]+/g, " ").trim())
+    .filter((line) => line.length > 0)
+    .join("\n")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+function extractElementHtml(html: string, tagName: string): string | null {
+  const re = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
+  const match = re.exec(html);
+  const content = match?.[1]?.trim();
+  return content !== undefined && content.length > 0 ? content : null;
+}
+
+const HTML_ENTITIES: Record<string, string> = {
+  amp: "&",
+  apos: "'",
+  gt: ">",
+  lt: "<",
+  nbsp: " ",
+  quot: '"',
+};
+
+function decodeHtmlEntities(text: string): string {
+  return text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (full, body: string) => {
+    if (body.startsWith("#x") || body.startsWith("#X")) {
+      const cp = parseInt(body.slice(2), 16);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : full;
+    }
+    if (body.startsWith("#")) {
+      const cp = parseInt(body.slice(1), 10);
+      return Number.isFinite(cp) ? String.fromCodePoint(cp) : full;
+    }
+    return HTML_ENTITIES[body.toLowerCase()] ?? full;
+  });
 }
 
 function readPdfText(

@@ -25,6 +25,8 @@ import {
   DomainSpecSchema,
   FactRecordSchema,
   parseStage11Output,
+  type BenchmarkReport,
+  type BenchmarkSet,
   type DomainSpec,
   type FactRecord,
   type Stage11Output,
@@ -40,6 +42,8 @@ import { sha256Hex, type StageRunner } from "../pipeline.ts";
 import { loadPromptTemplate } from "../prompt-loader.ts";
 import { domainSpecPath } from "./s01-domain-analysis.ts";
 import { discoverToolNames, loadTool } from "../../serve/tool-loader.ts";
+import { createAlmanacRuntimeAsync } from "../../serve/runtime.ts";
+import { runBenchmark } from "./s12-benchmark-run.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Constants
@@ -52,8 +56,8 @@ export const STAGE11_PROMPT_STAGE_ID = "11-benchmark-gen";
 export const STAGE11_DEFAULT_MODEL = "claude-sonnet-4-5";
 export const STAGE11_DEFAULT_MAX_TOKENS = 6144;
 export const STAGE11_DEFAULT_TEMPERATURE = 0.2;
-/** 1 initial + 1 retry-on-error. Mirrors Stage 6. */
-export const STAGE11_DEFAULT_MAX_ATTEMPTS = 2;
+/** 1 initial + 2 retries: schema repair plus optional runtime preflight repair. */
+export const STAGE11_DEFAULT_MAX_ATTEMPTS = 3;
 
 /**
  * Default size of the fact sample shown to the Stage 11 LLM.
@@ -118,6 +122,18 @@ export class InvalidFixtureInvocationError extends Error {
   }
 }
 
+export class BenchmarkPreflightValidationError extends Error {
+  constructor(
+    public readonly report: BenchmarkReport,
+    public readonly failedFixtureIds: readonly string[],
+  ) {
+    super(
+      `Stage 11: generated benchmark failed runtime preflight for fixture(s): ${failedFixtureIds.join(", ")}`,
+    );
+    this.name = "BenchmarkPreflightValidationError";
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Cross-validation
 // ──────────────────────────────────────────────────────────────────────────────
@@ -143,6 +159,108 @@ export function validateInvocations(
       throw new InvalidFixtureInvocationError(f.id, f.invocation.tool, enabledArr);
     }
   }
+}
+
+export function normalizePositiveContainsForFactsTools(
+  output: Stage11Output,
+  manifests: readonly ToolManifest[],
+): { output: Stage11Output; changedFixtureIds: string[] } {
+  const byName = new Map(manifests.map((m) => [m.name, m]));
+  const changedFixtureIds: string[] = [];
+  const positive = output.set.positive.map((fixture) => {
+    const manifest = byName.get(fixture.invocation.tool);
+    if (
+      manifest?.knowledgeUsage.facts === true &&
+      fixture.expected.contains.length > 0
+    ) {
+      changedFixtureIds.push(fixture.id);
+      return {
+        ...fixture,
+        expected: {
+          ...fixture.expected,
+          contains: [],
+        },
+      };
+    }
+    return fixture;
+  });
+
+  if (changedFixtureIds.length === 0) {
+    return { output, changedFixtureIds };
+  }
+
+  return {
+    output: {
+      ...output,
+      set: {
+        ...output.set,
+        positive,
+      },
+    },
+    changedFixtureIds,
+  };
+}
+
+function preflightFailures(report: BenchmarkReport): BenchmarkReport["results"] {
+  return report.results.filter((r) => r.status !== "pass");
+}
+
+function stabilizeFromPreflight(
+  output: Stage11Output,
+  report: BenchmarkReport,
+): { output: Stage11Output; droppedFixtureIds: string[] } {
+  const failedIds = new Set(preflightFailures(report).map((r) => r.fixtureId));
+  if (failedIds.size === 0) return { output, droppedFixtureIds: [] };
+
+  const positive = output.set.positive.filter((f) => !failedIds.has(f.id));
+  const negative = output.set.negative.filter((f) => !failedIds.has(f.id));
+  if (positive.length === 0 || negative.length === 0) {
+    return { output, droppedFixtureIds: [] };
+  }
+
+  return {
+    output: {
+      ...output,
+      set: {
+        ...output.set,
+        positive,
+        negative,
+      },
+      rationale: `${output.rationale} Runtime preflight removed unstable fixtures: ${[...failedIds].join(", ")}.`.slice(
+        0,
+        2000,
+      ),
+    },
+    droppedFixtureIds: [...failedIds],
+  };
+}
+
+function formatPreflightFailures(
+  report: BenchmarkReport,
+  set: BenchmarkSet,
+): string {
+  const byId = new Map([
+    ...set.positive.map((f) => [f.id, f.invocation] as const),
+    ...set.negative.map((f) => [f.id, f.invocation] as const),
+  ]);
+  const lines = preflightFailures(report).slice(0, 10).map((r) => {
+    const invocation = byId.get(r.fixtureId);
+    return [
+      `- ${r.kind} ${r.fixtureId}: ${r.reason}`,
+      invocation
+        ? `  invocation: ${JSON.stringify(invocation)}`
+        : "  invocation: <unknown>",
+      `  observed: ${JSON.stringify(r.observed)}`,
+    ].join("\n");
+  });
+  return [
+    "Runtime preflight failed these fixtures:",
+    ...lines,
+    "",
+    "For positives, use only invocations that can pass against the available fact store or deterministic live sources.",
+    "Avoid positive fixtures for facts-backed custom tools with empty sampleUrls unless the exact invocation passed preflight.",
+    "Use refusalReason \"no-source\" for no-result negatives; \"no-results\" is an error code, not a refusalReason.",
+  ].join("\n");
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -184,6 +302,19 @@ export interface CreateBenchmarkGenRunnerOptions {
     almanacDir: string,
     size: number,
   ) => Promise<FactSampleEntry[]>;
+  /**
+   * When true, execute the generated benchmark set against the current runtime
+   * before persisting it. Failures are fed back to the LLM as a retry; on the
+   * final attempt, failed fixtures may be dropped so Stage 12 receives a stable
+   * smoke set.
+   */
+  preflightGeneratedSet?: boolean;
+  /** Test seam for preflight execution. Defaults to the concrete runtime. */
+  preflightBenchmarkSet?: (
+    almanacDir: string,
+    set: BenchmarkSet,
+    ranAt: Date,
+  ) => Promise<BenchmarkReport>;
 }
 
 /**
@@ -216,6 +347,8 @@ export function createBenchmarkGenRunner(
   const readEnabledManifests =
     opts.readEnabledManifests ?? defaultReadEnabledManifests;
   const readFactSample = opts.readFactSample ?? defaultReadFactSample;
+  const preflightBenchmarkSet =
+    opts.preflightBenchmarkSet ?? defaultPreflightBenchmarkSet;
   const factSampleSize = Math.max(
     0,
     opts.factSampleSize ?? STAGE11_DEFAULT_FACT_SAMPLE_SIZE,
@@ -242,7 +375,12 @@ export function createBenchmarkGenRunner(
         description: m.description,
         whenToUse: m.whenToUse,
         inputSchema: m.inputSchema,
+        outputSchema: m.outputSchema,
+        capabilities: m.capabilities,
         volatilityClass: m.volatilityClass,
+        knowledgeUsage: m.knowledgeUsage,
+        sourceDependencies: m.sourceDependencies,
+        sampleUrls: m.sampleUrls,
       }));
 
       const prompt = loadPromptTemplate({
@@ -280,6 +418,7 @@ export function createBenchmarkGenRunner(
         | LlmJsonParseError
         | LlmSchemaValidationError
         | InvalidFixtureInvocationError
+        | BenchmarkPreflightValidationError
         | null = null;
       let output: Stage11Output | null = null;
       let lastDurationMs = 0;
@@ -332,12 +471,104 @@ export function createBenchmarkGenRunner(
         try {
           const candidate = parseStage11Output(parsedJson);
           validateInvocations(candidate.set, enabledNames);
-          output = candidate;
+          const normalized = normalizePositiveContainsForFactsTools(
+            candidate,
+            manifests,
+          );
+          if (normalized.changedFixtureIds.length > 0) {
+            ctx.log({
+              event: "stage11:fixtures-normalized",
+              reason: "facts-tool-contains-cleared",
+              fixtures: normalized.changedFixtureIds,
+            });
+          }
+
+          if (opts.preflightGeneratedSet === true) {
+            ctx.log({
+              event: "stage11:preflight:start",
+              positives: normalized.output.set.positive.length,
+              negatives: normalized.output.set.negative.length,
+            });
+            const report = await preflightBenchmarkSet(
+              ctx.almanacDir,
+              normalized.output.set,
+              ctx.now(),
+            );
+            const failed = preflightFailures(report);
+            ctx.log({
+              event: "stage11:preflight:done",
+              total: report.summary.total,
+              passed: report.summary.passed,
+              failed: report.summary.failed,
+              errored: report.summary.errored,
+            });
+            if (failed.length > 0) {
+              lastError = new BenchmarkPreflightValidationError(
+                report,
+                failed.map((f) => f.fixtureId),
+              );
+              if (attempt < maxAttempts) {
+                const detail = formatPreflightFailures(report, normalized.output.set);
+                ctx.log({
+                  event: "stage11:llm:retry",
+                  callName,
+                  attempt,
+                  reason: "preflight-failed",
+                  message: detail,
+                });
+                messages.push(
+                  { role: "assistant", content: completion.text },
+                  {
+                    role: "user",
+                    content: buildRetryFeedback({
+                      reason: "preflight-failed",
+                      detail,
+                    }),
+                  },
+                );
+                continue;
+              }
+
+              const stabilized = stabilizeFromPreflight(
+                normalized.output,
+                report,
+              );
+              if (stabilized.droppedFixtureIds.length > 0) {
+                ctx.log({
+                  event: "stage11:preflight:stabilized",
+                  dropped: stabilized.droppedFixtureIds,
+                  positives: stabilized.output.set.positive.length,
+                  negatives: stabilized.output.set.negative.length,
+                });
+                const stabilizedReport = await preflightBenchmarkSet(
+                  ctx.almanacDir,
+                  stabilized.output.set,
+                  ctx.now(),
+                );
+                const stabilizedFailed = preflightFailures(stabilizedReport);
+                if (stabilizedFailed.length === 0) {
+                  output = stabilized.output;
+                  lastError = null;
+                  break;
+                }
+                lastError = new BenchmarkPreflightValidationError(
+                  stabilizedReport,
+                  stabilizedFailed.map((f) => f.fixtureId),
+                );
+              }
+              throw lastError;
+            }
+          }
+
+          output = normalized.output;
           lastError = null;
           break;
         } catch (e) {
           const detail = e instanceof Error ? e.message : String(e);
-          if (e instanceof InvalidFixtureInvocationError) {
+          if (
+            e instanceof InvalidFixtureInvocationError ||
+            e instanceof BenchmarkPreflightValidationError
+          ) {
             lastError = e;
           } else {
             lastError = new LlmSchemaValidationError(
@@ -353,7 +584,9 @@ export function createBenchmarkGenRunner(
               callName,
               attempt,
               reason:
-                e instanceof InvalidFixtureInvocationError
+                e instanceof BenchmarkPreflightValidationError
+                  ? "preflight-failed"
+                  : e instanceof InvalidFixtureInvocationError
                   ? "invalid-invocation"
                   : "schema-validation",
               message: detail,
@@ -364,7 +597,9 @@ export function createBenchmarkGenRunner(
                 role: "user",
                 content: buildRetryFeedback({
                   reason:
-                    e instanceof InvalidFixtureInvocationError
+                    e instanceof BenchmarkPreflightValidationError
+                      ? "preflight-failed"
+                      : e instanceof InvalidFixtureInvocationError
                       ? "invalid-invocation"
                       : "schema-validation",
                   detail,
@@ -431,7 +666,11 @@ export function createBenchmarkGenRunner(
 }
 
 function buildRetryFeedback(args: {
-  reason: "json-parse" | "schema-validation" | "invalid-invocation";
+  reason:
+    | "json-parse"
+    | "schema-validation"
+    | "invalid-invocation"
+    | "preflight-failed";
   detail: string;
   enabledTools?: readonly string[];
 }): string {
@@ -440,7 +679,9 @@ function buildRetryFeedback(args: {
       ? "Your previous response could not be parsed as JSON."
       : args.reason === "schema-validation"
         ? "Your previous response was valid JSON but did not match the required schema."
-        : "Your previous response referenced a tool name that is not in the enabled tool set.";
+        : args.reason === "invalid-invocation"
+          ? "Your previous response referenced a tool name that is not in the enabled tool set."
+          : "Your previous response matched the schema but failed runtime benchmark preflight.";
   const lines = [
     header,
     "",
@@ -452,7 +693,9 @@ function buildRetryFeedback(args: {
   }
   lines.push(
     "",
-    "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
+    args.reason === "preflight-failed"
+      ? "Please re-emit a corrected benchmark set. Remove or replace every failed positive fixture; do not keep a positive fixture that already failed preflight."
+      : "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
     "Return ONLY the JSON object — no prose, no code fences, no explanation.",
   );
   return lines.join("\n");
@@ -495,6 +738,27 @@ async function defaultReadEnabledManifests(
     if (!t.manifest.disabled) enabled.push(t.manifest);
   }
   return enabled;
+}
+
+async function defaultPreflightBenchmarkSet(
+  almanacDir: string,
+  set: BenchmarkSet,
+  ranAt: Date,
+): Promise<BenchmarkReport> {
+  const runtime = await createAlmanacRuntimeAsync({ almanacDir });
+  try {
+    return await runBenchmark({
+      almanacId: set.almanacId,
+      set,
+      runtime,
+      ranAt,
+    });
+  } finally {
+    const close = (runtime as unknown as { close?: () => void }).close;
+    if (typeof close === "function") {
+      close.call(runtime);
+    }
+  }
 }
 
 /**

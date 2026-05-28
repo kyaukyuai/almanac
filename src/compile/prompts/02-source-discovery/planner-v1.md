@@ -21,6 +21,8 @@ discovery executor will run. The executor will:
 
 - Probe each `directProbe.hint` (URL fetch or web search)
 - Run each `webSearchQueries[*].query` against a search engine
+- Run `community` / `any` web-search queries against public Hacker News and
+  Reddit JSON providers when available
 - Run each `githubQueries[*].query` against the GitHub search API
 - Collect candidates and pass them to the **evaluator** prompt (Stage 2b)
 
@@ -135,6 +137,12 @@ Adjust per domain when justified:
    phrasing: include the domain term, plus narrowing keywords like
    `"official documentation"`, `"reddit"`, `"site:arxiv.org"`,
    `"changelog"`, etc.
+
+   For `targetKind: "community"`, write queries that also work against public
+   Hacker News / Reddit JSON search, not only generic web search. Include the
+   core subject and, when a subreddit is obvious, use `r/<subreddit>` or
+   `site:reddit.com/r/<subreddit>` so the executor can scope Reddit directly.
+   Do not depend on quoted Google-only operators for community queries.
 
 3. **Set `recencyDays` for volatility-sensitive queries.**
    - For `targetKind: news` or queries about "latest", "current", "2026":

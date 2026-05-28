@@ -12,7 +12,11 @@
  *      taking up to `budgets.maxCandidatesPerKind` results, and probing
  *      each. Origin: `web-search` with `rank`.
  *
- *   3. Running every `githubQueries[i].query` through `GithubSearcher`,
+ *   3. Running community-targeted queries through public community providers
+ *      (Hacker News, Reddit). Provider results already come from JSON APIs, so
+ *      they become candidates directly. Origin: `community-search`.
+ *
+ *   4. Running every `githubQueries[i].query` through `GithubSearcher`,
  *      keeping up to `budgets.maxCandidatesPerKind` repos. GitHub repos are
  *      NOT URL-probed (the search response already carries title /
  *      description / stars / license / pushed_at). Origin: `github` with
@@ -33,6 +37,8 @@ import {
   type SourceKind,
 } from "../../core/types.ts";
 import type {
+  CommunitySearchHit,
+  CommunitySearcher,
   GithubSearcher,
   ProbeResult,
   UrlProber,
@@ -47,6 +53,7 @@ export interface DiscoveryExecutorInput {
   plan: SourceDiscoveryPlan;
   prober: UrlProber;
   webSearcher: WebSearcher;
+  communitySearchers?: CommunitySearcher[];
   githubSearcher: GithubSearcher;
   /** Wall-clock provider; injected for deterministic tests. */
   now?: () => Date;
@@ -60,6 +67,7 @@ export interface DiscoveryExecutorResult {
   stats: {
     directProbes: { attempted: number; produced: number };
     webSearch: { queries: number; produced: number };
+    communitySearch: { queries: number; providers: number; produced: number };
     github: { queries: number; produced: number };
     deduped: number;
   };
@@ -80,7 +88,13 @@ export async function runDiscoveryExecutor(
 ): Promise<DiscoveryExecutorResult> {
   const now = input.now ?? (() => new Date());
   const log = input.log ?? (() => {});
-  const { plan, prober, webSearcher, githubSearcher } = input;
+  const {
+    plan,
+    prober,
+    webSearcher,
+    githubSearcher,
+    communitySearchers = [],
+  } = input;
 
   const seen = new Set<string>();
   const candidates: Candidate[] = [];
@@ -100,9 +114,32 @@ export async function runDiscoveryExecutor(
 
   // ── 1. Direct probes ─────────────────────────────────────────────────────
   let directProduced = 0;
+  let communityProduced = 0;
+  let communityQueries = 0;
   for (let i = 0; i < plan.directProbes.length; i++) {
     if (candidates.length >= CANDIDATES_MAX) break;
     const probe = plan.directProbes[i]!;
+    if (!isUrl(probe.hint) && probe.kind === "community") {
+      communityQueries += 1;
+      for (const searcher of communitySearchers) {
+        if (candidates.length >= CANDIDATES_MAX) break;
+        const communityHits = await safeCommunitySearch(searcher, log, {
+          query: probe.hint,
+          maxResults: 1,
+          targetKind: probe.kind,
+          origin: { type: "direct-probe", index: i },
+        });
+        const produced = pushCommunityHits({
+          hits: communityHits,
+          provider: searcher.name,
+          origin: { type: "direct-probe", index: i },
+          now,
+          tryPush,
+        });
+        communityProduced += produced;
+        directProduced += produced;
+      }
+    }
     let url: string | null;
     if (isUrl(probe.hint)) {
       url = probe.hint;
@@ -160,6 +197,27 @@ export async function runDiscoveryExecutor(
       });
       if (tryPush(candidate)) webProduced += 1;
     }
+
+    if (wq.targetKind === "community" || wq.targetKind === "any") {
+      communityQueries += 1;
+      for (const searcher of communitySearchers) {
+        if (candidates.length >= CANDIDATES_MAX) break;
+        const communityHits = await safeCommunitySearch(searcher, log, {
+          query: wq.query,
+          maxResults: perQuery,
+          ...(wq.recencyDays !== null ? { recencyDays: wq.recencyDays } : {}),
+          targetKind: wq.targetKind,
+          origin: { type: "web-search", index: i },
+        });
+        communityProduced += pushCommunityHits({
+          hits: communityHits,
+          provider: searcher.name,
+          origin: { type: "web-search", index: i },
+          now,
+          tryPush,
+        });
+      }
+    }
   }
 
   // ── 3. GitHub queries ────────────────────────────────────────────────────
@@ -211,6 +269,11 @@ export async function runDiscoveryExecutor(
         queries: plan.webSearchQueries.length,
         produced: webProduced,
       },
+      communitySearch: {
+        queries: communityQueries,
+        providers: communitySearchers.length,
+        produced: communityProduced,
+      },
       github: {
         queries: plan.githubQueries.length,
         produced: githubProduced,
@@ -218,6 +281,44 @@ export async function runDiscoveryExecutor(
       deduped,
     },
   };
+}
+
+function pushCommunityHits(input: {
+  hits: CommunitySearchHit[];
+  provider: string;
+  origin: { type: "direct-probe" | "web-search"; index: number };
+  now: () => Date;
+  tryPush: (candidate: Candidate) => boolean;
+}): number {
+  let produced = 0;
+  for (let rank = 0; rank < input.hits.length; rank++) {
+    const hit = input.hits[rank]!;
+    const candidate: Candidate = {
+      url: hit.url,
+      kind: "community",
+      title: clampNullableText(hit.title, CANDIDATE_TITLE_MAX_CHARS),
+      snippet: clampNullableText(hit.snippet, CANDIDATE_SNIPPET_MAX_CHARS),
+      preview: clampNullableText(hit.preview ?? null, CANDIDATE_PREVIEW_MAX_CHARS),
+      fetchedAt: input.now().toISOString(),
+      fetchStatus: "ok",
+      origin: {
+        type: "community-search",
+        provider: input.provider,
+        inputType: input.origin.type,
+        inputIndex: input.origin.index,
+        rank,
+      },
+      meta: {
+        discoveryProvider: input.provider,
+        ...(hit.author !== undefined ? { author: hit.author } : {}),
+        ...(hit.container !== undefined ? { container: hit.container } : {}),
+        ...(hit.publishedAt !== undefined ? { publishedAt: hit.publishedAt } : {}),
+        ...(hit.engagement !== undefined ? { engagement: hit.engagement } : {}),
+      },
+    };
+    if (input.tryPush(candidate)) produced += 1;
+  }
+  return produced;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -319,6 +420,24 @@ async function safeWebSearch(
   } catch (e) {
     log({
       event: "discovery:web-search:threw",
+      query: input.query,
+      message: (e as Error).message,
+    });
+    return [];
+  }
+}
+
+async function safeCommunitySearch(
+  searcher: CommunitySearcher,
+  log: (e: object) => void,
+  input: Parameters<CommunitySearcher["search"]>[0],
+) {
+  try {
+    return await searcher.search(input);
+  } catch (e) {
+    log({
+      event: "discovery:community-search:threw",
+      provider: searcher.name,
       query: input.query,
       message: (e as Error).message,
     });

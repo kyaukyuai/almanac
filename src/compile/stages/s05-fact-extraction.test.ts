@@ -38,6 +38,7 @@ import {
   defaultReadDocumentText,
   deriveUlid,
   factsJsonlPath,
+  htmlToExtractableText,
 } from "./s05-fact-extraction.ts";
 import type { StageContext } from "../pipeline.ts";
 
@@ -533,7 +534,7 @@ describe("chunkText", () => {
 });
 
 describe("defaultReadDocumentText", () => {
-  test("decodes non-PDF documents as UTF-8 text", async () => {
+  test("converts HTML documents to extractable text", async () => {
     const fx = await freshFixture();
     const entry = FETCH_MANIFEST.entries[0]!;
     if (entry.status !== "fetched") throw new Error("expected fetched entry");
@@ -543,8 +544,45 @@ describe("defaultReadDocumentText", () => {
 
     expect(extracted).toEqual({
       text: DOC_BODY,
-      method: "utf8",
+      method: "html-text",
     });
+  });
+});
+
+describe("htmlToExtractableText", () => {
+  test("prefers main content and removes navigation/script noise", () => {
+    const html = `<!doctype html>
+      <html>
+        <head><title>Ignored title</title><script>window.noise()</script></head>
+        <body>
+          <nav>Docs Home Search Versions</nav>
+          <main>
+            <h1>Operator pattern</h1>
+            <p>Operators use custom resources to manage applications.</p>
+            <aside>Page feedback</aside>
+            <script>console.log("noise")</script>
+          </main>
+          <footer>Copyright</footer>
+        </body>
+      </html>`;
+
+    const text = htmlToExtractableText(html);
+
+    expect(text).toContain("Operator pattern");
+    expect(text).toContain(
+      "Operators use custom resources to manage applications.",
+    );
+    expect(text).not.toContain("Docs Home");
+    expect(text).not.toContain("window.noise");
+    expect(text).not.toContain("Page feedback");
+  });
+
+  test("decodes common entities and falls back to body when main is absent", () => {
+    const text = htmlToExtractableText(
+      `<body><p>Level-based &amp; edge-based APIs&#46;</p></body>`,
+    );
+
+    expect(text).toBe("Level-based & edge-based APIs.");
   });
 });
 

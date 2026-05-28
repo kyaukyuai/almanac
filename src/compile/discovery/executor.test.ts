@@ -22,6 +22,7 @@ import {
   runDiscoveryExecutor,
 } from "./executor.ts";
 import type {
+  CommunitySearcher,
   GithubSearcher,
   ProbeResult,
   UrlProber,
@@ -79,6 +80,41 @@ function mockWebSearcher(
           url: h.url,
           title: h.title ?? null,
           snippet: h.snippet ?? null,
+        }));
+    },
+  };
+}
+
+function mockCommunitySearcher(
+  name: string,
+  responses: Record<string, Array<{
+    url: string;
+    title?: string;
+    snippet?: string;
+    preview?: string;
+    author?: string;
+    container?: string;
+    publishedAt?: string;
+    engagement?: Record<string, number>;
+  }>>,
+): CommunitySearcher & { calls: string[] } {
+  const calls: string[] = [];
+  return {
+    name,
+    calls,
+    async search(input) {
+      calls.push(input.query);
+      return (responses[input.query] ?? [])
+        .slice(0, input.maxResults)
+        .map((h) => ({
+          url: h.url,
+          title: h.title ?? null,
+          snippet: h.snippet ?? null,
+          ...(h.preview !== undefined ? { preview: h.preview } : {}),
+          ...(h.author !== undefined ? { author: h.author } : {}),
+          ...(h.container !== undefined ? { container: h.container } : {}),
+          ...(h.publishedAt !== undefined ? { publishedAt: h.publishedAt } : {}),
+          ...(h.engagement !== undefined ? { engagement: h.engagement } : {}),
         }));
     },
   };
@@ -349,6 +385,107 @@ describe("web search queries", () => {
 
     expect(out.candidates[0]!.title).toHaveLength(300);
     expect(out.candidates[0]!.snippet).toHaveLength(500);
+  });
+});
+
+// ──────────────────────────────────────────────────────────────────────────────
+// runDiscoveryExecutor — community providers
+// ──────────────────────────────────────────────────────────────────────────────
+
+describe("community search providers", () => {
+  test("runs HN/Reddit-style providers for community web queries without probing", async () => {
+    const prober = mockProber({});
+    const community = mockCommunitySearcher("hackernews", {
+      "k8s operator discussion": [
+        {
+          url: "https://news.ycombinator.com/item?id=123",
+          title: "K8s operator thread",
+          snippet: "HN discussion",
+          preview: "Discussion body",
+          author: "alice",
+          container: "news.ycombinator.com",
+          publishedAt: "2026-05-07T18:24:11.000Z",
+          engagement: { points: 120, comments: 42 },
+        },
+      ],
+    });
+    const out = await runDiscoveryExecutor({
+      plan: plan({
+        webSearchQueries: [
+          {
+            query: "k8s operator discussion",
+            targetKind: "community",
+            rationale: "x",
+            recencyDays: 30,
+          },
+        ],
+      }),
+      prober,
+      webSearcher: mockWebSearcher({}),
+      communitySearchers: [community],
+      githubSearcher: mockGithubSearcher({}),
+      now: NOW,
+    });
+
+    expect(prober.calls.length).toBe(0);
+    expect(community.calls).toEqual(["k8s operator discussion"]);
+    expect(out.candidates.length).toBe(1);
+    const c = out.candidates[0]!;
+    expect(c.kind).toBe("community");
+    expect(c.origin).toEqual({
+      type: "community-search",
+      provider: "hackernews",
+      inputType: "web-search",
+      inputIndex: 0,
+      rank: 0,
+    });
+    expect(c.meta.discoveryProvider).toBe("hackernews");
+    expect(c.meta.engagement?.points).toBe(120);
+    expect(out.stats.communitySearch).toEqual({
+      queries: 1,
+      providers: 1,
+      produced: 1,
+    });
+  });
+
+  test("falls back to community providers for non-URL community direct probes", async () => {
+    const community = mockCommunitySearcher("reddit", {
+      "site:reddit.com/r/kubernetes recent": [
+        {
+          url: "https://www.reddit.com/r/kubernetes/comments/abc/thread/",
+          title: "r/kubernetes thread",
+          snippet: "Reddit discussion",
+          container: "r/kubernetes",
+          engagement: { score: 20, numComments: 5 },
+        },
+      ],
+    });
+    const out = await runDiscoveryExecutor({
+      plan: plan({
+        directProbes: [
+          {
+            hint: "site:reddit.com/r/kubernetes recent",
+            kind: "community",
+            rationale: "x",
+          },
+        ],
+      }),
+      prober: mockProber({}),
+      webSearcher: mockWebSearcher({}),
+      communitySearchers: [community],
+      githubSearcher: mockGithubSearcher({}),
+      now: NOW,
+    });
+
+    expect(out.candidates.length).toBe(1);
+    expect(out.candidates[0]!.origin).toEqual({
+      type: "community-search",
+      provider: "reddit",
+      inputType: "direct-probe",
+      inputIndex: 0,
+      rank: 0,
+    });
+    expect(out.stats.directProbes).toEqual({ attempted: 1, produced: 1 });
   });
 });
 
