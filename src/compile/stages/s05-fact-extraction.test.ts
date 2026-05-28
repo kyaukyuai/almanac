@@ -35,6 +35,7 @@ import {
   STAGE5_PROMPT_VERSION,
   chunkText,
   createFactExtractionRunner,
+  defaultReadDocumentText,
   deriveUlid,
   factsJsonlPath,
 } from "./s05-fact-extraction.ts";
@@ -136,6 +137,9 @@ const DOC_HASH =
   "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789";
 const DOC_REL_PATH = `sources/raw/${DOC_HASH}.html`;
 const DOC_BODY = "Kubernetes is an open-source container orchestrator.";
+const PDF_DOC_HASH =
+  "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const PDF_DOC_REL_PATH = `sources/raw/${PDF_DOC_HASH}.pdf`;
 
 const FETCH_MANIFEST: SourceFetchManifest = buildSourceFetchManifest({
   almanacId: "kubernetes",
@@ -155,6 +159,31 @@ const FETCH_MANIFEST: SourceFetchManifest = buildSourceFetchManifest({
           url: "https://kubernetes.io/docs/",
           mediaType: "text/html",
           byteLength: DOC_BODY.length,
+          fetchedAt: "2026-05-08T12:00:00.500Z",
+        },
+      ],
+    },
+  ],
+});
+
+const PDF_FETCH_MANIFEST: SourceFetchManifest = buildSourceFetchManifest({
+  almanacId: "kubernetes",
+  startedAt: new Date("2026-05-08T12:00:00.000Z"),
+  finishedAt: new Date("2026-05-08T12:00:00.500Z"),
+  entries: [
+    {
+      sourceId: "k8s-docs",
+      status: "fetched",
+      fetchedAt: "2026-05-08T12:00:00.500Z",
+      finalUrl: "https://kubernetes.io/docs/reference.pdf",
+      fetcher: "stub",
+      documents: [
+        {
+          contentHash: PDF_DOC_HASH,
+          relPath: PDF_DOC_REL_PATH,
+          url: "https://kubernetes.io/docs/reference.pdf",
+          mediaType: "application/pdf",
+          byteLength: 1234,
           fetchedAt: "2026-05-08T12:00:00.500Z",
         },
       ],
@@ -338,6 +367,59 @@ describe("createFactExtractionRunner", () => {
     expect(userMsg.content).toContain("Kubernetes is an open-source");
   });
 
+  test("uses extracted PDF text before prompting the LLM", async () => {
+    const fx = await freshFixture({ withRawDoc: false });
+    const provider = createMockProvider({
+      responses: {
+        "05-fact-extraction@v1": JSON.stringify(buildExtractionResult()),
+      },
+    });
+    const events: object[] = [];
+    await createFactExtractionRunner({
+      provider,
+      readFetchManifest: async () => PDF_FETCH_MANIFEST,
+      readDocumentText: async (_almanacDir, document) => ({
+        text: `PDF text for ${document.contentHash}: govern, map, measure, manage.`,
+        method: "pdftotext",
+      }),
+    }).run(makeCtx({ ...fx, log: (e) => events.push(e) }));
+
+    const userMsg = provider.callLog[0]!.request.messages.find(
+      (m) => m.role === "user",
+    )!;
+    expect(userMsg.content).toContain("govern, map, measure, manage");
+    const textEvent = events.find(
+      (e) => (e as { event?: string }).event === "stage5:document-text",
+    ) as { method?: string; mediaType?: string } | undefined;
+    expect(textEvent).toMatchObject({
+      method: "pdftotext",
+      mediaType: "application/pdf",
+    });
+  });
+
+  test("skips a document when text extraction yields no text", async () => {
+    const fx = await freshFixture({ withRawDoc: false });
+    const provider = createMockProvider({
+      responses: {
+        "05-fact-extraction@v1": JSON.stringify(buildExtractionResult()),
+      },
+    });
+    const events: object[] = [];
+    const outcome = await createFactExtractionRunner({
+      provider,
+      readFetchManifest: async () => PDF_FETCH_MANIFEST,
+      readDocumentText: async () => null,
+    }).run(makeCtx({ ...fx, log: (e) => events.push(e) }));
+
+    if (outcome.kind !== "success") throw new Error("expected success");
+    expect(outcome.llmCalls).toBe(0);
+    expect(readFileSync(factsJsonlPath(fx.almanacDir), "utf8")).toBe("");
+    const empty = events.find(
+      (e) => (e as { event?: string }).event === "stage5:document-text-empty",
+    );
+    expect(empty).toBeDefined();
+  });
+
   test("malformed records are skipped, valid records are kept", async () => {
     const fx = await freshFixture();
     // First fact is malformed (text too short + invalid type), second is OK.
@@ -447,6 +529,22 @@ describe("chunkText", () => {
 
   test("empty input → empty output", () => {
     expect(chunkText("", 100, 10, 12)).toEqual([]);
+  });
+});
+
+describe("defaultReadDocumentText", () => {
+  test("decodes non-PDF documents as UTF-8 text", async () => {
+    const fx = await freshFixture();
+    const entry = FETCH_MANIFEST.entries[0]!;
+    if (entry.status !== "fetched") throw new Error("expected fetched entry");
+    const document = entry.documents[0]!;
+
+    const extracted = await defaultReadDocumentText(fx.almanacDir, document);
+
+    expect(extracted).toEqual({
+      text: DOC_BODY,
+      method: "utf8",
+    });
   });
 });
 

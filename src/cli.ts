@@ -1596,6 +1596,13 @@ function clipText(value: string, max = 120): string {
   return value.length <= max ? value : `${value.slice(0, max - 3)}...`;
 }
 
+function firstLine(value: string): string {
+  return value
+    .split(/\r?\n/)
+    .find((line) => line.trim().length > 0)
+    ?.trim() ?? "";
+}
+
 function listWithRemainder(items: string[], max = 5): string {
   const shown = items.slice(0, max);
   const remainder = items.length - shown.length;
@@ -2157,6 +2164,14 @@ async function cmdDoctor(
       process.env[key] ? "set" : "unset",
     );
   }
+  const pdftotext = spawnSync("pdftotext", ["-v"], { encoding: "utf8" });
+  add(
+    pdftotext.error ? "warn" : "ok",
+    "tool:pdftotext",
+    pdftotext.error
+      ? "missing; PDF snapshot sources will be skipped during fact extraction"
+      : firstLine(`${pdftotext.stdout}${pdftotext.stderr}`) || "available",
+  );
 
   if (id !== undefined) {
     const almanacDir = almanacDirPath(opts.root, id);

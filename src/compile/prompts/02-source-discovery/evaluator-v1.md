@@ -162,6 +162,12 @@ product releases monthly or faster; **slow** otherwise.
 | `snapshot`    | Permissively-licensed full content (CC0, CC-BY, MIT, public domain), official RFCs, files supplied by the user (`kind: file`) | Store full content under `sources/raw/` |
 | `feed`        | Source publishes RSS/Atom or has a stable polling endpoint, AND the source is `volatility: fast` or `news` kind | Pipeline subscribes; v0.2 may auto-poll |
 
+For public-sector guidance, regulatory guidance, and official framework
+documents that are explicitly public-domain or open-government licensed, prefer
+`snapshot` when the source is central to the requested domain. A high-trust
+canonical source that remains `index-only` will not contribute facts to the
+compiled knowledge index.
+
 When licensing is ambiguous, prefer `index-only`.
 
 ### `scope` field

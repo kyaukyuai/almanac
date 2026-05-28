@@ -24,6 +24,7 @@
  * chunks in encounter order — so identical inputs produce identical hashes.
  */
 
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
@@ -41,6 +42,7 @@ import {
   type DomainSpec,
   type ExtractionResult,
   type FactRecord,
+  type FetchedDocument,
   type SourceFetchManifest,
   type SourcesFile,
 } from "../../core/types.ts";
@@ -69,6 +71,7 @@ export const STAGE5_DEFAULT_CHUNK_CHARS = 4000;
 export const STAGE5_DEFAULT_CHUNK_OVERLAP = 200;
 /** Hard cap to keep a single huge document from exploding LLM cost. */
 export const STAGE5_DEFAULT_MAX_CHUNKS_PER_DOC = 12;
+export const STAGE5_PDF_TEXT_MAX_BUFFER = 32 * 1024 * 1024;
 
 export const FACTS_JSONL_REL_PATH = "extracted/facts.jsonl";
 
@@ -142,6 +145,16 @@ export interface CreateFactExtractionRunnerOptions {
     almanacDir: string,
     relPath: string,
   ) => Promise<Uint8Array>;
+  /** Test seam for turning a fetched document into extractable plain text. */
+  readDocumentText?: (
+    almanacDir: string,
+    document: FetchedDocument,
+  ) => Promise<DocumentText | null>;
+}
+
+export interface DocumentText {
+  text: string;
+  method: "utf8" | "pdftotext";
 }
 
 /**
@@ -162,6 +175,10 @@ export function createFactExtractionRunner(
   const readFetchManifest =
     opts.readFetchManifest ?? defaultReadFetchManifest;
   const readDocument = opts.readDocument ?? defaultReadDocument;
+  const readDocumentText =
+    opts.readDocumentText ??
+    ((almanacDir: string, doc: FetchedDocument) =>
+      defaultReadDocumentText(almanacDir, doc, readDocument));
 
   return {
     promptVersion: STAGE5_PROMPT_VERSION,
@@ -221,8 +238,25 @@ export function createFactExtractionRunner(
         for (const doc of entry.documents) {
           let text: string;
           try {
-            const bytes = await readDocument(ctx.almanacDir, doc.relPath);
-            text = new TextDecoder("utf-8", { fatal: false }).decode(bytes);
+            const extracted = await readDocumentText(ctx.almanacDir, doc);
+            if (extracted === null || extracted.text.trim().length === 0) {
+              ctx.log({
+                event: "stage5:document-text-empty",
+                sourceId: entry.sourceId,
+                relPath: doc.relPath,
+                mediaType: doc.mediaType,
+              });
+              continue;
+            }
+            text = extracted.text;
+            ctx.log({
+              event: "stage5:document-text",
+              sourceId: entry.sourceId,
+              relPath: doc.relPath,
+              mediaType: doc.mediaType,
+              method: extracted.method,
+              chars: text.length,
+            });
           } catch (cause) {
             ctx.log({
               event: "stage5:document-read-failed",
@@ -536,6 +570,51 @@ async function defaultReadDocument(
   const abs = join(almanacDir, relPath);
   const buf = await readFile(abs);
   return new Uint8Array(buf);
+}
+
+export async function defaultReadDocumentText(
+  almanacDir: string,
+  document: FetchedDocument,
+  readDocument: (
+    almanacDir: string,
+    relPath: string,
+  ) => Promise<Uint8Array> = defaultReadDocument,
+): Promise<DocumentText | null> {
+  if (isPdfDocument(document)) {
+    return readPdfText(almanacDir, document);
+  }
+  const bytes = await readDocument(almanacDir, document.relPath);
+  return {
+    text: new TextDecoder("utf-8", { fatal: false }).decode(bytes),
+    method: "utf8",
+  };
+}
+
+function isPdfDocument(document: FetchedDocument): boolean {
+  return (
+    document.mediaType === "application/pdf" ||
+    document.relPath.toLowerCase().endsWith(".pdf")
+  );
+}
+
+function readPdfText(
+  almanacDir: string,
+  document: FetchedDocument,
+): DocumentText | null {
+  const abs = join(almanacDir, document.relPath);
+  try {
+    const text = execFileSync(
+      "pdftotext",
+      ["-layout", "-enc", "UTF-8", "-nopgbrk", abs, "-"],
+      {
+        encoding: "utf8",
+        maxBuffer: STAGE5_PDF_TEXT_MAX_BUFFER,
+      },
+    );
+    return text.trim().length === 0 ? null : { text, method: "pdftotext" };
+  } catch {
+    return null;
+  }
 }
 
 // Re-export referenced types so tests can import everything from this module.
