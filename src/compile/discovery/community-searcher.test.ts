@@ -72,6 +72,48 @@ describe("createHackerNewsCommunitySearcher", () => {
     expect(hits[0]!.preview).toBe("useful thread");
   });
 
+  test("filters hits that only match one generic query token", async () => {
+    const searcher = createHackerNewsCommunitySearcher({
+      baseUrl: "https://hn.test",
+      fetchImpl: (async () =>
+        new Response(
+          JSON.stringify({
+            hits: [
+              {
+                objectID: "47746610",
+                title: "All elementary functions from a single binary operator",
+                author: "pizza",
+                points: 858,
+                num_comments: 298,
+                created_at: "2026-04-13T01:49:32Z",
+              },
+              {
+                objectID: "124",
+                title: "Kubernetes operator patterns in production",
+                url: "https://example.com/kubernetes-operator",
+                author: "alice",
+                points: 12,
+                num_comments: 3,
+                created_at: "2026-05-07T10:00:00Z",
+              },
+            ],
+          }),
+          { status: 200, headers: { "content-type": "application/json" } },
+        )) as unknown as typeof fetch,
+    });
+
+    const hits = await searcher.search({
+      query: "kubernetes operators",
+      maxResults: 5,
+      targetKind: "community",
+      origin: { type: "web-search", index: 0 },
+    });
+
+    expect(hits.map((hit) => hit.url)).toEqual([
+      "https://news.ycombinator.com/item?id=124",
+    ]);
+  });
+
   test("ignores non-community target kinds", async () => {
     const searcher = createHackerNewsCommunitySearcher({
       fetchImpl: (async () => {
