@@ -371,14 +371,43 @@ function normalizeCommunityQuery(raw: string): string {
 }
 
 function matchesQueryTokens(rawQuery: string, text: string): boolean {
-  const tokens = normalizeCommunityQuery(rawQuery)
+  const tokens = uniqueQueryTokens(normalizeCommunityQuery(rawQuery));
+  if (tokens.length === 0) return true;
+  const haystack = text.toLowerCase();
+  const matched = tokens.filter((token) =>
+    queryTokenVariants(token).some((variant) => haystack.includes(variant)),
+  );
+  if (tokens.length === 1) return matched.length === 1;
+  const requiredMatches =
+    tokens.length === 2 ? 2 : Math.max(2, Math.ceil(tokens.length * 0.6));
+  return matched.length >= requiredMatches;
+}
+
+function uniqueQueryTokens(query: string): string[] {
+  const seen = new Set<string>();
+  const tokens = query
     .toLowerCase()
     .split(/\s+/)
     .map((token) => token.replace(/[^a-z0-9.+#-]/g, ""))
-    .filter((token) => token.length >= 4 && !QUERY_STOPWORDS.has(token));
-  if (tokens.length === 0) return true;
-  const haystack = text.toLowerCase();
-  return tokens.some((token) => haystack.includes(token));
+    .filter((token) => isUsefulQueryToken(token));
+  return tokens.filter((token) => {
+    if (seen.has(token)) return false;
+    seen.add(token);
+    return true;
+  });
+}
+
+function isUsefulQueryToken(token: string): boolean {
+  if (QUERY_STOPWORDS.has(token)) return false;
+  if (token.length >= 4) return true;
+  return token.length >= 3 && /\d/.test(token);
+}
+
+function queryTokenVariants(token: string): string[] {
+  if (token.length >= 5 && token.endsWith("s")) {
+    return [token, token.slice(0, -1)];
+  }
+  return [token];
 }
 
 const QUERY_STOPWORDS = new Set([
