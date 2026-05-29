@@ -159,6 +159,10 @@ import {
 import { createAnthropicProvider } from "./llm/anthropic.ts";
 import { createMockProvider } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
+import {
+  describeEmbeddingProviderConfig,
+  resolveEmbeddingProviderConfig,
+} from "./embeddings/config.ts";
 import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
 import { runFeed, FeedAlreadyExistsError } from "./manage/feed.ts";
 import {
@@ -2169,6 +2173,12 @@ async function cmdDoctor(
       process.env[key] ? "set" : "unset",
     );
   }
+  const embeddingConfig = resolveEmbeddingProviderConfig(process.env);
+  add(
+    embeddingConfig.status === "configured" ? "ok" : "warn",
+    "embeddings",
+    describeEmbeddingProviderConfig(embeddingConfig),
+  );
   const pdftotext = spawnSync("pdftotext", ["-v"], { encoding: "utf8" });
   add(
     pdftotext.error ? "warn" : "ok",

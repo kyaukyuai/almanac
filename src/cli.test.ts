@@ -293,6 +293,7 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stderr).toBe("");
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
+    expect(doctor.stdout).toContain("embeddings");
   });
 
   test("profile flags high-trust accepted sources with no extracted facts", async () => {
