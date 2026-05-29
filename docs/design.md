@@ -846,6 +846,9 @@ downstream follow-up:
   `almanac update` against TTL-stale sources.
 - **Wiki view export** — human-readable inspection bundle.
 
+See [`v0.4-plan.md`](./v0.4-plan.md) for the PR-by-PR implementation
+sequence and release gates.
+
 ### v0.5+ (long-tail)
 
 - Slack adapter

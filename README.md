@@ -175,7 +175,8 @@ structural fixes that the v0.2.5 smokes empirically motivated.
   corpus density into measurable fixture coverage).
 
 See [`docs/design.md §8.5–§9`](./docs/design.md) for the worked
-plan and open questions.
+plan and open questions. The implementation sequence is tracked in
+[`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
 
 ## Changelog
 
