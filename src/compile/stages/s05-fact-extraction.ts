@@ -613,12 +613,19 @@ function isHtmlDocument(document: FetchedDocument): boolean {
 }
 
 export function htmlToExtractableText(html: string): string {
-  const content =
-    extractElementHtml(html, "main") ??
-    extractElementHtml(html, "article") ??
-    extractElementHtml(html, "body") ??
-    html;
+  const mainCandidates = extractElementHtmls(html, "main").map(cleanHtmlFragment);
+  const main = longestNonEmpty(mainCandidates);
+  if (main !== null) return main;
 
+  const fallbackCandidates = [
+    ...extractElementHtmls(html, "article"),
+    ...extractElementHtmls(html, "body"),
+    html,
+  ].map(cleanHtmlFragment);
+  return longestNonEmpty(fallbackCandidates) ?? "";
+}
+
+function cleanHtmlFragment(content: string): string {
   return decodeHtmlEntities(
     content
       .replace(/<!--[\s\S]*?-->/g, " ")
@@ -644,11 +651,19 @@ export function htmlToExtractableText(html: string): string {
     .trim();
 }
 
-function extractElementHtml(html: string, tagName: string): string | null {
-  const re = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "i");
-  const match = re.exec(html);
-  const content = match?.[1]?.trim();
-  return content !== undefined && content.length > 0 ? content : null;
+function extractElementHtmls(html: string, tagName: string): string[] {
+  const re = new RegExp(`<${tagName}\\b[^>]*>([\\s\\S]*?)<\\/${tagName}>`, "gi");
+  return [...html.matchAll(re)]
+    .map((match) => match[1]?.trim() ?? "")
+    .filter((content) => content.length > 0);
+}
+
+function longestNonEmpty(candidates: readonly string[]): string | null {
+  let best = "";
+  for (const candidate of candidates) {
+    if (candidate.length > best.length) best = candidate;
+  }
+  return best.length > 0 ? best : null;
 }
 
 const HTML_ENTITIES: Record<string, string> = {

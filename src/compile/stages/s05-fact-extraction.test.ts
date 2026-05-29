@@ -584,6 +584,26 @@ describe("htmlToExtractableText", () => {
 
     expect(text).toBe("Level-based & edge-based APIs.");
   });
+
+  test("does not stop at a teaser article when main is absent", () => {
+    const text = htmlToExtractableText(`
+      <body>
+        <article>
+          <h3>Related news</h3>
+          <p>Short teaser text.</p>
+        </article>
+        <section>
+          <h1>AI Risk Management Framework</h1>
+          <p>The framework helps organizations manage risks to individuals, organizations, and society associated with artificial intelligence.</p>
+          <p>It is intended for voluntary use and supports trustworthiness considerations across AI design, development, use, and evaluation.</p>
+        </section>
+      </body>
+    `);
+
+    expect(text).toContain("AI Risk Management Framework");
+    expect(text).toContain("manage risks to individuals");
+    expect(text.length).toBeGreaterThan(200);
+  });
 });
 
 describe("deriveUlid", () => {

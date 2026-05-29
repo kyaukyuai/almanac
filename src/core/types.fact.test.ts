@@ -386,6 +386,11 @@ describe("normalizeExtractionResult", () => {
         factWith("pattern"),
         factWith("antipattern"),
         factWith("practice"),
+        factWith("deployment-pattern"),
+        factWith("control"),
+        factWith("policy"),
+        factWith("risk"),
+        factWith("vulnerability"),
         factWith("role"),
         factWith("vendor"),
         factWith("platform"),
@@ -397,6 +402,11 @@ describe("normalizeExtractionResult", () => {
       "framework",
       "tradeoff",
       "procedure",
+      "framework",
+      "principle",
+      "principle",
+      "fact",
+      "fact",
       "reference",
       "reference",
       "reference",
@@ -409,11 +419,16 @@ describe("normalizeExtractionResult", () => {
   test("matches the lenient remap table exactly", () => {
     expect(Object.keys(FACT_TYPE_LENIENT_REMAP).sort()).toEqual([
       "antipattern",
+      "control",
+      "deployment-pattern",
       "pattern",
       "platform",
+      "policy",
       "practice",
+      "risk",
       "role",
       "vendor",
+      "vulnerability",
     ]);
   });
 

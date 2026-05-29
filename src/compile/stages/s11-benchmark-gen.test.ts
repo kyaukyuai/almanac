@@ -41,6 +41,7 @@ import { ensureAlmanacLayout } from "../storage.ts";
 import { bootstrapAlmanac } from "./s00-bootstrap.ts";
 import { domainSpecPath } from "./s01-domain-analysis.ts";
 import {
+  BenchmarkPreflightCoverageError,
   BenchmarkPreflightValidationError,
   InvalidFixtureInvocationError,
   NoEnabledToolsError,
@@ -196,6 +197,37 @@ function buildStage11Output(toolName: string): Stage11Output {
     rationale:
       "Tiny synthetic benchmark covering one positive and one negative fixture against query_facts.",
   });
+}
+
+function addDeterministicCoverage(
+  output: Stage11Output,
+  toolName: string,
+  positives: number,
+  negatives: number,
+): void {
+  const positiveBase = output.set.positive[0]!;
+  for (let i = output.set.positive.length + 1; i <= positives; i++) {
+    output.set.positive.push({
+      ...positiveBase,
+      id: `k8s-pos-${String(i).padStart(3, "0")}`,
+      query: `what is controller topic ${i}?`,
+      invocation: { tool: toolName, input: { q: `controller ${i}` } },
+      expected: {
+        ...positiveBase.expected,
+        contains: [],
+      },
+    });
+  }
+
+  const negativeBase = output.set.negative[0]!;
+  for (let i = output.set.negative.length + 1; i <= negatives; i++) {
+    output.set.negative.push({
+      ...negativeBase,
+      id: `k8s-neg-${String(i).padStart(3, "0")}`,
+      query: `out of scope benchmark query ${i}`,
+      invocation: { tool: toolName, input: { q: `out-of-scope ${i}` } },
+    });
+  }
 }
 
 function benchmarkReportFor(
@@ -664,6 +696,7 @@ describe("createBenchmarkGenRunner", () => {
   test("does not execute live/network fixtures during Stage 11 preflight", async () => {
     const fx = await freshFixture();
     const out = buildStage11Output("query_facts");
+    addDeterministicCoverage(out, "query_facts", 8, 4);
     out.set.positive.push({
       ...out.set.positive[0]!,
       id: "k8s-pos-live",
@@ -703,11 +736,114 @@ describe("createBenchmarkGenRunner", () => {
     const persisted = Stage11OutputSchema.parse(
       JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
     );
-    expect(persisted.set.positive.map((f) => f.id)).toContain("k8s-pos-live");
-    expect(persisted.set.negative.map((f) => f.id)).toContain("k8s-neg-live");
+    expect(persisted.set.positive.map((f) => f.id)).not.toContain("k8s-pos-live");
+    expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
+    expect(persisted.set.positive).toHaveLength(8);
+    expect(persisted.set.negative).toHaveLength(4);
     expect(logs).toContainEqual(
       expect.objectContaining({
         event: "stage11:preflight:filtered",
+        skippedFixtureIds: ["k8s-pos-live", "k8s-neg-live"],
+      }),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:preflight:stabilized",
+        reason: "unverified-fixtures",
+        dropped: ["k8s-pos-live", "k8s-neg-live"],
+      }),
+    );
+  });
+
+  test("retries when unpreflighted fixtures would drop below minimum coverage", async () => {
+    const fx = await freshFixture();
+    const unstable = buildStage11Output("query_facts");
+    unstable.set.positive.push({
+      ...unstable.set.positive[0]!,
+      id: "k8s-pos-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    unstable.set.negative.push({
+      ...unstable.set.negative[0]!,
+      id: "k8s-neg-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    const repaired = buildStage11Output("query_facts");
+    addDeterministicCoverage(repaired, "query_facts", 8, 4);
+
+    let call = 0;
+    const logs: object[] = [];
+    const provider = createMockProvider({
+      defaultResponse: () => {
+        call += 1;
+        return JSON.stringify(call === 1 ? unstable : repaired);
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 2,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => benchmarkReportFor(set),
+      readEnabledManifests: async () => [
+        buildManifest("query_facts", "slow"),
+        buildNetworkManifest("latest_releases"),
+      ],
+    });
+
+    const outcome = await runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    expect(call).toBe(2);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:llm:retry",
+        reason: "preflight-failed",
+      }),
+    );
+    const persisted = Stage11OutputSchema.parse(
+      JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
+    );
+    expect(persisted.set.positive.map((f) => f.id)).not.toContain("k8s-pos-live");
+    expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
+  });
+
+  test("refuses final unpreflighted stabilization below minimum coverage", async () => {
+    const fx = await freshFixture();
+    const out = buildStage11Output("query_facts");
+    out.set.positive.push({
+      ...out.set.positive[0]!,
+      id: "k8s-pos-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    out.set.negative.push({
+      ...out.set.negative[0]!,
+      id: "k8s-neg-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    const logs: object[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(out),
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 1,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => benchmarkReportFor(set),
+      readEnabledManifests: async () => [
+        buildManifest("query_facts", "slow"),
+        buildNetworkManifest("latest_releases"),
+      ],
+    });
+
+    await expect(
+      runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) })),
+    ).rejects.toBeInstanceOf(BenchmarkPreflightCoverageError);
+    expect(existsSync(stage11OutputPath(fx.almanacDir))).toBe(false);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:preflight:stabilization-skipped",
         skippedFixtureIds: ["k8s-pos-live", "k8s-neg-live"],
       }),
     );

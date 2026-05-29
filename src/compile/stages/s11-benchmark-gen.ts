@@ -136,6 +136,20 @@ export class BenchmarkPreflightValidationError extends Error {
   }
 }
 
+export class BenchmarkPreflightCoverageError extends Error {
+  constructor(
+    public readonly skippedFixtureIds: readonly string[],
+    public readonly blockedReason?: string,
+  ) {
+    super(
+      blockedReason === undefined
+        ? `Stage 11: generated benchmark included unpreflighted fixture(s): ${skippedFixtureIds.join(", ")}`
+        : `Stage 11: generated benchmark included unpreflighted fixture(s): ${skippedFixtureIds.join(", ")}; ${blockedReason}`,
+    );
+    this.name = "BenchmarkPreflightCoverageError";
+  }
+}
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Cross-validation
 // ──────────────────────────────────────────────────────────────────────────────
@@ -267,15 +281,16 @@ export function buildPreflightBenchmarkSet(
   };
 }
 
-function stabilizeFromPreflight(
+function stabilizeByDroppingFixtureIds(
   output: Stage11Output,
-  report: BenchmarkReport,
+  fixtureIds: readonly string[],
+  rationalePrefix: string,
 ): { output: Stage11Output; droppedFixtureIds: string[]; blockedReason?: string } {
-  const failedIds = new Set(preflightFailures(report).map((r) => r.fixtureId));
-  if (failedIds.size === 0) return { output, droppedFixtureIds: [] };
+  const dropIds = new Set(fixtureIds);
+  if (dropIds.size === 0) return { output, droppedFixtureIds: [] };
 
-  const positive = output.set.positive.filter((f) => !failedIds.has(f.id));
-  const negative = output.set.negative.filter((f) => !failedIds.has(f.id));
+  const positive = output.set.positive.filter((f) => !dropIds.has(f.id));
+  const negative = output.set.negative.filter((f) => !dropIds.has(f.id));
   const minPositive = Math.min(
     output.set.positive.length,
     STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES,
@@ -302,13 +317,35 @@ function stabilizeFromPreflight(
         positive,
         negative,
       },
-      rationale: `${output.rationale} Runtime preflight removed unstable fixtures: ${[...failedIds].join(", ")}.`.slice(
+      rationale: `${output.rationale} ${rationalePrefix}: ${[...dropIds].join(", ")}.`.slice(
         0,
         2000,
       ),
     },
-    droppedFixtureIds: [...failedIds],
+    droppedFixtureIds: [...dropIds],
   };
+}
+
+function stabilizeFromPreflight(
+  output: Stage11Output,
+  report: BenchmarkReport,
+): { output: Stage11Output; droppedFixtureIds: string[]; blockedReason?: string } {
+  return stabilizeByDroppingFixtureIds(
+    output,
+    preflightFailures(report).map((r) => r.fixtureId),
+    "Runtime preflight removed unstable fixtures",
+  );
+}
+
+function stabilizeFromSkippedPreflightFixtures(
+  output: Stage11Output,
+  skippedFixtureIds: readonly string[],
+): { output: Stage11Output; droppedFixtureIds: string[]; blockedReason?: string } {
+  return stabilizeByDroppingFixtureIds(
+    output,
+    skippedFixtureIds,
+    "Runtime preflight removed unverified fixtures",
+  );
 }
 
 function formatPreflightFailures(
@@ -337,6 +374,17 @@ function formatPreflightFailures(
     "Avoid positive fixtures for facts-backed custom tools with empty sampleUrls unless the exact invocation passed preflight.",
     "Use refusalReason \"no-source\" for no-result negatives; \"no-results\" is an error code, not a refusalReason.",
   ].join("\n");
+}
+
+function formatPreflightCoverageError(error: BenchmarkPreflightCoverageError): string {
+  return [
+    "Runtime preflight could not verify these fixtures because their tools use live/network or otherwise non-deterministic execution:",
+    ...error.skippedFixtureIds.map((id) => `- ${id}`),
+    error.blockedReason ? `\n${error.blockedReason}` : "",
+    "\nReplace them with facts-backed deterministic fixtures, or provide enough deterministic fixtures that the unverified ones can be removed.",
+  ]
+    .filter((line) => line.length > 0)
+    .join("\n");
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -584,6 +632,7 @@ export function createBenchmarkGenRunner(
         | LlmSchemaValidationError
         | InvalidFixtureInvocationError
         | BenchmarkPreflightValidationError
+        | BenchmarkPreflightCoverageError
         | null = null;
       let output: Stage11Output | null = null;
       let lastDurationMs = 0;
@@ -763,6 +812,58 @@ export function createBenchmarkGenRunner(
               }
               throw lastError;
             }
+            if (preflightPlan.skippedFixtureIds.length > 0) {
+              const stabilized = stabilizeFromSkippedPreflightFixtures(
+                normalized.output,
+                preflightPlan.skippedFixtureIds,
+              );
+              if (stabilized.blockedReason !== undefined) {
+                const coverageError = new BenchmarkPreflightCoverageError(
+                  preflightPlan.skippedFixtureIds,
+                  stabilized.blockedReason,
+                );
+                lastError = coverageError;
+                const detail = formatPreflightCoverageError(coverageError);
+                ctx.log({
+                  event: "stage11:preflight:stabilization-skipped",
+                  reason: stabilized.blockedReason,
+                  skippedFixtureIds: preflightPlan.skippedFixtureIds,
+                });
+                if (attempt < maxAttempts) {
+                  ctx.log({
+                    event: "stage11:llm:retry",
+                    callName,
+                    attempt,
+                    reason: "preflight-failed",
+                    message: detail,
+                  });
+                  messages.push(
+                    { role: "assistant", content: completion.text },
+                    {
+                      role: "user",
+                      content: buildRetryFeedback({
+                        reason: "preflight-failed",
+                        detail,
+                      }),
+                    },
+                  );
+                  continue;
+                }
+                throw coverageError;
+              }
+              if (stabilized.droppedFixtureIds.length > 0) {
+                ctx.log({
+                  event: "stage11:preflight:stabilized",
+                  dropped: stabilized.droppedFixtureIds,
+                  reason: "unverified-fixtures",
+                  positives: stabilized.output.set.positive.length,
+                  negatives: stabilized.output.set.negative.length,
+                });
+                output = stabilized.output;
+                lastError = null;
+                break;
+              }
+            }
           }
 
           output = normalized.output;
@@ -772,7 +873,8 @@ export function createBenchmarkGenRunner(
           const detail = e instanceof Error ? e.message : String(e);
           if (
             e instanceof InvalidFixtureInvocationError ||
-            e instanceof BenchmarkPreflightValidationError
+            e instanceof BenchmarkPreflightValidationError ||
+            e instanceof BenchmarkPreflightCoverageError
           ) {
             lastError = e;
           } else {
@@ -789,7 +891,8 @@ export function createBenchmarkGenRunner(
               callName,
               attempt,
               reason:
-                e instanceof BenchmarkPreflightValidationError
+                e instanceof BenchmarkPreflightValidationError ||
+                e instanceof BenchmarkPreflightCoverageError
                   ? "preflight-failed"
                   : e instanceof InvalidFixtureInvocationError
                   ? "invalid-invocation"
@@ -802,7 +905,8 @@ export function createBenchmarkGenRunner(
                 role: "user",
                 content: buildRetryFeedback({
                   reason:
-                    e instanceof BenchmarkPreflightValidationError
+                    e instanceof BenchmarkPreflightValidationError ||
+                    e instanceof BenchmarkPreflightCoverageError
                       ? "preflight-failed"
                       : e instanceof InvalidFixtureInvocationError
                       ? "invalid-invocation"
@@ -899,7 +1003,7 @@ function buildRetryFeedback(args: {
   lines.push(
     "",
     args.reason === "preflight-failed"
-      ? "Please re-emit a corrected benchmark set. Remove or replace every failed positive fixture; do not keep a positive fixture that already failed preflight."
+      ? "Please re-emit a corrected benchmark set. Remove or replace every fixture that failed or was skipped by preflight; prefer deterministic facts-backed tools for benchmark fixtures."
       : "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
     "Return ONLY the JSON object — no prose, no code fences, no explanation.",
   );
