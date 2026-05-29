@@ -932,6 +932,46 @@ export const KnowledgeFactCountsSchema = z.object({
 });
 export type KnowledgeFactCounts = z.infer<typeof KnowledgeFactCountsSchema>;
 
+export const KnowledgeVectorIndexManifestSchema = z.discriminatedUnion("status", [
+  z.object({
+    schemaVersion: z.literal("0.1.0"),
+    status: z.literal("built"),
+    provider: z.enum(["voyage", "openai", "local", "deterministic"]),
+    model: z.string().min(1).max(160),
+    dimensions: z.number().int().positive().max(8192),
+    factCount: z.number().int().nonnegative(),
+    vectorCount: z.number().int().nonnegative(),
+    sourceFactCorpusHash: z.string().regex(SHA256_HEX, "must be sha256 hex"),
+    vectorsRelPath: z.literal("knowledge/vectors.jsonl"),
+    manifestRelPath: z.literal("knowledge/vector-index.json"),
+    vectorsHash: z.string().regex(SHA256_HEX, "must be sha256 hex"),
+    builtAt: z.string().regex(ISO_8601),
+  }),
+  z.object({
+    schemaVersion: z.literal("0.1.0"),
+    status: z.literal("skipped"),
+    reason: z.enum([
+      "not-configured",
+      "explicitly-disabled",
+      "missing-credentials",
+      "invalid-config",
+      "provider-unimplemented",
+    ]),
+    provider: z.enum(["voyage", "openai", "local", "deterministic"]).nullable(),
+    model: z.string().min(1).max(160).nullable(),
+    dimensions: z.number().int().positive().max(8192).nullable(),
+    factCount: z.number().int().nonnegative(),
+    vectorCount: z.literal(0),
+    sourceFactCorpusHash: z.string().regex(SHA256_HEX, "must be sha256 hex"),
+    vectorsRelPath: z.null(),
+    manifestRelPath: z.null(),
+    builtAt: z.string().regex(ISO_8601),
+  }),
+]);
+export type KnowledgeVectorIndexManifest = z.infer<
+  typeof KnowledgeVectorIndexManifestSchema
+>;
+
 export const KnowledgeIndexManifestSchema = z
   .object({
     schemaVersion: z.literal("0.1.0"),
@@ -948,6 +988,8 @@ export const KnowledgeIndexManifestSchema = z
     sqliteVersion: z.string().min(3).max(40),
     /** sha256 of the canonicalized fact corpus that produced this index. */
     factCorpusHash: z.string().regex(SHA256_HEX, "must be sha256 hex"),
+    /** Optional vector artifact metadata. Omitted by pre-v0.4 manifests. */
+    vectorIndex: KnowledgeVectorIndexManifestSchema.optional(),
   })
   .superRefine((m, ctx) => {
     const sumClass = m.counts.byClass.static + m.counts.byClass.slow;

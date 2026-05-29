@@ -25,6 +25,9 @@ import {
   MissingFactsError,
   createKnowledgeIndexRunner,
   knowledgeDbPath,
+  knowledgeVectorIndexManifestPath,
+  knowledgeVectorIndexPath,
+  resolveVectorIndexEmbeddingConfig,
 } from "./s08-knowledge-index-runner.ts";
 import type { StageContext } from "../pipeline.ts";
 
@@ -153,6 +156,20 @@ describe("createKnowledgeIndexRunner", () => {
     expect(createKnowledgeIndexRunner().promptVersion).toBeNull();
   });
 
+  test("vector index config is explicit opt-in", () => {
+    expect(
+      resolveVectorIndexEmbeddingConfig({ VOYAGE_API_KEY: "token" }),
+    ).toMatchObject({ status: "disabled", reason: "not-configured" });
+    expect(
+      resolveVectorIndexEmbeddingConfig({
+        ALMANAC_EMBEDDINGS: "deterministic",
+      }),
+    ).toMatchObject({
+      status: "configured",
+      provider: "deterministic",
+    });
+  });
+
   test("happy path: builds sqlite db + manifest, deterministic outputHash", async () => {
     const fx = await freshFixture();
     const outcome = await createKnowledgeIndexRunner().run(makeCtx(fx));
@@ -169,6 +186,11 @@ describe("createKnowledgeIndexRunner", () => {
     expect(m.counts.byType.definition).toBe(1);
     expect(m.counts.byType.procedure).toBe(1);
     expect(m.factCorpusHash).toMatch(/^[a-f0-9]{64}$/);
+    expect(m.vectorIndex).toMatchObject({
+      status: "skipped",
+      reason: "not-configured",
+      vectorCount: 0,
+    });
 
     // The db actually has the rows.
     const db = new Database(knowledgeDbPath(fx.almanacDir), { readonly: true });
@@ -183,6 +205,40 @@ describe("createKnowledgeIndexRunner", () => {
     const outcome2 = await createKnowledgeIndexRunner().run(makeCtx(fx2));
     if (outcome2.kind !== "success") throw new Error("expected success");
     expect(outcome2.outputHash).toBe(outcome.outputHash);
+  });
+
+  test("embedding opt-in builds vector jsonl + vector manifest", async () => {
+    const fx = await freshFixture();
+    const outcome = await createKnowledgeIndexRunner({
+      resolveEmbeddingConfig: () => ({
+        status: "configured",
+        provider: "deterministic",
+        model: "deterministic-hash-v1",
+        dimensions: 4,
+        requiredEnv: null,
+      }),
+    }).run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    expect(existsSync(knowledgeVectorIndexPath(fx.almanacDir))).toBe(true);
+    expect(existsSync(knowledgeVectorIndexManifestPath(fx.almanacDir))).toBe(true);
+    const m = KnowledgeIndexManifestSchema.parse(
+      JSON.parse(readFileSync(knowledgeIndexManifestPath(fx.almanacDir), "utf8")),
+    );
+    expect(m.vectorIndex).toMatchObject({
+      status: "built",
+      provider: "deterministic",
+      model: "deterministic-hash-v1",
+      dimensions: 4,
+      factCount: 2,
+      vectorCount: 2,
+      sourceFactCorpusHash: m.factCorpusHash,
+    });
+    const lines = readFileSync(
+      knowledgeVectorIndexPath(fx.almanacDir),
+      "utf8",
+    ).split("\n").filter(Boolean);
+    expect(lines).toHaveLength(2);
   });
 
   test("rebuild: deletes prior sqlite file before building", async () => {
