@@ -18,7 +18,7 @@
  *   almanac benchmark <id> [opts]          init/run human golden fixtures
  *   almanac doctor [id] [opts]             diagnose environment + artifacts
  *   almanac path <id> [opts]               print the absolute almanac dir path
- *   almanac serve <id> [opts]              start the MCP server (stdio transport)
+ *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
  *                                          (--client=claude-code|claude-desktop|cursor)
@@ -164,7 +164,10 @@ import {
   describeEmbeddingProviderConfig,
   resolveEmbeddingProviderConfig,
 } from "./embeddings/config.ts";
-import { serveAlmanacOverStdio } from "./serve/mcp-server.ts";
+import {
+  serveAlmanacOverHttp,
+  serveAlmanacOverStdio,
+} from "./serve/mcp-server.ts";
 import { runFeed, FeedAlreadyExistsError } from "./manage/feed.ts";
 import {
   ExportFailedError,
@@ -2426,6 +2429,10 @@ async function cmdUpdate(id: string, opts: UpdateOptions): Promise<void> {
 
 interface ServeOptions {
   root: string;
+  transport?: "stdio" | "http";
+  host?: string;
+  port?: string;
+  path?: string;
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -2760,11 +2767,61 @@ async function cmdServe(id: string, opts: ServeOptions): Promise<void> {
   if (!existsSync(dir)) {
     fail(`almanac not found: ${dir}`);
   }
-  // stdout is reserved for the JSON-RPC stream; structured logs go to stderr.
-  await serveAlmanacOverStdio({
-    almanacDir: dir,
-    serverInfo: { name: `almanac-${id}`, version: FORGER_VERSION },
-    log: (e) => process.stderr.write(JSON.stringify(e) + "\n"),
+  const transport = opts.transport ?? "stdio";
+  const serverInfo = { name: `almanac-${id}`, version: FORGER_VERSION };
+  const log = (e: unknown) => process.stderr.write(JSON.stringify(e) + "\n");
+
+  if (transport === "stdio") {
+    // stdout is reserved for the JSON-RPC stream; structured logs go to stderr.
+    await serveAlmanacOverStdio({
+      almanacDir: dir,
+      serverInfo,
+      log,
+    });
+    return;
+  }
+
+  if (transport === "http") {
+    const port = parseServePort(opts.port ?? "7331");
+    const handle = await serveAlmanacOverHttp({
+      almanacDir: dir,
+      serverInfo,
+      hostname: opts.host ?? "127.0.0.1",
+      port,
+      path: opts.path ?? "/mcp",
+      log,
+    });
+    process.stderr.write(
+      `▶ MCP Streamable HTTP server\n` +
+        `    url       ${handle.url}\n` +
+        `    health    ${new URL("/health", handle.url).toString()}\n`,
+    );
+    await waitForShutdown(async () => {
+      await handle.close();
+    });
+    return;
+  }
+
+  fail(`serve: unsupported --transport "${transport}"`);
+}
+
+function parseServePort(raw: string): number {
+  const port = Number.parseInt(raw, 10);
+  if (!Number.isInteger(port) || port < 0 || port > 65535) {
+    fail(`serve: --port must be an integer in [0, 65535] (got "${raw}")`);
+  }
+  return port;
+}
+
+async function waitForShutdown(stop: () => Promise<void>): Promise<void> {
+  await new Promise<void>((resolve) => {
+    const onSignal = () => {
+      process.off("SIGINT", onSignal);
+      process.off("SIGTERM", onSignal);
+      void stop().finally(resolve);
+    };
+    process.once("SIGINT", onSignal);
+    process.once("SIGTERM", onSignal);
   });
 }
 
@@ -3153,7 +3210,15 @@ program
 
 program
   .command("serve <id>")
-  .description("start the MCP server for an almanac (stdio transport)")
+  .description("start the MCP server for an almanac")
+  .addOption(
+    new Option("--transport <transport>", "MCP transport")
+      .choices(["stdio", "http"])
+      .default("stdio"),
+  )
+  .option("--host <host>", "HTTP bind host when --transport=http", "127.0.0.1")
+  .option("--port <port>", "HTTP bind port when --transport=http", "7331")
+  .option("--path <path>", "HTTP MCP endpoint path when --transport=http", "/mcp")
   .addOption(rootOption)
   .action(cmdServe);
 

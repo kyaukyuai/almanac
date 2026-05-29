@@ -14,6 +14,7 @@
 import { describe, expect, test } from "bun:test";
 
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
+import { StreamableHTTPClientTransport } from "@modelcontextprotocol/sdk/client/streamableHttp.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 
 import {
@@ -27,7 +28,11 @@ import type {
   ToolResult,
 } from "../core/types.ts";
 
-import { createMcpServer, manifestToMcpTool } from "./mcp-server.ts";
+import {
+  createMcpServer,
+  manifestToMcpTool,
+  serveMcpOverHttp,
+} from "./mcp-server.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Stub runtime
@@ -268,6 +273,44 @@ describe("MCP server — resources/list + resources/read", () => {
       ).rejects.toThrow(/resource not found/);
     } finally {
       await close();
+    }
+  });
+});
+
+describe("MCP server — Streamable HTTP transport", () => {
+  test("serves tools/list over HTTP and exposes a health endpoint", async () => {
+    const runtime = makeStubRuntime({
+      tools: [baseManifest("http_tool")],
+    });
+    const handle = await serveMcpOverHttp({
+      runtime,
+      serverInfo: { name: "almanac-http-test", version: "0.0.0-test" },
+      hostname: "127.0.0.1",
+      port: 0,
+      path: "/mcp",
+    });
+    const client = new Client(
+      { name: "http-test-client", version: "0.0.0" },
+      { capabilities: {} },
+    );
+    try {
+      const transport = new StreamableHTTPClientTransport(new URL(handle.url));
+      await client.connect(transport);
+      const tools = await client.listTools();
+      expect(tools.tools.map((t) => t.name)).toEqual(["http_tool"]);
+
+      const healthUrl = new URL("/health", handle.url);
+      const health = await fetch(healthUrl);
+      expect(health.status).toBe(200);
+      expect(health.headers.get("access-control-allow-origin")).toBe("*");
+      expect(await health.json()).toMatchObject({
+        ok: true,
+        transport: "streamable-http",
+        endpoint: "/mcp",
+      });
+    } finally {
+      await client.close();
+      await handle.close();
     }
   });
 });
