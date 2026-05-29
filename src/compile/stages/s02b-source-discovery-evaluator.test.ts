@@ -665,6 +665,70 @@ describe("applyKnownIndexOnlyLandingPageRejectionPolicy", () => {
       reason: "licensing-unclear",
     });
   });
+
+  test("removes MITRE ATLAS root landing page even when selected as snapshot", () => {
+    const draft = buildDraftSourcesFile();
+    draft.sources.push({
+      id: "mitre-atlas",
+      url: "https://atlas.mitre.org/",
+      kind: "docs",
+      trust: 0.96,
+      volatility: "fast",
+      rationale: "Structured adversarial threat intelligence for AI systems.",
+      ingestion: {
+        mode: "snapshot",
+        scope: ["**"],
+        refreshIntervalHours: 24,
+      },
+      notes: "Apache 2.0 licensed; snapshot appropriate for structured threat intelligence.",
+    });
+
+    const result = applyKnownIndexOnlyLandingPageRejectionPolicy(draft);
+
+    expect(result.adjustments).toEqual([
+      {
+        sourceId: "mitre-atlas",
+        url: "https://atlas.mitre.org/",
+        reason: "out-of-scope",
+        policy: "known-index-only-landing-page",
+      },
+    ]);
+    expect(
+      result.file.sources.some((source) => source.id === "mitre-atlas"),
+    ).toBe(false);
+    expect(result.file.coverage.docs).toBe(1);
+    expect(result.file.rejected).toContainEqual({
+      url: "https://atlas.mitre.org/",
+      reason: "out-of-scope",
+    });
+  });
+
+  test("keeps specific MITRE ATLAS pages", () => {
+    const draft = buildDraftSourcesFile();
+    draft.sources.push({
+      id: "mitre-atlas-technique",
+      url: "https://atlas.mitre.org/techniques/AML.T0051",
+      kind: "docs",
+      trust: 0.96,
+      volatility: "fast",
+      rationale: "Specific MITRE ATLAS technique page.",
+      ingestion: {
+        mode: "snapshot",
+        scope: ["**"],
+        refreshIntervalHours: 24,
+      },
+      notes: null,
+    });
+
+    const result = applyKnownIndexOnlyLandingPageRejectionPolicy(draft);
+
+    expect(result.adjustments).toEqual([]);
+    expect(
+      result.file.sources.some(
+        (source) => source.id === "mitre-atlas-technique",
+      ),
+    ).toBe(true);
+  });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
