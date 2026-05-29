@@ -1532,9 +1532,10 @@ export type ExtractionResult = z.infer<typeof ExtractionResultSchema>;
  * `FactTypeSchema` values. The Stage 5 prompt instructs the model to use the
  * canonical 9 types, but real-LLM runs against opinion-heavy domains
  * (e.g., Enterprise AI) consistently produced `"pattern"` / `"antipattern"`
- * / `"practice"` — terms that come straight from the DomainSpec's
- * `entityTypes` list. These are clean concept overlaps, so we coerce them
- * at the parse boundary rather than reject otherwise-valid facts.
+ * / `"practice"` plus governance/security labels such as `"control"` or
+ * `"risk"` — terms that come straight from the DomainSpec's `entityTypes`
+ * list. These are clean concept overlaps, so we coerce them at the parse
+ * boundary rather than reject otherwise-valid facts.
  *
  * Exported for unit tests; the runtime path goes through
  * `normalizeExtractionResult` below.
@@ -1543,6 +1544,11 @@ export const FACT_TYPE_LENIENT_REMAP: Readonly<Record<string, FactType>> = {
   pattern: "framework",
   antipattern: "tradeoff",
   practice: "procedure",
+  "deployment-pattern": "framework",
+  control: "principle",
+  policy: "principle",
+  risk: "fact",
+  vulnerability: "fact",
   // Entity-shaped types that occasionally leak in from DomainSpec.entityTypes;
   // map all to "reference" (a pointer to canonical material).
   role: "reference",
