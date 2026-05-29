@@ -30,6 +30,7 @@
  *                                          reindex; dry-run by default)
  *   almanac export <id> [opts]             package a compiled almanac as a
  *                                          portable .tar.gz archive
+ *   almanac wiki <id> [opts]               export a Markdown inspection bundle
  *
  * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
  * Stage 11 (benchmark generation) is LLM-driven and is skipped when no
@@ -174,6 +175,10 @@ import {
   defaultExportPath,
   runExport,
 } from "./manage/export.ts";
+import {
+  defaultWikiExportDir,
+  runWikiExport,
+} from "./manage/wiki-export.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 function readForgerVersion(): string {
@@ -2445,6 +2450,12 @@ interface ExportOptions {
   includeCompile?: boolean;
 }
 
+interface WikiOptions {
+  root: string;
+  output?: string;
+  json?: boolean;
+}
+
 async function cmdExport(id: string, opts: ExportOptions): Promise<void> {
   const almanacDir = almanacDirPath(opts.root, id);
   if (!existsSync(almanacDir)) {
@@ -2496,6 +2507,43 @@ function formatBytes(n: number): string {
   if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KiB`;
   if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MiB`;
   return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GiB`;
+}
+
+async function cmdWiki(id: string, opts: WikiOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  if (!existsSync(almanacDir)) {
+    fail(`almanac not found: ${almanacDir}`);
+  }
+  const manifest = await readManifest(almanacDir);
+  const outputDir = opts.output
+    ? resolve(opts.output)
+    : defaultWikiExportDir({
+        almanacId: manifest.almanacId,
+        version: manifest.version,
+      });
+
+  const result = await runWikiExport({
+    almanacDir,
+    outputDir,
+    log:
+      opts.json === true
+        ? () => {}
+        : (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
+  });
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(result, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(
+    `wiki export: ${manifest.almanacId} (${manifest.displayName})\n` +
+      `  output        ${result.outputDir}\n` +
+      `  files         ${result.files.length}\n`,
+  );
+  for (const file of result.files) {
+    process.stdout.write(`  - ${file.name} (${formatBytes(file.byteLength)})\n`);
+  }
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -3250,6 +3298,17 @@ program
   )
   .addOption(rootOption)
   .action(cmdExport);
+
+program
+  .command("wiki <id>")
+  .description("export a Markdown inspection bundle for a compiled almanac")
+  .option(
+    "--output <dir>",
+    "Output directory (default: ./almanac-<id>-<version>-wiki)",
+  )
+  .option("--json", "Emit result metadata as JSON")
+  .addOption(rootOption)
+  .action(cmdWiki);
 
 program
   .command("feed <id> <url>")
