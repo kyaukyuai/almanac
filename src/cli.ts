@@ -1665,6 +1665,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     .filter(
       (source) =>
         source.trust >= HIGH_TRUST_ZERO_FACT_THRESHOLD &&
+        source.ingestion.mode !== "index-only" &&
         (factsBySource.get(source.id) ?? 0) === 0,
     )
     .map((source) => ({

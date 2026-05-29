@@ -296,7 +296,7 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("embeddings");
   });
 
-  test("profile flags high-trust accepted sources with no extracted facts", async () => {
+  test("profile flags high-trust snapshot sources with no extracted facts", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);
 
@@ -318,6 +318,20 @@ describe("almanac CLI product onboarding", () => {
       volatility: "slow",
       rationale: "High-trust SQLite documentation that is not in the fact corpus.",
       ingestion: {
+        mode: "snapshot",
+        scope: ["**"],
+        refreshIntervalHours: 168,
+      },
+      notes: null,
+    });
+    sources.sources.push({
+      id: "sqlite-index-docs",
+      url: "https://www.sqlite.org/index.html",
+      kind: "docs",
+      trust: 0.95,
+      volatility: "slow",
+      rationale: "High-trust SQLite documentation intentionally kept index-only.",
+      ingestion: {
         mode: "index-only",
         scope: [],
         refreshIntervalHours: 168,
@@ -325,7 +339,7 @@ describe("almanac CLI product onboarding", () => {
       notes: null,
     });
     sources.generatedBy.acceptedCount = sources.sources.length;
-    sources.coverage.docs += 1;
+    sources.coverage.docs += 2;
     await writeFile(sourcesPath, JSON.stringify(sources, null, 2) + "\n", "utf8");
 
     const profile = runCli(["profile", "sqlite-demo", "--root", root]);
@@ -334,8 +348,9 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.stderr).toBe("");
     expect(profile.stdout).toContain("status         needs-validation");
     expect(profile.stdout).toContain(
-      "high-trust accepted sources contribute no facts: sqlite-latest-docs (index-only)",
+      "high-trust accepted sources contribute no facts: sqlite-latest-docs (snapshot)",
     );
+    expect(profile.stdout).not.toContain("sqlite-index-docs (index-only)");
 
     const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
     const parsedProfile = JSON.parse(profileJson.stdout) as {
@@ -346,7 +361,7 @@ describe("almanac CLI product onboarding", () => {
     expect(parsedProfile.evidence.zeroFactHighTrustSources).toEqual([
       expect.objectContaining({
         id: "sqlite-latest-docs",
-        ingestionMode: "index-only",
+        ingestionMode: "snapshot",
       }),
     ]);
   });
