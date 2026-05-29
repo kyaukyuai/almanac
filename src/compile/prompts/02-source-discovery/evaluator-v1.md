@@ -185,6 +185,12 @@ documents that are explicitly public-domain or open-government licensed, prefer
 canonical source that remains `index-only` will not contribute facts to the
 compiled knowledge index.
 
+Do not accept a high-trust `index-only` docs landing page merely because it is
+canonical. If the page mostly points to underlying docs/repos and its content
+license is ambiguous, reject it as `licensing-unclear` or prefer the
+permissively licensed underlying docs/repo source that can contribute durable
+facts.
+
 When licensing is ambiguous, prefer `index-only`.
 
 ### `scope` field
