@@ -20,10 +20,12 @@ import {
   DomainSpecSchema,
   SourceDiscoveryPlanSchema,
   SourcesFileSchema,
+  normalizeDerivableCounts,
   parseDraftSourcesFile,
   type ApprovedSource,
   type Candidates,
   type DomainSpec,
+  type RejectedSource,
   type SourceDiscoveryPlan,
   type SourcesFile,
 } from "../../core/types.ts";
@@ -197,6 +199,19 @@ export function createSourceDiscoveryEvaluatorRunner(
         });
       }
 
+      const acceptanceNormalized =
+        applyKnownIndexOnlyLandingPageRejectionPolicy(draft);
+      draft = acceptanceNormalized.file;
+      for (const adjustment of acceptanceNormalized.adjustments) {
+        ctx.log({
+          event: "stage2b:source-rejected",
+          sourceId: adjustment.sourceId,
+          url: adjustment.url,
+          reason: adjustment.reason,
+          policy: adjustment.policy,
+        });
+      }
+
       const canonicalText = JSON.stringify(draft, null, 2);
       const outPath = sourcesDraftPath(ctx.almanacDir);
       await mkdir(dirname(outPath), { recursive: true });
@@ -240,6 +255,13 @@ interface PermissiveDocsSnapshotPolicy {
   readonly reason: string;
 }
 
+interface IndexOnlyLandingPageRejectionPolicy {
+  readonly hostname: string;
+  readonly pathPrefixes: readonly string[];
+  readonly reason: RejectedSource["reason"];
+  readonly policy: string;
+}
+
 export interface SourceModeAdjustment {
   sourceId: string;
   url: string;
@@ -247,6 +269,13 @@ export interface SourceModeAdjustment {
   to: "snapshot";
   reason: string;
   license: string;
+}
+
+export interface SourceRejectionAdjustment {
+  sourceId: string;
+  url: string;
+  reason: RejectedSource["reason"];
+  policy: string;
 }
 
 const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPolicy[] =
@@ -274,6 +303,16 @@ const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPo
       pathPrefixes: ["/"],
       license: "Apache-2.0",
       reason: "known-permissive-docs",
+    },
+  ];
+
+const KNOWN_INDEX_ONLY_LANDING_PAGE_REJECTION_POLICIES: readonly IndexOnlyLandingPageRejectionPolicy[] =
+  [
+    {
+      hostname: "operatorframework.io",
+      pathPrefixes: ["/"],
+      reason: "licensing-unclear",
+      policy: "known-index-only-landing-page",
     },
   ];
 
@@ -338,6 +377,47 @@ export function applyKnownPermissiveDocsSnapshotPolicy(
   };
 }
 
+export function applyKnownIndexOnlyLandingPageRejectionPolicy(
+  file: SourcesFile,
+): { file: SourcesFile; adjustments: SourceRejectionAdjustment[] } {
+  const adjustments: SourceRejectionAdjustment[] = [];
+  const rejected = [...file.rejected];
+  const rejectedUrlKeys = new Set(
+    rejected
+      .map((source) => canonicalUrlKey(source.url))
+      .filter((key): key is string => key !== undefined),
+  );
+
+  const sources = file.sources.filter((source) => {
+    const policy = findIndexOnlyLandingPageRejectionPolicy(source);
+    if (policy === undefined) return true;
+
+    adjustments.push({
+      sourceId: source.id,
+      url: source.url,
+      reason: policy.reason,
+      policy: policy.policy,
+    });
+
+    const key = canonicalUrlKey(source.url);
+    if (key === undefined || !rejectedUrlKeys.has(key)) {
+      rejected.push({ url: source.url, reason: policy.reason });
+      if (key !== undefined) rejectedUrlKeys.add(key);
+    }
+
+    return false;
+  });
+
+  if (adjustments.length === 0) return { file, adjustments };
+
+  return {
+    file: SourcesFileSchema.parse(
+      normalizeDerivableCounts({ ...file, sources, rejected }),
+    ),
+    adjustments,
+  };
+}
+
 function findPermissiveDocsSnapshotPolicy(
   source: ApprovedSource,
 ): PermissiveDocsSnapshotPolicy | undefined {
@@ -353,6 +433,28 @@ function findPermissiveDocsSnapshotPolicy(
 
   const hostname = url.hostname.toLowerCase();
   return KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES.find((policy) => {
+    if (policy.hostname !== hostname) return false;
+    return policy.pathPrefixes.some((prefix) =>
+      pathnameStartsWithPrefix(url.pathname, prefix),
+    );
+  });
+}
+
+function findIndexOnlyLandingPageRejectionPolicy(
+  source: ApprovedSource,
+): IndexOnlyLandingPageRejectionPolicy | undefined {
+  if (source.kind !== "docs") return undefined;
+  if (source.ingestion.mode !== "index-only") return undefined;
+
+  let url: URL;
+  try {
+    url = new URL(source.url);
+  } catch {
+    return undefined;
+  }
+
+  const hostname = url.hostname.toLowerCase();
+  return KNOWN_INDEX_ONLY_LANDING_PAGE_REJECTION_POLICIES.find((policy) => {
     if (policy.hostname !== hostname) return false;
     return policy.pathPrefixes.some((prefix) =>
       pathnameStartsWithPrefix(url.pathname, prefix),

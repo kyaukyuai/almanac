@@ -43,6 +43,7 @@ import {
 import { candidatesPath } from "./s02x-source-discovery-executor.ts";
 import {
   STAGE2B_PROMPT_VERSION,
+  applyKnownIndexOnlyLandingPageRejectionPolicy,
   applyKnownPermissiveDocsSnapshotPolicy,
   createSourceDiscoveryEvaluatorRunner,
   sourcesDraftPath,
@@ -397,6 +398,54 @@ describe("createSourceDiscoveryEvaluatorRunner", () => {
       }),
     );
   });
+
+  test("rejects known index-only docs landing pages that cannot produce facts", async () => {
+    const fx = await freshFixture();
+    const draft = buildDraftSourcesFile();
+    draft.sources.push({
+      id: "operatorframework-io",
+      url: "https://operatorframework.io/",
+      kind: "docs",
+      trust: 0.95,
+      volatility: "slow",
+      rationale: "Canonical documentation landing page.",
+      ingestion: {
+        mode: "index-only",
+        scope: ["**"],
+        refreshIntervalHours: 168,
+      },
+      notes: null,
+    });
+    const events: object[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "02-source-discovery@evaluator-v1": JSON.stringify(draft),
+      },
+    });
+    const runner = createSourceDiscoveryEvaluatorRunner({ provider });
+
+    await runner.run(makeCtx({ ...fx, log: (e) => events.push(e) }));
+
+    const draftBody = readFileSync(sourcesDraftPath(fx.almanacDir), "utf8");
+    const persisted = SourcesFileSchema.parse(JSON.parse(draftBody));
+    expect(persisted.sources.some((s) => s.id === "operatorframework-io")).toBe(
+      false,
+    );
+    expect(persisted.generatedBy.acceptedCount).toBe(persisted.sources.length);
+    expect(persisted.coverage.docs).toBe(1);
+    expect(persisted.rejected).toContainEqual({
+      url: "https://operatorframework.io/",
+      reason: "licensing-unclear",
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "stage2b:source-rejected",
+        sourceId: "operatorframework-io",
+        reason: "licensing-unclear",
+        policy: "known-index-only-landing-page",
+      }),
+    );
+  });
 });
 
 describe("applyKnownPermissiveDocsSnapshotPolicy", () => {
@@ -444,6 +493,48 @@ describe("applyKnownPermissiveDocsSnapshotPolicy", () => {
 
     expect(result.adjustments).toEqual([]);
     expect(result.file.sources[0]!.ingestion.mode).toBe("index-only");
+  });
+});
+
+describe("applyKnownIndexOnlyLandingPageRejectionPolicy", () => {
+  test("removes operatorframework.io index-only landing page from accepted sources", () => {
+    const draft = buildDraftSourcesFile();
+    draft.sources.push({
+      id: "operatorframework-io",
+      url: "https://operatorframework.io/",
+      kind: "docs",
+      trust: 0.95,
+      volatility: "slow",
+      rationale: "Canonical documentation landing page.",
+      ingestion: {
+        mode: "index-only",
+        scope: ["**"],
+        refreshIntervalHours: 168,
+      },
+      notes: null,
+    });
+
+    const result = applyKnownIndexOnlyLandingPageRejectionPolicy(draft);
+
+    expect(result.adjustments).toEqual([
+      {
+        sourceId: "operatorframework-io",
+        url: "https://operatorframework.io/",
+        reason: "licensing-unclear",
+        policy: "known-index-only-landing-page",
+      },
+    ]);
+    expect(
+      result.file.sources.some((source) => source.id === "operatorframework-io"),
+    ).toBe(false);
+    expect(result.file.generatedBy.acceptedCount).toBe(
+      result.file.sources.length,
+    );
+    expect(result.file.coverage.docs).toBe(1);
+    expect(result.file.rejected).toContainEqual({
+      url: "https://operatorframework.io/",
+      reason: "licensing-unclear",
+    });
   });
 });
 
