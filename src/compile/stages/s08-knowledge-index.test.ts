@@ -15,8 +15,11 @@ import {
   KnowledgeIndexManifestSchema,
   type FactRecord,
 } from "../../core/types.ts";
+import type { EmbeddingProvider } from "../../embeddings/provider.ts";
+import type { VectorIndexRecord } from "../../embeddings/vector-index.ts";
 import {
   buildKnowledgeIndex,
+  mergeFactsByRrf,
   openKnowledgeReader,
   sanitizeFtsQuery,
 } from "./s08-knowledge-index.ts";
@@ -27,6 +30,24 @@ import {
 
 const ULID = (n: number) => `01H000000000000000000000${n.toString(36).toUpperCase().padStart(2, "0")}`;
 const HASH = (n: number) => "abcdef".repeat(10) + n.toString().padStart(4, "0");
+
+const fakeQueryProvider: EmbeddingProvider = {
+  model: { provider: "deterministic", model: "fake-query-v1", dimensions: 2 },
+  async embed(request) {
+    return {
+      model: this.model,
+      vectors: request.inputs.map((input) => ({
+        inputId: input.id,
+        values: [1, 0],
+        dimensions: 2,
+      })),
+      usage: {
+        inputCount: request.inputs.length,
+        inputCharacters: request.inputs.reduce((sum, input) => sum + input.text.length, 0),
+      },
+    };
+  },
+};
 
 const facts: FactRecord[] = [
   {
@@ -269,6 +290,56 @@ describe("SqliteKnowledgeReader.searchFacts", () => {
     const result = await reader.searchFacts("AND OR NOT NEAR");
     expect(Array.isArray(result)).toBe(true);
     db.close();
+  });
+
+  test("hybrid search adds vector-ranked facts when FTS has an anchor hit", async () => {
+    const { db } = buildKnowledgeIndex({
+      almanacId: "cooking",
+      facts,
+      dbPath: ":memory:",
+    });
+    const records: VectorIndexRecord[] = [
+      { factId: facts[1]!.id, dimensions: 2, values: [1, 0] },
+      { factId: facts[0]!.id, dimensions: 2, values: [0, 1] },
+    ];
+    const reader = openKnowledgeReader(db, {
+      vectorIndex: { provider: fakeQueryProvider, records },
+    });
+    const result = await reader.searchFacts("maillard", { limit: 2 });
+    expect(result.map((fact) => fact.id)).toContain(facts[0]!.id);
+    expect(result.map((fact) => fact.id)).toContain(facts[1]!.id);
+    db.close();
+  });
+
+  test("hybrid search preserves no-results behavior when FTS has no anchor hit", async () => {
+    const { db } = buildKnowledgeIndex({
+      almanacId: "cooking",
+      facts,
+      dbPath: ":memory:",
+    });
+    const reader = openKnowledgeReader(db, {
+      vectorIndex: {
+        provider: fakeQueryProvider,
+        records: [{ factId: facts[0]!.id, dimensions: 2, values: [1, 0] }],
+      },
+    });
+    expect(await reader.searchFacts("zzzzzz-unmatched")).toEqual([]);
+    db.close();
+  });
+});
+
+describe("mergeFactsByRrf", () => {
+  test("combines FTS and vector rankings with reciprocal rank fusion", () => {
+    const result = mergeFactsByRrf(
+      [facts[0]!, facts[1]!],
+      [facts[2]!, facts[1]!],
+      3,
+    );
+    expect(result.map((fact) => fact.id)).toEqual([
+      facts[1]!.id,
+      facts[0]!.id,
+      facts[2]!.id,
+    ]);
   });
 });
 

@@ -19,6 +19,12 @@ import {
 import {
   buildKnowledgeIndex,
 } from "../compile/stages/s08-knowledge-index.ts";
+import { createDeterministicEmbeddingProvider } from "../embeddings/provider.ts";
+import {
+  KNOWLEDGE_VECTOR_INDEX_MANIFEST_REL_PATH,
+  KNOWLEDGE_VECTOR_INDEX_REL_PATH,
+  type VectorIndexRecord,
+} from "../embeddings/vector-index.ts";
 import {
   AlmanacManifestSchema,
   CitationSchema,
@@ -93,6 +99,8 @@ interface BuildAlmanacInput {
   tools: Array<{ manifest: ToolManifest; implTs: string }>;
   /** When provided, materialize knowledge/almanac.sqlite from these facts. */
   facts?: FactRecord[];
+  /** Optional vector records to pair with the materialized knowledge index. */
+  vectorRecords?: VectorIndexRecord[];
   /** Extra contract files to drop into the almanac dir. */
   extras?: Record<string, string>;
 }
@@ -147,9 +155,38 @@ async function buildFixtureAlmanac(input: BuildAlmanacInput): Promise<string> {
       dbPath,
     });
     built.db.close();
+    const vectorIndex =
+      input.vectorRecords === undefined
+        ? undefined
+        : {
+            schemaVersion: "0.1.0" as const,
+            status: "built" as const,
+            provider: "deterministic" as const,
+            model: "deterministic-hash-v1",
+            dimensions: 2,
+            factCount: input.facts.length,
+            vectorCount: input.vectorRecords.length,
+            sourceFactCorpusHash: built.manifest.factCorpusHash,
+            vectorsRelPath: KNOWLEDGE_VECTOR_INDEX_REL_PATH,
+            manifestRelPath: KNOWLEDGE_VECTOR_INDEX_MANIFEST_REL_PATH,
+            vectorsHash: "c".repeat(64),
+            builtAt: new Date("2026-05-08T12:00:00.000Z").toISOString(),
+          };
+    if (input.vectorRecords !== undefined) {
+      writeFileSync(
+        join(almanacDir, KNOWLEDGE_VECTOR_INDEX_REL_PATH),
+        input.vectorRecords.map((record) => JSON.stringify(record)).join("\n") + "\n",
+        "utf8",
+      );
+      writeFileSync(
+        join(almanacDir, KNOWLEDGE_VECTOR_INDEX_MANIFEST_REL_PATH),
+        JSON.stringify(vectorIndex, null, 2),
+        "utf8",
+      );
+    }
     writeFileSync(
       join(almanacDir, "knowledge", "index-manifest.json"),
-      JSON.stringify(built.manifest, null, 2),
+      JSON.stringify({ ...built.manifest, vectorIndex }, null, 2),
       "utf8",
     );
   }
@@ -600,6 +637,99 @@ describe("createAlmanacRuntimeAsync — knowledge integration", () => {
     if (r.ok) {
       expect((r.data as { hits: number }).hits).toBe(1);
       expect((r.data as { first: string }).first).toContain("Test City");
+    }
+  });
+
+  test("runtime loads vector artifacts for hybrid KnowledgeReader search", async () => {
+    const provider = createDeterministicEmbeddingProvider({
+      model: "deterministic-hash-v1",
+      dimensions: 2,
+    });
+    const queryVector = (
+      await provider.embed({ inputs: [{ id: "__query__", text: "Test City" }] })
+    ).vectors[0]!;
+    const facts: FactRecord[] = [
+      {
+        id: "01HZZZZZZZZZZZZZZZZZZZZZZA",
+        text: "The capital of testland is Test City.",
+        type: "fact",
+        entities: ["Test City", "Testland"],
+        source: {
+          sourceId: "src-test-001",
+          contentHash: "a".repeat(64),
+          url: "https://example.com/page-a",
+          excerpt: "Test City is the capital.",
+        },
+        freshnessClass: "static",
+        validUntil: null,
+        confidence: 0.95,
+        extractedAt: "2026-01-01T00:00:00.000Z",
+        extractor: { model: "test", promptVersion: "v1" },
+      },
+      {
+        id: "01HZZZZZZZZZZZZZZZZZZZZZZB",
+        text: "Vector-only fixture fact with no lexical city token.",
+        type: "fact",
+        entities: ["Vector Fixture"],
+        source: {
+          sourceId: "src-test-002",
+          contentHash: "b".repeat(64),
+          url: "https://example.com/page-b",
+          excerpt: "Vector fixture fact.",
+        },
+        freshnessClass: "static",
+        validUntil: null,
+        confidence: 0.9,
+        extractedAt: "2026-01-01T00:00:00.000Z",
+        extractor: { model: "test", promptVersion: "v1" },
+      },
+    ];
+    const dir = await buildFixtureAlmanac({
+      almanacId: "rt-hybrid",
+      facts,
+      vectorRecords: [
+        {
+          factId: facts[1]!.id,
+          dimensions: 2,
+          values: queryVector.values,
+        },
+      ],
+      tools: [
+        {
+          manifest: baseToolManifest("query_facts", {
+            volatilityClass: "static",
+            freshness: {
+              cachePolicy: "manual-refresh",
+              ttlSeconds: null,
+              sourceTimestamp: false,
+            },
+            knowledgeUsage: { facts: true, ftsQuery: null, embeddings: false },
+          }),
+          implTs: `
+            export const manifest = { stub: true };
+            export default async function(input, ctx) {
+              const hits = await ctx.knowledge.searchFacts("Test City", { limit: 2 });
+              return {
+                ok: true,
+                data: { ids: hits.map((h) => h.id) },
+                citations: [{
+                  sourceId: "src-test-001",
+                  url: "https://example.com/page-a",
+                  fetchedAt: new Date().toISOString(),
+                }],
+                freshness: { class: "static", maxAge: null, staleness: "fresh" },
+              };
+            }
+          `,
+        },
+      ],
+    });
+    const rt = await createAlmanacRuntimeAsync({ almanacDir: dir });
+    const r = await rt.execTool("query_facts", { q: "Test City" });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect((r.data as { ids: string[] }).ids).toContain(facts[0]!.id);
+      expect((r.data as { ids: string[] }).ids).toContain(facts[1]!.id);
     }
   });
 });

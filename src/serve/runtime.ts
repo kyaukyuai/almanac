@@ -22,6 +22,7 @@
  */
 
 import { existsSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Database } from "bun:sqlite";
@@ -33,6 +34,11 @@ import {
   type ToolResultFreshness,
   type VolatilityClass,
 } from "../core/types.ts";
+import { createDeterministicEmbeddingProvider } from "../embeddings/provider.ts";
+import {
+  parseVectorIndexJsonl,
+  type VectorIndexRecord,
+} from "../embeddings/vector-index.ts";
 import {
   NetworkNotAllowedError,
   ToolNotFoundError,
@@ -43,8 +49,14 @@ import {
   type ToolContext,
   type ToolLogger,
 } from "../core/runtime.ts";
-import { readManifest } from "../compile/storage.ts";
-import { openKnowledgeReader } from "../compile/stages/s08-knowledge-index.ts";
+import {
+  readKnowledgeIndexManifest,
+  readManifest,
+} from "../compile/storage.ts";
+import {
+  openKnowledgeReader,
+  type KnowledgeVectorSearchIndex,
+} from "../compile/stages/s08-knowledge-index.ts";
 import {
   loadAllTools,
   type LoadedTool,
@@ -75,6 +87,7 @@ export async function createAlmanacRuntimeAsync(
 
   const almanacManifest = await readManifest(almanacDir);
   const almanacId = almanacManifest.almanacId;
+  const log: ToolLogger = options.log ?? (() => {});
 
   const tools = await loadAllTools(almanacDir);
   const toolsByName = new Map<string, LoadedTool>();
@@ -88,10 +101,11 @@ export async function createAlmanacRuntimeAsync(
   let knowledge: KnowledgeReader | null = null;
   if (existsSync(dbPath)) {
     db = new Database(dbPath, { readonly: true });
-    knowledge = openKnowledgeReader(db);
+    knowledge = openKnowledgeReader(db, {
+      vectorIndex: await loadVectorSearchIndex(almanacDir, log),
+    });
   }
 
-  const log: ToolLogger = options.log ?? (() => {});
   const resolveSecret =
     options.resolveSecret ?? ((name: string) => process.env[name]);
   const fetchImpl = options.fetchImpl;
@@ -106,6 +120,49 @@ export async function createAlmanacRuntimeAsync(
     resolveSecret,
     fetchImpl,
   });
+}
+
+async function loadVectorSearchIndex(
+  almanacDir: string,
+  log: ToolLogger,
+): Promise<KnowledgeVectorSearchIndex | null> {
+  const manifest = await readKnowledgeIndexManifest(almanacDir);
+  const vectorIndex = manifest?.vectorIndex;
+  if (vectorIndex?.status !== "built") return null;
+  if (vectorIndex.provider !== "deterministic") {
+    log({
+      event: "knowledge:vector-index:unsupported-provider",
+      provider: vectorIndex.provider,
+      model: vectorIndex.model,
+    });
+    return null;
+  }
+
+  const path = join(almanacDir, vectorIndex.vectorsRelPath);
+  if (!existsSync(path)) {
+    log({ event: "knowledge:vector-index:missing", path });
+    return null;
+  }
+
+  let records: VectorIndexRecord[];
+  try {
+    records = parseVectorIndexJsonl(await readFile(path, "utf8"));
+  } catch (cause) {
+    log({
+      event: "knowledge:vector-index:invalid",
+      path,
+      message: cause instanceof Error ? cause.message : String(cause),
+    });
+    return null;
+  }
+
+  return {
+    provider: createDeterministicEmbeddingProvider({
+      model: vectorIndex.model,
+      dimensions: vectorIndex.dimensions,
+    }),
+    records,
+  };
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
