@@ -33,6 +33,7 @@
 
 import { Server } from "@modelcontextprotocol/sdk/server/index.js";
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js";
+import { WebStandardStreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js";
 import {
   CallToolRequestSchema,
   ErrorCode,
@@ -219,6 +220,239 @@ export async function serveAlmanacOverStdio(
   // The promise stays unresolved until the transport closes (client exits).
   await new Promise<void>((resolve) => {
     server.onclose = () => resolve();
+  });
+}
+
+export interface ServeMcpOverHttpInput {
+  runtime: AlmanacRuntime;
+  serverInfo: McpServerInfo;
+  hostname?: string;
+  port?: number;
+  path?: string;
+  log?: ToolLogger;
+}
+
+export interface ServeAlmanacOverHttpInput extends AlmanacRuntimeOptions {
+  serverInfo: McpServerInfo;
+  hostname?: string;
+  port?: number;
+  path?: string;
+}
+
+export interface McpHttpServerHandle {
+  url: string;
+  hostname: string;
+  port: number;
+  path: string;
+  close: () => Promise<void>;
+}
+
+interface HttpMcpSession {
+  server: Server;
+  transport: WebStandardStreamableHTTPServerTransport;
+}
+
+/**
+ * Start a Streamable HTTP MCP endpoint over an existing runtime.
+ *
+ * Streamable HTTP uses POST for JSON-RPC messages and SSE streams for
+ * long-lived responses / notifications. This helper keeps MCP sessions in
+ * memory, matching the SDK's stateful transport mode.
+ */
+export async function serveMcpOverHttp(
+  input: ServeMcpOverHttpInput,
+): Promise<McpHttpServerHandle> {
+  const hostname = input.hostname ?? "127.0.0.1";
+  const port = input.port ?? 7331;
+  const path = normalizeHttpPath(input.path ?? "/mcp");
+  const log: ToolLogger = input.log ?? (() => {});
+  const sessions = new Map<string, HttpMcpSession>();
+
+  const closeSession = async (sessionId: string): Promise<void> => {
+    const session = sessions.get(sessionId);
+    if (!session) return;
+    sessions.delete(sessionId);
+    await Promise.allSettled([
+      session.transport.close(),
+      session.server.close(),
+    ]);
+  };
+
+  const createSession = async (): Promise<HttpMcpSession> => {
+    let session: HttpMcpSession | undefined;
+    const transport = new WebStandardStreamableHTTPServerTransport({
+      sessionIdGenerator: () => crypto.randomUUID(),
+      onsessioninitialized: (sessionId) => {
+        if (session) sessions.set(sessionId, session);
+        log({ event: "mcp:http:session:start", sessionId });
+      },
+      onsessionclosed: async (sessionId) => {
+        if (sessionId) {
+          log({ event: "mcp:http:session:close", sessionId });
+          await closeSession(sessionId);
+        }
+      },
+    });
+    transport.onerror = (error) => {
+      log({ event: "mcp:http:transport-error", message: error.message });
+    };
+    const server = createMcpServer({
+      runtime: input.runtime,
+      serverInfo: input.serverInfo,
+      log,
+    });
+    session = { server, transport };
+    await server.connect(transport);
+    return session;
+  };
+
+  const bunServer = Bun.serve({
+    hostname,
+    port,
+    async fetch(request) {
+      const url = new URL(request.url);
+      if (request.method === "OPTIONS") {
+        return new Response(null, { status: 204, headers: corsHeaders() });
+      }
+      if (url.pathname === "/health") {
+        return jsonResponse({
+          ok: true,
+          transport: "streamable-http",
+          endpoint: path,
+          sessions: sessions.size,
+        });
+      }
+      if (url.pathname !== path) {
+        return jsonResponse(
+          { ok: false, error: { code: "not-found", message: "not found" } },
+          { status: 404 },
+        );
+      }
+
+      const sessionId = request.headers.get("mcp-session-id");
+      const session = sessionId ? sessions.get(sessionId) : await createSession();
+      if (!session) {
+        return jsonResponse(
+          {
+            jsonrpc: "2.0",
+            error: { code: -32001, message: "Session not found" },
+            id: null,
+          },
+          { status: 404 },
+        );
+      }
+
+      try {
+        const response = await session.transport.handleRequest(request);
+        const currentSessionId = session.transport.sessionId;
+        if (request.method === "DELETE" && currentSessionId) {
+          await closeSession(currentSessionId);
+        }
+        if (!currentSessionId) {
+          await Promise.allSettled([
+            session.transport.close(),
+            session.server.close(),
+          ]);
+        }
+        return withCors(response);
+      } catch (cause) {
+        log({
+          event: "mcp:http:request-error",
+          message: cause instanceof Error ? cause.message : String(cause),
+        });
+        const currentSessionId = session.transport.sessionId;
+        if (!currentSessionId) {
+          await Promise.allSettled([
+            session.transport.close(),
+            session.server.close(),
+          ]);
+        }
+        return jsonResponse(
+          {
+            jsonrpc: "2.0",
+            error: {
+              code: -32603,
+              message: "Internal server error",
+            },
+            id: null,
+          },
+          { status: 500 },
+        );
+      }
+    },
+  });
+
+  const endpoint = new URL(path, bunServer.url).toString();
+  const actualPort = Number.parseInt(bunServer.url.port, 10);
+  log({ event: "mcp:http:start", url: endpoint });
+  return {
+    url: endpoint,
+    hostname,
+    port: actualPort,
+    path,
+    close: async () => {
+      for (const sessionId of [...sessions.keys()]) {
+        await closeSession(sessionId);
+      }
+      bunServer.stop(true);
+      log({ event: "mcp:http:stop" });
+    },
+  };
+}
+
+export async function serveAlmanacOverHttp(
+  input: ServeAlmanacOverHttpInput,
+): Promise<McpHttpServerHandle> {
+  const runtime = await createAlmanacRuntimeAsync(input);
+  return serveMcpOverHttp({
+    runtime,
+    serverInfo: input.serverInfo,
+    hostname: input.hostname,
+    port: input.port,
+    path: input.path,
+    log: input.log,
+  });
+}
+
+function normalizeHttpPath(path: string): string {
+  const trimmed = path.trim();
+  const withLeadingSlash = trimmed.startsWith("/") ? trimmed : `/${trimmed}`;
+  if (withLeadingSlash.length > 1 && withLeadingSlash.endsWith("/")) {
+    return withLeadingSlash.slice(0, -1);
+  }
+  return withLeadingSlash;
+}
+
+function corsHeaders(): Headers {
+  return new Headers({
+    "Access-Control-Allow-Origin": "*",
+    "Access-Control-Allow-Headers":
+      "content-type, mcp-session-id, mcp-protocol-version, last-event-id",
+    "Access-Control-Allow-Methods": "GET, POST, DELETE, OPTIONS",
+  });
+}
+
+function withCors(response: Response): Response {
+  const headers = new Headers(response.headers);
+  for (const [key, value] of corsHeaders()) {
+    headers.set(key, value);
+  }
+  return new Response(response.body, {
+    status: response.status,
+    statusText: response.statusText,
+    headers,
+  });
+}
+
+function jsonResponse(
+  body: unknown,
+  options: { status?: number } = {},
+): Response {
+  const headers = corsHeaders();
+  headers.set("Content-Type", "application/json");
+  return new Response(JSON.stringify(body), {
+    status: options.status ?? 200,
+    headers,
   });
 }
 

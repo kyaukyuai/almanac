@@ -153,7 +153,7 @@ The CLI is for **build and management**. End-user use happens through MCP.
 | `almanac update <domain>`                          | TTL-based refresh of sources / facts          | ✅   |
 | `almanac list`                                     | list compiled almanacs                        | ✅   |
 | `almanac inspect <domain>`                         | DOMAIN.md, tool list, freshness, bench score  | ✅   |
-| `almanac serve <domain>` (default: stdio)          | start MCP server for one almanac              | ✅   |
+| `almanac serve <domain> [--transport=stdio\|http]` | start MCP server for one almanac              | ✅   |
 | `almanac register <domain> --client=<name>`        | write MCP config + place SKILL.md             | ✅   |
 | `almanac feed <domain> <source>`                   | add a single source incrementally             | v0.2 |
 | `almanac remove <domain>`                          | delete almanac                                | ✅   |
@@ -840,8 +840,8 @@ downstream follow-up:
 - **Vector retrieval** — RRF of FTS5 BM25 + cosine. Voyage
   `voyage-3-lite` default, OpenAI `text-embedding-3-small`
   opt-in, local `@xenova/transformers` for air-gapped.
-- **HTTP / SSE MCP transport** — runtime only, no compile-time
-  changes.
+- **HTTP / SSE MCP transport** — runtime-only Streamable HTTP
+  endpoint for network MCP clients; compile artifacts remain unchanged.
 - **Auto-refresh scheduler** — cron / launchd helper that runs
   `almanac update` against TTL-stale sources.
 - **Wiki view export** — human-readable inspection bundle.
