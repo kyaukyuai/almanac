@@ -283,7 +283,8 @@ interface PermissiveDocsSnapshotPolicy {
 
 interface IndexOnlyLandingPageRejectionPolicy {
   readonly hostname: string;
-  readonly pathPrefixes: readonly string[];
+  readonly exactPaths?: readonly string[];
+  readonly pathPrefixes?: readonly string[];
   readonly reason: RejectedSource["reason"];
   readonly policy: string;
 }
@@ -341,6 +342,12 @@ const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPo
 
 const KNOWN_INDEX_ONLY_LANDING_PAGE_REJECTION_POLICIES: readonly IndexOnlyLandingPageRejectionPolicy[] =
   [
+    {
+      hostname: "atlas.mitre.org",
+      exactPaths: ["/"],
+      reason: "out-of-scope",
+      policy: "known-index-only-landing-page",
+    },
     {
       hostname: "operatorframework.io",
       pathPrefixes: ["/"],
@@ -567,7 +574,6 @@ function findIndexOnlyLandingPageRejectionPolicy(
   source: ApprovedSource,
 ): IndexOnlyLandingPageRejectionPolicy | undefined {
   if (source.kind !== "docs") return undefined;
-  if (source.ingestion.mode !== "index-only") return undefined;
 
   let url: URL;
   try {
@@ -579,9 +585,10 @@ function findIndexOnlyLandingPageRejectionPolicy(
   const hostname = url.hostname.toLowerCase();
   return KNOWN_INDEX_ONLY_LANDING_PAGE_REJECTION_POLICIES.find((policy) => {
     if (policy.hostname !== hostname) return false;
-    return policy.pathPrefixes.some((prefix) =>
+    if (policy.exactPaths?.includes(url.pathname) === true) return true;
+    return policy.pathPrefixes?.some((prefix) =>
       pathnameStartsWithPrefix(url.pathname, prefix),
-    );
+    ) === true;
   });
 }
 
