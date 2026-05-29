@@ -43,6 +43,7 @@ import {
 import { candidatesPath } from "./s02x-source-discovery-executor.ts";
 import {
   STAGE2B_PROMPT_VERSION,
+  applyApprovedSourceReuse,
   applyKnownIndexOnlyLandingPageRejectionPolicy,
   applyKnownPermissiveDocsSnapshotPolicy,
   createSourceDiscoveryEvaluatorRunner,
@@ -187,6 +188,15 @@ function buildDraftSourcesFile(): SourcesFile {
       },
     ],
     rejected: [],
+  });
+}
+
+function approveSourcesFile(file: SourcesFile): SourcesFile {
+  return SourcesFileSchema.parse({
+    ...file,
+    status: "approved",
+    approvedAt: "2026-05-08T12:00:00.500Z",
+    approvedBy: "human",
   });
 }
 
@@ -445,6 +455,125 @@ describe("createSourceDiscoveryEvaluatorRunner", () => {
         policy: "known-index-only-landing-page",
       }),
     );
+  });
+
+  test("reuses prior approved source ids, notes, and ingestion mode", async () => {
+    const fx = await freshFixture();
+    const prior = approveSourcesFile(buildDraftSourcesFile());
+    prior.sources[0] = {
+      ...prior.sources[0]!,
+      id: "kubernetes-io-docs",
+      notes: "Reviewed by a human.",
+      ingestion: {
+        mode: "snapshot",
+        scope: ["/docs/"],
+        refreshIntervalHours: 168,
+      },
+    };
+    const approvedPath = join(fx.almanacDir, "sources/sources.json");
+    await mkdir(dirname(approvedPath), { recursive: true });
+    writeFileSync(approvedPath, JSON.stringify(prior, null, 2), "utf8");
+
+    const draft = buildDraftSourcesFile();
+    draft.sources[0] = {
+      ...draft.sources[0]!,
+      id: "k8s-docs-new",
+      notes: null,
+      ingestion: {
+        ...draft.sources[0]!.ingestion,
+        mode: "index-only",
+      },
+    };
+    const events: object[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "02-source-discovery@evaluator-v1": JSON.stringify(draft),
+      },
+    });
+
+    await createSourceDiscoveryEvaluatorRunner({ provider }).run(
+      makeCtx({ ...fx, log: (e) => events.push(e) }),
+    );
+
+    const draftBody = readFileSync(sourcesDraftPath(fx.almanacDir), "utf8");
+    const persisted = SourcesFileSchema.parse(JSON.parse(draftBody));
+    const docs = persisted.sources.find((s) => s.url === prior.sources[0]!.url)!;
+    expect(docs.id).toBe("kubernetes-io-docs");
+    expect(docs.notes).toBe("Reviewed by a human.");
+    expect(docs.ingestion).toEqual(prior.sources[0]!.ingestion);
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "stage2b:source-reused",
+        sourceId: "kubernetes-io-docs",
+        action: "replaced",
+        replacedSourceId: "k8s-docs-new",
+      }),
+    );
+  });
+});
+
+describe("applyApprovedSourceReuse", () => {
+  test("restores an omitted approved source when the current candidate is fetchable", () => {
+    const prior = approveSourcesFile(buildDraftSourcesFile());
+    const draft = buildDraftSourcesFile();
+    draft.sources = [draft.sources[1]!];
+    draft.generatedBy.acceptedCount = 1;
+    draft.coverage.docs = 0;
+    draft.coverage.repo = 1;
+
+    const result = applyApprovedSourceReuse(draft, VALID_CANDIDATES, prior);
+
+    expect(result.adjustments).toContainEqual({
+      sourceId: "k8s-docs",
+      url: "https://kubernetes.io/docs/",
+      action: "restored",
+    });
+    expect(result.file.sources.map((source) => source.id)).toEqual([
+      "k8s-docs",
+      "k8s-repo",
+    ]);
+    expect(result.file.generatedBy.acceptedCount).toBe(2);
+    expect(result.file.coverage.docs).toBe(1);
+    expect(result.file.coverage.repo).toBe(1);
+  });
+
+  test("does not reuse a prior source explicitly rejected in the new draft", () => {
+    const prior = approveSourcesFile(buildDraftSourcesFile());
+    const draft = buildDraftSourcesFile();
+    draft.sources = [draft.sources[1]!];
+    draft.generatedBy.acceptedCount = 1;
+    draft.coverage.docs = 0;
+    draft.coverage.repo = 1;
+    draft.rejected = [
+      { url: "https://kubernetes.io/docs/", reason: "out-of-scope" },
+    ];
+
+    const result = applyApprovedSourceReuse(draft, VALID_CANDIDATES, prior);
+
+    expect(result.adjustments.map((a) => a.sourceId)).not.toContain("k8s-docs");
+    expect(result.file.sources.map((source) => source.id)).toEqual(["k8s-repo"]);
+  });
+
+  test("does not reuse a prior source when the current candidate failed", () => {
+    const prior = approveSourcesFile(buildDraftSourcesFile());
+    const draft = buildDraftSourcesFile();
+    draft.sources = [draft.sources[1]!];
+    draft.generatedBy.acceptedCount = 1;
+    draft.coverage.docs = 0;
+    draft.coverage.repo = 1;
+    const candidates: Candidates = [
+      {
+        ...VALID_CANDIDATES[0]!,
+        fetchStatus: "client-error",
+        preview: null,
+      },
+      VALID_CANDIDATES[1]!,
+    ];
+
+    const result = applyApprovedSourceReuse(draft, candidates, prior);
+
+    expect(result.adjustments.map((a) => a.sourceId)).not.toContain("k8s-docs");
+    expect(result.file.sources.map((source) => source.id)).toEqual(["k8s-repo"]);
   });
 });
 

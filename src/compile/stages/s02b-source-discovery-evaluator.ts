@@ -23,6 +23,7 @@ import {
   normalizeDerivableCounts,
   parseDraftSourcesFile,
   type ApprovedSource,
+  type Candidate,
   type Candidates,
   type DomainSpec,
   type RejectedSource,
@@ -59,6 +60,7 @@ export const STAGE2B_DEFAULT_MAX_TOKENS = 6144;
 export const STAGE2B_DEFAULT_TEMPERATURE = 0.1;
 
 export const SOURCES_DRAFT_REL_PATH = ".compile/sources.draft.json";
+const APPROVED_SOURCES_REL_PATH = "sources/sources.json";
 
 export function sourcesDraftPath(almanacDir: string): string {
   return join(almanacDir, SOURCES_DRAFT_REL_PATH);
@@ -99,6 +101,11 @@ export interface CreateSourceDiscoveryEvaluatorRunnerOptions {
   readPlan?: (almanacDir: string) => Promise<SourceDiscoveryPlan>;
   /** Test seam for reading Stage 02x candidates. Defaults to `.compile/candidates.json`. */
   readCandidates?: (almanacDir: string) => Promise<Candidates>;
+  /**
+   * Test seam for reading the prior approved SourcesFile. Defaults to
+   * `sources/sources.json` and returns null when the file is absent.
+   */
+  readApprovedSources?: (almanacDir: string) => Promise<SourcesFile | null>;
 }
 
 /**
@@ -113,14 +120,17 @@ export function createSourceDiscoveryEvaluatorRunner(
   const readSpec = opts.readDomainSpec ?? defaultReadDomainSpec;
   const readPlan = opts.readPlan ?? defaultReadPlan;
   const readCandidates = opts.readCandidates ?? defaultReadCandidates;
+  const readApprovedSources =
+    opts.readApprovedSources ?? defaultReadApprovedSources;
 
   return {
     promptVersion: STAGE2B_PROMPT_VERSION,
     async run(ctx) {
-      const [domainSpec, plan, candidates] = await Promise.all([
+      const [domainSpec, plan, candidates, priorApproved] = await Promise.all([
         readSpec(ctx.almanacDir),
         readPlan(ctx.almanacDir),
         readCandidates(ctx.almanacDir),
+        readApprovedSources(ctx.almanacDir),
       ]);
 
       const prompt = loadPromptTemplate({
@@ -180,6 +190,22 @@ export function createSourceDiscoveryEvaluatorRunner(
           parsedJson,
           e,
         );
+      }
+
+      const reused = applyApprovedSourceReuse(
+        draft,
+        candidates,
+        priorApproved,
+      );
+      draft = reused.file;
+      for (const adjustment of reused.adjustments) {
+        ctx.log({
+          event: "stage2b:source-reused",
+          sourceId: adjustment.sourceId,
+          url: adjustment.url,
+          action: adjustment.action,
+          replacedSourceId: adjustment.replacedSourceId,
+        });
       }
 
       const normalized = applyKnownPermissiveDocsSnapshotPolicy(
@@ -278,6 +304,13 @@ export interface SourceRejectionAdjustment {
   policy: string;
 }
 
+export interface SourceReuseAdjustment {
+  sourceId: string;
+  url: string;
+  action: "preserved" | "replaced" | "restored";
+  replacedSourceId?: string;
+}
+
 const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPolicy[] =
   [
     {
@@ -315,6 +348,96 @@ const KNOWN_INDEX_ONLY_LANDING_PAGE_REJECTION_POLICIES: readonly IndexOnlyLandin
       policy: "known-index-only-landing-page",
     },
   ];
+
+export function applyApprovedSourceReuse(
+  file: SourcesFile,
+  candidates: Candidates,
+  priorApproved: SourcesFile | null,
+): { file: SourcesFile; adjustments: SourceReuseAdjustment[] } {
+  if (priorApproved === null || priorApproved.status !== "approved") {
+    return { file, adjustments: [] };
+  }
+
+  const fetchableCandidates = buildFetchableCandidateIndex(candidates);
+  const rejectedUrlKeys = new Set(
+    file.rejected
+      .map((source) => canonicalUrlKey(source.url))
+      .filter((key): key is string => key !== undefined),
+  );
+  const acceptedSources = file.sources;
+  const acceptedSourceKeys = new Map<string, ApprovedSource>();
+  for (const source of acceptedSources) {
+    const key = canonicalUrlKey(source.url);
+    if (key !== undefined) acceptedSourceKeys.set(key, source);
+  }
+
+  const reusable: Array<{
+    source: ApprovedSource;
+    keys: Set<string>;
+    acceptedMatch?: ApprovedSource;
+  }> = [];
+  for (const source of priorApproved.sources) {
+    const sourceKey = canonicalUrlKey(source.url);
+    if (sourceKey === undefined) continue;
+    const candidate = fetchableCandidates.get(sourceKey);
+    if (candidate === undefined || candidate.kind !== source.kind) continue;
+
+    const keys = new Set([sourceKey, ...candidateUrlKeys(candidate)]);
+    if ([...keys].some((key) => rejectedUrlKeys.has(key))) continue;
+
+    const acceptedMatch = [...keys]
+      .map((key) => acceptedSourceKeys.get(key))
+      .find((match): match is ApprovedSource => match !== undefined);
+    reusable.push({ source, keys, acceptedMatch });
+  }
+
+  if (reusable.length === 0) return { file, adjustments: [] };
+
+  const reusedByKey = new Map<string, ApprovedSource>();
+  for (const entry of reusable) {
+    for (const key of entry.keys) reusedByKey.set(key, entry.source);
+  }
+
+  const adjustments: SourceReuseAdjustment[] = reusable.map((entry) => {
+    if (entry.acceptedMatch === undefined) {
+      return {
+        sourceId: entry.source.id,
+        url: entry.source.url,
+        action: "restored",
+      };
+    }
+    if (entry.acceptedMatch.id !== entry.source.id) {
+      return {
+        sourceId: entry.source.id,
+        url: entry.source.url,
+        action: "replaced",
+        replacedSourceId: entry.acceptedMatch.id,
+      };
+    }
+    return {
+      sourceId: entry.source.id,
+      url: entry.source.url,
+      action: "preserved",
+    };
+  });
+
+  const nextSources: ApprovedSource[] = reusable.map((entry) => entry.source);
+  const usedIds = new Set(nextSources.map((source) => source.id));
+  for (const source of acceptedSources) {
+    const key = canonicalUrlKey(source.url);
+    if (key !== undefined && reusedByKey.has(key)) continue;
+    if (usedIds.has(source.id)) continue;
+    nextSources.push(source);
+    usedIds.add(source.id);
+  }
+
+  return {
+    file: SourcesFileSchema.parse(
+      normalizeDerivableCounts({ ...file, sources: nextSources }),
+    ),
+    adjustments,
+  };
+}
 
 export function applyKnownPermissiveDocsSnapshotPolicy(
   file: SourcesFile,
@@ -462,6 +585,35 @@ function findIndexOnlyLandingPageRejectionPolicy(
   });
 }
 
+function buildFetchableCandidateIndex(
+  candidates: Candidates,
+): Map<string, Candidate> {
+  const index = new Map<string, Candidate>();
+  for (const candidate of candidates) {
+    if (
+      candidate.fetchStatus !== "ok" &&
+      candidate.fetchStatus !== "redirect"
+    ) {
+      continue;
+    }
+    for (const key of candidateUrlKeys(candidate)) {
+      index.set(key, candidate);
+    }
+  }
+  return index;
+}
+
+function candidateUrlKeys(candidate: Candidate): string[] {
+  const out: string[] = [];
+  const primary = canonicalUrlKey(candidate.url);
+  if (primary !== undefined) out.push(primary);
+  if (candidate.finalUrl !== undefined) {
+    const finalUrl = canonicalUrlKey(candidate.finalUrl);
+    if (finalUrl !== undefined && !out.includes(finalUrl)) out.push(finalUrl);
+  }
+  return out;
+}
+
 function canonicalUrlKey(raw: string): string | undefined {
   try {
     const url = new URL(raw);
@@ -542,6 +694,21 @@ async function defaultReadCandidates(almanacDir: string): Promise<Candidates> {
     throw cause;
   }
   return CandidatesSchema.parse(JSON.parse(body));
+}
+
+async function defaultReadApprovedSources(
+  almanacDir: string,
+): Promise<SourcesFile | null> {
+  const path = join(almanacDir, APPROVED_SOURCES_REL_PATH);
+  let body: string;
+  try {
+    body = await readFile(path, "utf8");
+  } catch (cause) {
+    if ((cause as NodeJS.ErrnoException).code === "ENOENT") return null;
+    throw cause;
+  }
+  const parsed = SourcesFileSchema.parse(JSON.parse(body));
+  return parsed.status === "approved" ? parsed : null;
 }
 
 /** Indent every line by `n` spaces — re-used from Stage 2a's helper. */
