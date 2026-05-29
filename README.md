@@ -57,20 +57,20 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.3.11.** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.3.11+ (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs
 end-to-end against both mocked and real Anthropic LLMs. The runtime
 (`almanac serve`) is wired into the MCP ecosystem; `register`
 configures Claude Code / Claude Desktop / Cursor / Codex.
 
-v0.3.11 adds the no-key product onboarding path: `almanac demo`,
+v0.3.11 shipped the no-key product onboarding path: `almanac demo`,
 product-grade `inspect`, source review, human golden benchmark commands,
 `doctor`, and a warning-free CI workflow.
 
-Unreleased builds add `almanac profile`, a product-facing expertise summary
-that answers whether an almanac is usable, what evidence backs it, which
-query shapes it is meant to handle, and what validation gaps remain.
+Current post-v0.3.11 builds add `almanac profile`, community source discovery,
+`feed --replace`, PDF text extraction, and source/benchmark hardening from the
+Kubernetes operators smoke runs.
 
 The v0.3 series closed eight structural failure classes that surfaced
 in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
