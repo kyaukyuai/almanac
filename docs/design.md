@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.3.11 shipped · v0.4 plan in §8** · last updated 2026-05-27.
+Status: **v0.4.0 shipped** · last updated 2026-05-29.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -824,32 +824,34 @@ six consecutive Rust smokes** (v0.3.5 through v0.3.10). Spurious-citation
 hallucinations from the v0.2.x era are structurally closed.
 
 The original v0.3 supporting thrusts (vector retrieval, HTTP/SSE
-transport, auto-refresh, wiki export) were *deferred* to v0.4
-rather than dropped — see below.
+transport, wiki export) shipped in v0.4 after the empirical v0.3
+hardening sequence.
 
-### v0.4 — planned
+### v0.4.0 — Answer quality, retrieval, transport, and inspection
 
-Architectural items deferred from v0.2/v0.3, plus v0.3.10's
-downstream follow-up:
+v0.4.0 shipped as PRs #6 through #13. The release adds:
 
-- **Stage 11 tradeoff-aware fixture generation.** Now that the
-  corpus carries tradeoff density (6.1% on Rust), Stage 11 should
-  recognize comparison-shaped tools (`{a, b}` inputs, `whenToUse`
-  text mentioning 'compare' / 'X vs Y') and generate at least one
-  positive fixture drawing on `factSample[]` entities that
-  co-occur in a tradeoff fact. Prompt-only, small.
-- **Vector retrieval** — RRF of FTS5 BM25 + cosine. Voyage
-  `voyage-3-lite` default, OpenAI `text-embedding-3-small`
-  opt-in, local `@xenova/transformers` for air-gapped.
-- **HTTP / SSE MCP transport** — runtime-only Streamable HTTP
-  endpoint for network MCP clients; compile artifacts remain unchanged.
-- **Auto-refresh scheduler** — cron / launchd helper that runs
-  `almanac update` against TTL-stale sources.
-- **Wiki view export** — human-readable Markdown inspection bundle
-  containing overview, sources, facts, tools, benchmark, and artifact
-  metadata.
+- **Stage 11 tradeoff-aware fixture generation.** Comparison-shaped
+  positives are generated when the corpus contains grounded tradeoff
+  facts and an enabled tool can answer the shape.
+- **Approved-source reuse.** Source discovery carries forward
+  still-valid human-approved sources to reduce benchmark drift across
+  reruns.
+- **Embedding provider abstraction.** Deterministic test embeddings,
+  Voyage/OpenAI configuration discovery, and a local-provider mode are
+  represented behind one internal interface.
+- **Vector index artifacts.** Stage 8 can write optional vector JSONL
+  and manifest metadata when embeddings are explicitly enabled.
+- **Hybrid RRF retrieval.** Runtime fact lookup can combine FTS5 and
+  vector cosine ranks while retaining the cite-or-abstain contract.
+- **HTTP/SSE MCP transport.** `almanac serve --transport=http`
+  exposes Streamable HTTP MCP with session handling, CORS, and
+  `/health`.
+- **Wiki inspection export.** `almanac wiki <id>` writes a Markdown
+  bundle for source, fact, tool, benchmark, and artifact review.
 
-See [`v0.4-plan.md`](./v0.4-plan.md) for the PR-by-PR implementation
+Auto-refresh scheduling remains a v0.5+ candidate. See
+[`v0.4-plan.md`](./v0.4-plan.md) for the archived implementation
 sequence and release gates.
 
 ### v0.5+ (long-tail)

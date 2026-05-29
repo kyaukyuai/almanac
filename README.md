@@ -59,20 +59,19 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.3.11+ (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.4.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs
 end-to-end against both mocked and real Anthropic LLMs. The runtime
 (`almanac serve`) is wired into the MCP ecosystem; `register`
 configures Claude Code / Claude Desktop / Cursor / Codex.
 
-v0.3.11 shipped the no-key product onboarding path: `almanac demo`,
-product-grade `inspect`, source review, human golden benchmark commands,
-`doctor`, and a warning-free CI workflow.
-
-Current post-v0.3.11 builds add `almanac profile`, community source discovery,
-`feed --replace`, PDF text extraction, and source/benchmark hardening from the
-Kubernetes operators smoke runs.
+v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
+embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
+transport, and `almanac wiki` inspection exports. The release also includes the
+late-v0.3 and v0.4 product hardening work: `almanac profile`, community source
+discovery, `feed --replace`, PDF text extraction, and source/benchmark
+hardening from the Kubernetes operators smoke runs.
 
 The v0.3 series closed eight structural failure classes that surfaced
 in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
@@ -167,22 +166,23 @@ structural failure classes empirically validated across Rust smokes:
    (v0.3.10 — corpus tradeoff density 6.1%)
 
 The original v0.3 architectural thrusts (vector retrieval, HTTP
-transport, refresh, wiki) were deferred to v0.4 in favor of the
-structural fixes that the v0.2.5 smokes empirically motivated.
+transport, wiki export) shipped in v0.4 after the structural fixes
+that the v0.2.5 smokes empirically motivated.
 
-### v0.4 — planned
+### v0.4 — shipped (2026-05-29)
 
-- Vector retrieval — RRF of FTS5 BM25 + cosine, with Voyage /
-  OpenAI / local embedding options.
-- HTTP / SSE MCP transport for browser and network MCP clients.
-- Auto-refresh scheduler (cron / launchd helper).
-- Wiki view export for human inspection.
-- Stage 11 tradeoff-aware fixture generation (turn the v0.3.10
-  corpus density into measurable fixture coverage).
+- Stage 11 tradeoff-aware fixture generation for comparison-shaped coverage.
+- Approved-source reuse to reduce source-discovery drift across reruns.
+- Embedding provider abstraction with deterministic, Voyage, OpenAI, and local
+  configuration paths.
+- Optional vector index artifacts plus hybrid FTS5/vector RRF retrieval.
+- Streamable HTTP/SSE MCP transport for browser and network MCP clients.
+- `almanac wiki` Markdown inspection export for review and handoff.
 
-See [`docs/design.md §8.5–§9`](./docs/design.md) for the worked
-plan and open questions. The implementation sequence is tracked in
-[`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
+Auto-refresh scheduling remains a v0.5+ candidate. See
+[`docs/design.md §8`](./docs/design.md) for the worked release summary and
+[`docs/v0.4-plan.md`](./docs/v0.4-plan.md) for the archived implementation
+sequence.
 
 ## Changelog
 

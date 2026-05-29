@@ -11,8 +11,12 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.4.0] — 2026-05-29
+
 ### Added
 
+- **v0.4 implementation plan.** `docs/v0.4-plan.md` records the PR-by-PR
+  sequence, release gates, and success metrics used for the v0.4 line.
 - **Expertise profile command.** `almanac profile <id>` summarizes whether an
   almanac is usable as a specialist by combining domain scope, source
   coverage, fact distribution, benchmark status, declared limits, readiness
@@ -27,9 +31,26 @@ examples for each version. This file is the concise index.
   source.
 - **PDF text extraction.** Stage 5 can extract text from fetched PDFs before
   fact extraction instead of treating them as empty/unparseable documents.
+- **Embedding provider abstraction.** Internal embedding providers now support
+  deterministic test embeddings plus environment-driven Voyage/OpenAI/local
+  configuration discovery without changing default retrieval behavior.
+- **Vector index artifacts.** Stage 8 can optionally write `knowledge/vectors.jsonl`
+  and `knowledge/vector-index.json` when embeddings are explicitly enabled, and
+  `inspect`, `profile`, and `doctor` surface vector status.
+- **Hybrid RRF retrieval.** The runtime can combine FTS5 matches with vector
+  cosine ranking via reciprocal-rank fusion while preserving the cite-or-abstain
+  behavior of the existing fact store.
+- **HTTP/SSE MCP transport.** `almanac serve --transport=http` starts a
+  Streamable HTTP/SSE MCP endpoint with CORS, session handling, and `/health`.
+- **Wiki inspection export.** `almanac wiki <id>` writes a Markdown review
+  bundle covering overview, sources, facts, tools, benchmark results, and
+  artifact metadata.
 
 ### Changed
 
+- **Approved source reuse.** Source discovery reuses previously approved sources
+  when they remain in scope, reducing cross-run benchmark noise from equivalent
+  candidate sets.
 - **Source discovery readiness hardening.** Stage 2b now promotes only known
   permissive documentation to `snapshot`, rejects known license-ambiguous
   `index-only` docs landing pages that would otherwise create zero-fact
@@ -38,6 +59,9 @@ examples for each version. This file is the concise index.
   network-backed fixtures out of deterministic preflight, retries when
   generated positives cannot pass against the available runtime, and avoids
   fixture shapes that rely on unavailable facts-backed custom tools.
+- **Tradeoff-aware benchmark generation.** Stage 11 now encourages comparison
+  fixtures when the fact sample includes grounded tradeoff facts and an enabled
+  tool can answer the shape.
 
 ### Fixed
 
@@ -373,7 +397,7 @@ Both are now claimed by the HTTP fetcher chain.
   now correctly identifies `doc-rust-lang-org-std` as
   index-only and `gh-rust-lang-rfcs` as snapshot.
 
-### Known limitations (deferred to v0.4)
+### Known limitations at release time
 
 - `GithubRepoFetcher` rejects repo URLs with path suffixes
   (e.g., `/releases`, `/tree/foo`). Stage 4 now logs the silent
@@ -628,7 +652,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...HEAD
+[0.4.0]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...v0.4.0
 [0.3.11]: https://github.com/kyaukyuai/almanac/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/kyaukyuai/almanac/compare/v0.3.9...v0.3.10
 [0.2.6]: https://github.com/kyaukyuai/almanac/compare/v0.2.5...v0.2.6
