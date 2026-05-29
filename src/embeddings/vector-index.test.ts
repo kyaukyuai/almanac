@@ -7,6 +7,7 @@ import {
   KNOWLEDGE_VECTOR_INDEX_REL_PATH,
   buildVectorIndexArtifacts,
   createSkippedVectorIndexManifest,
+  parseVectorIndexJsonl,
 } from "./vector-index.ts";
 
 const HASH = "abcdef".repeat(10) + "0001";
@@ -104,5 +105,22 @@ describe("createSkippedVectorIndexManifest", () => {
     expect(manifest.status).toBe("skipped");
     expect(manifest.vectorsRelPath).toBeNull();
     expect(manifest.manifestRelPath).toBeNull();
+  });
+});
+
+describe("parseVectorIndexJsonl", () => {
+  test("parses vector records and rejects malformed rows", () => {
+    expect(
+      parseVectorIndexJsonl('{"factId":"01H00000000000000000000001","dimensions":2,"values":[1,0]}\n'),
+    ).toEqual([
+      {
+        factId: "01H00000000000000000000001",
+        dimensions: 2,
+        values: [1, 0],
+      },
+    ]);
+    expect(() => parseVectorIndexJsonl('{"factId":"x","dimensions":2,"values":[1]}\n')).toThrow(
+      /values length mismatch/,
+    );
   });
 });

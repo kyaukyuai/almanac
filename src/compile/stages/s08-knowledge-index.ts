@@ -39,6 +39,8 @@ import type {
   KnowledgeReader,
   SearchFactsOptions,
 } from "../../core/runtime.ts";
+import type { EmbeddingProvider } from "../../embeddings/provider.ts";
+import type { VectorIndexRecord } from "../../embeddings/vector-index.ts";
 
 // ──────────────────────────────────────────────────────────────────────────────
 // Build
@@ -203,15 +205,31 @@ function hashFactCorpus(facts: readonly FactRecord[]): string {
  * `serve/`; tests use it against an in-memory database returned by
  * {@link buildKnowledgeIndex}.
  */
-export function openKnowledgeReader(db: Database): KnowledgeReader {
-  return new SqliteKnowledgeReader(db);
+export interface KnowledgeVectorSearchIndex {
+  provider: EmbeddingProvider;
+  records: readonly VectorIndexRecord[];
+}
+
+export interface OpenKnowledgeReaderOptions {
+  vectorIndex?: KnowledgeVectorSearchIndex | null;
+}
+
+export function openKnowledgeReader(
+  db: Database,
+  opts: OpenKnowledgeReaderOptions = {},
+): KnowledgeReader {
+  return new SqliteKnowledgeReader(db, opts.vectorIndex ?? null);
 }
 
 const DEFAULT_LIMIT = 10;
 const MAX_LIMIT = 50;
+const RRF_K = 60;
 
 class SqliteKnowledgeReader implements KnowledgeReader {
-  constructor(private readonly db: Database) {}
+  constructor(
+    private readonly db: Database,
+    private readonly vectorIndex: KnowledgeVectorSearchIndex | null,
+  ) {}
 
   async searchFacts(
     query: string,
@@ -220,8 +238,29 @@ class SqliteKnowledgeReader implements KnowledgeReader {
     if (!query || query.trim().length === 0) {
       return [];
     }
-    const limit = Math.min(opts?.limit ?? DEFAULT_LIMIT, MAX_LIMIT);
+    const limit = normalizeLimit(opts?.limit);
+    if (this.vectorIndex === null || this.vectorIndex.records.length === 0) {
+      return this.searchFactsFts(query, opts, limit);
+    }
 
+    const ftsHits = await this.searchFactsFts(query, opts, MAX_LIMIT);
+    if (ftsHits.length === 0) {
+      return [];
+    }
+
+    const vectorHits = await this.searchFactsVector(query, opts, MAX_LIMIT);
+    if (vectorHits.length === 0) {
+      return ftsHits.slice(0, limit);
+    }
+
+    return mergeFactsByRrf(ftsHits, vectorHits, limit);
+  }
+
+  private async searchFactsFts(
+    query: string,
+    opts: SearchFactsOptions | undefined,
+    limit: number,
+  ): Promise<FactRecord[]> {
     // Sanitize the user-supplied query into a safe FTS5 expression. FTS5
     // interprets `-`, `NEAR`, `NOT`, etc. as operators, so raw input like
     // "full-text search" parses as `full NOT text` and throws
@@ -259,12 +298,146 @@ class SqliteKnowledgeReader implements KnowledgeReader {
     return rows.map(rowToFact);
   }
 
+  private async searchFactsVector(
+    query: string,
+    opts: SearchFactsOptions | undefined,
+    limit: number,
+  ): Promise<FactRecord[]> {
+    if (this.vectorIndex === null) return [];
+    let queryVector: readonly number[];
+    try {
+      const response = await this.vectorIndex.provider.embed({
+        inputs: [{ id: "__query__", text: query }],
+      });
+      const vector = response.vectors[0];
+      if (vector === undefined) return [];
+      queryVector = vector.values;
+    } catch {
+      return [];
+    }
+
+    const scored = this.vectorIndex.records
+      .filter((record) => record.dimensions === queryVector.length)
+      .map((record) => ({
+        factId: record.factId,
+        score: cosineSimilarity(queryVector, record.values),
+      }))
+      .filter((record) => Number.isFinite(record.score))
+      .sort((a, b) => b.score - a.score)
+      .slice(0, limit);
+    if (scored.length === 0) return [];
+
+    const factsById = this.getFactsByIds(scored.map((record) => record.factId));
+    const out: FactRecord[] = [];
+    for (const record of scored) {
+      const fact = factsById.get(record.factId);
+      if (fact === undefined) continue;
+      if (!factMatchesFilters(fact, opts)) continue;
+      out.push(fact);
+    }
+    return out;
+  }
+
   async getFactById(id: string): Promise<FactRecord | null> {
     const row = this.db
       .query("SELECT * FROM facts WHERE id = ?")
       .get(id) as RawFactRow | null;
     return row ? rowToFact(row) : null;
   }
+
+  private getFactsByIds(ids: readonly string[]): Map<string, FactRecord> {
+    if (ids.length === 0) return new Map();
+    const placeholders = ids.map(() => "?").join(", ");
+    const rows = this.db
+      .query(`SELECT * FROM facts WHERE id IN (${placeholders})`)
+      .all(...ids) as RawFactRow[];
+    return new Map(rows.map((row) => [row.id, rowToFact(row)]));
+  }
+}
+
+export function mergeFactsByRrf(
+  ftsRanked: readonly FactRecord[],
+  vectorRanked: readonly FactRecord[],
+  limit: number,
+  k = RRF_K,
+): FactRecord[] {
+  const byId = new Map<
+    string,
+    { fact: FactRecord; score: number; bestRank: number; firstSeen: number }
+  >();
+  let firstSeen = 0;
+
+  const add = (facts: readonly FactRecord[]) => {
+    facts.forEach((fact, index) => {
+      const rank = index + 1;
+      const score = 1 / (k + rank);
+      const current = byId.get(fact.id);
+      if (current === undefined) {
+        byId.set(fact.id, {
+          fact,
+          score,
+          bestRank: rank,
+          firstSeen: firstSeen++,
+        });
+      } else {
+        current.score += score;
+        current.bestRank = Math.min(current.bestRank, rank);
+      }
+    });
+  };
+
+  add(ftsRanked);
+  add(vectorRanked);
+
+  return [...byId.values()]
+    .sort(
+      (a, b) =>
+        b.score - a.score ||
+        a.bestRank - b.bestRank ||
+        a.firstSeen - b.firstSeen,
+    )
+    .slice(0, normalizeLimit(limit))
+    .map((entry) => entry.fact);
+}
+
+function normalizeLimit(limit: number | undefined): number {
+  return Math.max(1, Math.min(limit ?? DEFAULT_LIMIT, MAX_LIMIT));
+}
+
+function factMatchesFilters(
+  fact: FactRecord,
+  opts: SearchFactsOptions | undefined,
+): boolean {
+  if (opts?.freshnessClass && fact.freshnessClass !== opts.freshnessClass) {
+    return false;
+  }
+  if (
+    opts?.notExpiredAt &&
+    fact.validUntil !== null &&
+    fact.validUntil <= opts.notExpiredAt
+  ) {
+    return false;
+  }
+  return true;
+}
+
+function cosineSimilarity(
+  a: readonly number[],
+  b: readonly number[],
+): number {
+  if (a.length !== b.length || a.length === 0) return Number.NaN;
+  let dot = 0;
+  let normA = 0;
+  let normB = 0;
+  for (let i = 0; i < a.length; i += 1) {
+    const av = a[i]!;
+    const bv = b[i]!;
+    dot += av * bv;
+    normA += av * av;
+    normB += bv * bv;
+  }
+  if (normA === 0 || normB === 0) return Number.NaN;
+  return dot / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 /**

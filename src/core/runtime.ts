@@ -101,10 +101,12 @@ export interface SearchFactsOptions {
 /**
  * Read-only view over `knowledge/almanac.sqlite`. Built in Stage 8; injected
  * into `ToolContext.knowledge` only when the calling tool's manifest declares
- * `knowledgeUsage.facts === true`.
+ * `knowledgeUsage.facts === true`. Implementations may use optional vector
+ * artifacts for hybrid retrieval, but must preserve the same fact-returning
+ * contract and fall back to FTS when vectors are unavailable.
  */
 export interface KnowledgeReader {
-  /** FTS5 search over fact text + entities. Results ordered by relevance. */
+  /** Search over fact text + entities. Results ordered by relevance. */
   searchFacts(query: string, opts?: SearchFactsOptions): Promise<FactRecord[]>;
 
   /** Look up a fact by ULID. Returns null when not found. */

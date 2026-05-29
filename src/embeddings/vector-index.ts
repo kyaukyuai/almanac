@@ -93,6 +93,25 @@ export async function buildVectorIndexArtifacts(
   return { manifest, records, jsonl };
 }
 
+export function parseVectorIndexJsonl(text: string): VectorIndexRecord[] {
+  const records: VectorIndexRecord[] = [];
+  let lineNo = 0;
+  for (const line of text.split("\n")) {
+    lineNo += 1;
+    if (line.trim().length === 0) continue;
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(line);
+    } catch (cause) {
+      throw new Error(
+        `invalid vector index jsonl at line ${lineNo}: ${(cause as Error).message}`,
+      );
+    }
+    records.push(validateVectorIndexRecord(parsed, lineNo));
+  }
+  return records;
+}
+
 export function createSkippedVectorIndexManifest(input: {
   reason: SkippedVectorIndexManifest["reason"];
   factCount: number;
@@ -165,6 +184,39 @@ function buildRecords(
       values: [...vector.values],
     };
   });
+}
+
+function validateVectorIndexRecord(
+  value: unknown,
+  lineNo: number,
+): VectorIndexRecord {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) {
+    throw new Error(`invalid vector index record at line ${lineNo}: expected object`);
+  }
+  const record = value as Record<string, unknown>;
+  if (typeof record.factId !== "string" || record.factId.length === 0) {
+    throw new Error(`invalid vector index record at line ${lineNo}: factId is required`);
+  }
+  if (
+    !Number.isInteger(record.dimensions) ||
+    (record.dimensions as number) <= 0 ||
+    (record.dimensions as number) > 8192
+  ) {
+    throw new Error(`invalid vector index record at line ${lineNo}: dimensions is invalid`);
+  }
+  if (!Array.isArray(record.values) || record.values.length !== record.dimensions) {
+    throw new Error(`invalid vector index record at line ${lineNo}: values length mismatch`);
+  }
+  for (const value of record.values) {
+    if (typeof value !== "number" || !Number.isFinite(value)) {
+      throw new Error(`invalid vector index record at line ${lineNo}: values must be finite numbers`);
+    }
+  }
+  return {
+    factId: record.factId,
+    dimensions: record.dimensions,
+    values: record.values,
+  };
 }
 
 function sha256Hex(value: string): string {
