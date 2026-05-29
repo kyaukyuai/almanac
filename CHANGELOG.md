@@ -18,6 +18,32 @@ examples for each version. This file is the concise index.
   coverage, fact distribution, benchmark status, declared limits, readiness
   gaps, and next actions. `inspect` and `demo` now point users to the profile
   view.
+- **Community discovery preflight.** Stage 02x can collect targeted Hacker News
+  and Reddit candidates for community coverage while preserving deterministic
+  candidate metadata and source-origin labels.
+- **Feed source replacement.** `almanac feed --replace --source-id <id>` can
+  promote or replace a previously accepted source in place, which is useful
+  when an `index-only` source is later replaced by a better snapshot/feed
+  source.
+- **PDF text extraction.** Stage 5 can extract text from fetched PDFs before
+  fact extraction instead of treating them as empty/unparseable documents.
+
+### Changed
+
+- **Source discovery readiness hardening.** Stage 2b now promotes only known
+  permissive documentation to `snapshot`, rejects known license-ambiguous
+  `index-only` docs landing pages that would otherwise create zero-fact
+  high-trust evidence gaps, and records deterministic adjustment events.
+- **Benchmark generation preflight hardening.** Stage 11 now filters live or
+  network-backed fixtures out of deterministic preflight, retries when
+  generated positives cannot pass against the available runtime, and avoids
+  fixture shapes that rely on unavailable facts-backed custom tools.
+
+### Fixed
+
+- **Community search false positives.** Hacker News matching now requires more
+  than a single generic query-token match, preventing unrelated high-engagement
+  posts from entering community candidates.
 
 ## [0.3.11] — 2026-05-27
 
