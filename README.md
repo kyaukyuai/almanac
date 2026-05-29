@@ -24,6 +24,7 @@ almanac profile sqlite-demo --root "$tmp"
 almanac sources sqlite-demo --root "$tmp"
 almanac benchmark sqlite-demo --root "$tmp"
 almanac doctor sqlite-demo --root "$tmp"
+almanac wiki sqlite-demo --root "$tmp" --output "$tmp/sqlite-demo-wiki"
 ```
 
 The demo creates a complete offline almanac with curated SQLite facts, source
@@ -116,6 +117,9 @@ structurally closed.
 - **`almanac export <id>`** — package a compiled almanac as a
   portable `.tar.gz` archive (≈190 KiB for a 231-fact almanac).
   Unpack anywhere; `almanac serve` works immediately.
+- **`almanac wiki <id>`** — write a Markdown inspection bundle
+  (`README.md`, `sources.md`, `facts.md`, `tools.md`, `benchmark.md`)
+  for review, handoff, and debugging.
 - **`almanac list / inspect / path / remove`** — basic management.
 - **`almanac serve <id>`** — MCP server exposing the four
   default tools (`query_facts`, `fetch_official_docs`,
@@ -172,7 +176,7 @@ structural fixes that the v0.2.5 smokes empirically motivated.
   OpenAI / local embedding options.
 - HTTP / SSE MCP transport for browser and network MCP clients.
 - Auto-refresh scheduler (cron / launchd helper).
-- Wiki view export.
+- Wiki view export for human inspection.
 - Stage 11 tradeoff-aware fixture generation (turn the v0.3.10
   corpus density into measurable fixture coverage).
 

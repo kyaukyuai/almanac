@@ -158,6 +158,7 @@ The CLI is for **build and management**. End-user use happens through MCP.
 | `almanac feed <domain> <source>`                   | add a single source incrementally             | v0.2 |
 | `almanac remove <domain>`                          | delete almanac                                | ✅   |
 | `almanac export <domain>`                          | bundle as portable archive                    | v0.2 |
+| `almanac wiki <domain>`                            | export human-readable inspection bundle       | v0.4 |
 
 `almanac new` flags (initial set):
 
@@ -844,7 +845,9 @@ downstream follow-up:
   endpoint for network MCP clients; compile artifacts remain unchanged.
 - **Auto-refresh scheduler** — cron / launchd helper that runs
   `almanac update` against TTL-stale sources.
-- **Wiki view export** — human-readable inspection bundle.
+- **Wiki view export** — human-readable Markdown inspection bundle
+  containing overview, sources, facts, tools, benchmark, and artifact
+  metadata.
 
 ### v0.5+ (long-tail)
 
