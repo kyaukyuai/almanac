@@ -12,6 +12,8 @@
  *     knowledge/
  *       almanac.sqlite                    Stage 8 build
  *       index-manifest.json               KnowledgeIndexManifest
+ *       vectors.jsonl                     Optional Stage 8 embedding vectors
+ *       vector-index.json                 Optional vector artifact manifest
  *     tools/                              <name>.ts + <name>.test.ts (Stage 7)
  *     adapters/
  *       skill/SKILL.md                    Stage 10

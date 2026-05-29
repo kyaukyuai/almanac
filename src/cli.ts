@@ -152,6 +152,7 @@ import {
   type FactRecord,
   type FreshnessProfileId,
   type KnowledgeIndexManifest,
+  type KnowledgeVectorIndexManifest,
   type SourcesFile,
   type StageId,
   type ToolDesignResult,
@@ -484,6 +485,18 @@ function nonZeroCounts(counts: Record<string, number>): string {
 
 function formatRate(value: number): string {
   return `${Math.round(value * 100)}%`;
+}
+
+function formatVectorIndexSummary(
+  vectorIndex: KnowledgeVectorIndexManifest,
+): string {
+  if (vectorIndex.status === "built") {
+    return (
+      `built ${vectorIndex.vectorCount} vectors, ` +
+      `${vectorIndex.provider}/${vectorIndex.model} ${vectorIndex.dimensions}d`
+    );
+  }
+  return `skipped (${vectorIndex.reason.replace(/-/g, " ")})`;
 }
 
 function shellArg(value: string): string {
@@ -1514,6 +1527,11 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
     process.stdout.write(
       `  knowledge      ${knowledge.factCount} facts, sqlite ${knowledge.sqliteVersion}\n`,
     );
+    if (knowledge.vectorIndex !== undefined) {
+      process.stdout.write(
+        `  vectors        ${formatVectorIndexSummary(knowledge.vectorIndex)}\n`,
+      );
+    }
   }
   if (sources !== null) {
     process.stdout.write(
@@ -1788,6 +1806,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       sourceCoverage: sources?.coverage ?? null,
       factTypes: countFactsByType(facts),
       freshnessClasses: countFactsByFreshness(facts),
+      vectorIndex: knowledge?.vectorIndex ?? null,
       zeroFactHighTrustSources: highTrustZeroFactSources,
       sources: evidenceSources,
     },
@@ -1814,6 +1833,14 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       domainSpec: domainSpec === null ? null : domainSpecPath(dir),
       facts: factsJsonlPath(dir),
       benchmarkReport: benchmarkReport === null ? null : benchmarkResultPath(dir),
+      vectorIndex:
+        knowledge?.vectorIndex?.status === "built"
+          ? join(dir, knowledge.vectorIndex.manifestRelPath)
+          : null,
+      vectors:
+        knowledge?.vectorIndex?.status === "built"
+          ? join(dir, knowledge.vectorIndex.vectorsRelPath)
+          : null,
     },
     nextActions,
   };
@@ -1832,6 +1859,11 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   process.stdout.write(
     `  evidence       ${facts.length} facts from ${uniqueFactSources} source${uniqueFactSources === 1 ? "" : "s"}\n`,
   );
+  if (knowledge?.vectorIndex !== undefined) {
+    process.stdout.write(
+      `  vectors        ${formatVectorIndexSummary(knowledge.vectorIndex)}\n`,
+    );
+  }
   if (sources !== null) {
     process.stdout.write(
       `  source review  ${sources.status}, ${acceptedSources.length} accepted / ${sources.rejected.length} rejected (${nonZeroCoverage(sources.coverage)})\n`,
@@ -2214,6 +2246,9 @@ async function cmdDoctor(
             ? "knowledge/index-manifest.json missing"
             : `${knowledge.factCount} facts, sqlite ${knowledge.sqliteVersion}`,
         );
+        if (knowledge?.vectorIndex !== undefined) {
+          add("ok", "vectors", formatVectorIndexSummary(knowledge.vectorIndex));
+        }
         const counts = await readDisplayCounts(almanacDir, manifest, knowledge);
         add(
           countsMismatch(counts) ? "warn" : "ok",
