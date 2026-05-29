@@ -46,6 +46,7 @@ import {
   NoEnabledToolsError,
   STAGE11_PROMPT_VERSION,
   buildPreflightBenchmarkSet,
+  buildTradeoffBenchmarkGuidance,
   createBenchmarkGenRunner,
   defaultReadFactSample,
   isPreflightSafeToolManifest,
@@ -377,6 +378,75 @@ describe("buildPreflightBenchmarkSet", () => {
   });
 });
 
+describe("buildTradeoffBenchmarkGuidance", () => {
+  test("surfaces co-occurring tradeoff entities and comparison-shaped tools", () => {
+    const compareTool = buildManifest("compare_runtime", "slow");
+    compareTool.whenToUse =
+      "Compare A vs B runtime tradeoffs using indexed facts.";
+    compareTool.inputSchema = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "string" },
+      },
+      required: ["a", "b"],
+    };
+
+    const guidance = buildTradeoffBenchmarkGuidance(
+      [
+        {
+          text: "WAL mode trades write concurrency against checkpoint overhead.",
+          type: "tradeoff",
+          entities: ["wal", "checkpoint"],
+          sourceId: "sqlite-docs",
+        },
+        {
+          text: "A normal fact should not become a tradeoff opportunity.",
+          type: "fact",
+          entities: ["normal", "fact"],
+          sourceId: "sqlite-docs",
+        },
+      ],
+      [compareTool, buildManifest("query_facts", "slow")],
+    );
+
+    expect(guidance.required).toBe(true);
+    expect(guidance.opportunities).toEqual([
+      {
+        text: "WAL mode trades write concurrency against checkpoint overhead.",
+        entities: ["wal", "checkpoint"],
+        sourceId: "sqlite-docs",
+      },
+    ]);
+    expect(guidance.comparisonTools).toEqual([
+      {
+        name: "compare_runtime",
+        reason: "input-pair",
+        inputFields: ["a", "b"],
+        factsBacked: true,
+      },
+    ]);
+    expect(guidance.fallbackFactsTools).toEqual(["query_facts"]);
+  });
+
+  test("does not require comparison coverage without sampled tradeoff facts", () => {
+    const guidance = buildTradeoffBenchmarkGuidance(
+      [
+        {
+          text: "Controllers reconcile desired state.",
+          type: "principle",
+          entities: ["controller", "desired-state"],
+          sourceId: "kubernetes-docs",
+        },
+      ],
+      [buildManifest("query_facts", "slow")],
+    );
+
+    expect(guidance.required).toBe(false);
+    expect(guidance.opportunities).toEqual([]);
+  });
+});
+
 // ──────────────────────────────────────────────────────────────────────────────
 // Pre-parse lenient intent remap
 // ──────────────────────────────────────────────────────────────────────────────
@@ -512,6 +582,54 @@ describe("createBenchmarkGenRunner", () => {
     expect(prompt).toContain('"sourceDependencies"');
     expect(prompt).toContain('"sampleUrls"');
     expect(prompt).toContain("https://docs.example.com/kubernetes/operator");
+  });
+
+  test("passes tradeoff fixture guidance to the prompt", async () => {
+    const fx = await freshFixture();
+    const compareTool = buildManifest("compare_runtime", "slow");
+    compareTool.whenToUse =
+      "Compare A vs B runtime tradeoffs using indexed facts.";
+    compareTool.inputSchema = {
+      type: "object",
+      properties: {
+        a: { type: "string" },
+        b: { type: "string" },
+      },
+      required: ["a", "b"],
+    };
+
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      readEnabledManifests: async () => [
+        buildManifest("query_facts", "slow"),
+        compareTool,
+      ],
+      readFactSample: async () => [
+        {
+          text: "WAL mode trades write concurrency against checkpoint overhead.",
+          type: "tradeoff",
+          entities: ["wal", "checkpoint"],
+          sourceId: "sqlite-docs",
+        },
+      ],
+    });
+
+    const outcome = await runner.run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const prompt = provider.callLog[0]!.request.messages
+      .map((m) => m.content)
+      .join("\n");
+    expect(prompt).toContain("tradeoffGuidance:");
+    expect(prompt).toContain('"required":true');
+    expect(prompt).toContain('"wal"');
+    expect(prompt).toContain('"checkpoint"');
+    expect(prompt).toContain('"compare_runtime"');
   });
 
   test("preflights a normalized benchmark set before persisting", async () => {
