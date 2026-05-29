@@ -406,6 +406,82 @@ export interface FactSampleEntry {
   sourceId: string;
 }
 
+export interface TradeoffFixtureOpportunity {
+  text: string;
+  entities: readonly string[];
+  sourceId: string;
+}
+
+export interface ComparisonToolHint {
+  name: string;
+  reason: "input-pair" | "description";
+  inputFields: readonly string[];
+  factsBacked: boolean;
+}
+
+export interface TradeoffBenchmarkGuidance {
+  required: boolean;
+  opportunities: readonly TradeoffFixtureOpportunity[];
+  comparisonTools: readonly ComparisonToolHint[];
+  fallbackFactsTools: readonly string[];
+}
+
+export function buildTradeoffBenchmarkGuidance(
+  factSample: readonly FactSampleEntry[],
+  manifests: readonly ToolManifest[],
+): TradeoffBenchmarkGuidance {
+  const opportunities = factSample
+    .flatMap((fact): TradeoffFixtureOpportunity[] => {
+      if (fact.type.toLowerCase() !== "tradeoff") return [];
+      const entities = [...new Set(fact.entities)].filter((e) => e.length > 0);
+      if (entities.length < 2) return [];
+      return [{
+        text: truncateForPrompt(fact.text, 360),
+        entities: entities.slice(0, 4),
+        sourceId: fact.sourceId,
+      }];
+    })
+    .slice(0, 5);
+
+  const comparisonTools = manifests
+    .flatMap((manifest): ComparisonToolHint[] => {
+      const inputFields = inputSchemaPropertyNames(manifest.inputSchema);
+      const pairFields = comparisonPairFields(inputFields);
+      if (pairFields.length > 0) {
+        return [{
+          name: manifest.name,
+          reason: "input-pair",
+          inputFields: pairFields,
+          factsBacked: manifest.knowledgeUsage.facts,
+        }];
+      }
+      if (mentionsComparisonShape(manifest)) {
+        return [{
+          name: manifest.name,
+          reason: "description",
+          inputFields: inputFields.slice(0, 8),
+          factsBacked: manifest.knowledgeUsage.facts,
+        }];
+      }
+      return [];
+    })
+    .slice(0, 5);
+
+  const fallbackFactsTools = manifests
+    .filter((manifest) => isFactsQueryFallbackTool(manifest))
+    .map((manifest) => manifest.name)
+    .slice(0, 3);
+
+  return {
+    required:
+      opportunities.length > 0 &&
+      (comparisonTools.length > 0 || fallbackFactsTools.length > 0),
+    opportunities,
+    comparisonTools,
+    fallbackFactsTools,
+  };
+}
+
 /**
  * Build the Stage 11 `StageRunner`. Records `promptVersion = "v1"`.
  */
@@ -444,6 +520,10 @@ export function createBenchmarkGenRunner(
       }
 
       const enabledNames = new Set(manifests.map((m) => m.name));
+      const tradeoffGuidance = buildTradeoffBenchmarkGuidance(
+        factSample,
+        manifests,
+      );
 
       // Reduce manifest size: the prompt only needs the routing-relevant fields.
       const promptManifests = manifests.map((m) => ({
@@ -467,10 +547,19 @@ export function createBenchmarkGenRunner(
           domainSpec: JSON.stringify(domainSpec),
           toolManifests: JSON.stringify(promptManifests),
           factSample: JSON.stringify(factSample),
+          tradeoffGuidance: JSON.stringify(tradeoffGuidance),
         },
       });
 
       const callName = `${STAGE11_PROMPT_STAGE_ID}@${STAGE11_PROMPT_VERSION}`;
+      if (tradeoffGuidance.required) {
+        ctx.log({
+          event: "stage11:tradeoff-guidance",
+          opportunities: tradeoffGuidance.opportunities.length,
+          comparisonTools: tradeoffGuidance.comparisonTools.map((t) => t.name),
+          fallbackFactsTools: tradeoffGuidance.fallbackFactsTools,
+        });
+      }
       ctx.log({
         event: "stage11:llm:start",
         callName,
@@ -932,6 +1021,73 @@ export async function defaultReadFactSample(
 // ──────────────────────────────────────────────────────────────────────────────
 // Helpers
 // ──────────────────────────────────────────────────────────────────────────────
+
+const COMPARISON_TEXT_RE =
+  /\b(compare|comparison|contrast|versus|vs\.?|trade-?offs?|differences?|between)\b/i;
+
+const COMPARISON_FIELD_PAIRS: Array<readonly [string, string]> = [
+  ["a", "b"],
+  ["left", "right"],
+  ["first", "second"],
+  ["from", "to"],
+  ["source", "target"],
+  ["old", "new"],
+  ["before", "after"],
+  ["baseline", "candidate"],
+  ["optiona", "optionb"],
+];
+
+function truncateForPrompt(text: string, maxChars: number): string {
+  if (text.length <= maxChars) return text;
+  return `${text.slice(0, Math.max(0, maxChars - 1)).trimEnd()}…`;
+}
+
+function inputSchemaPropertyNames(schema: Record<string, unknown>): string[] {
+  const properties = schema.properties;
+  if (!isRecord(properties)) return [];
+  return Object.keys(properties);
+}
+
+function comparisonPairFields(fields: readonly string[]): string[] {
+  const byNormalized = new Map(
+    fields.map((field) => [normalizeFieldName(field), field] as const),
+  );
+  for (const [left, right] of COMPARISON_FIELD_PAIRS) {
+    const leftField = byNormalized.get(left);
+    const rightField = byNormalized.get(right);
+    if (leftField !== undefined && rightField !== undefined) {
+      return [leftField, rightField];
+    }
+  }
+
+  for (const [normalized, original] of byNormalized) {
+    if (normalized.length <= 1 || !normalized.endsWith("a")) continue;
+    const counterpart = byNormalized.get(`${normalized.slice(0, -1)}b`);
+    if (counterpart !== undefined) return [original, counterpart];
+  }
+
+  return [];
+}
+
+function mentionsComparisonShape(manifest: ToolManifest): boolean {
+  const text = `${manifest.name} ${manifest.description} ${manifest.whenToUse}`;
+  return COMPARISON_TEXT_RE.test(text);
+}
+
+function isFactsQueryFallbackTool(manifest: ToolManifest): boolean {
+  if (!manifest.knowledgeUsage.facts) return false;
+  if (manifest.name === "query_facts") return true;
+  const fields = new Set(inputSchemaPropertyNames(manifest.inputSchema));
+  return fields.has("q") || fields.has("query");
+}
+
+function normalizeFieldName(field: string): string {
+  return field.replace(/[^a-zA-Z0-9]/g, "").toLowerCase();
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
 
 function stripFence(text: string): string {
   const trimmed = text.trim();
