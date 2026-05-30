@@ -850,9 +850,10 @@ v0.4.0 shipped as PRs #6 through #13. The release adds:
 - **Wiki inspection export.** `almanac wiki <id>` writes a Markdown
   bundle for source, fact, tool, benchmark, and artifact review.
 
-Auto-refresh scheduling remains a v0.5+ candidate. See
+Auto-refresh scheduling remains a v0.5+ design candidate. See
 [`v0.4-plan.md`](./v0.4-plan.md) for the archived implementation
-sequence and release gates.
+sequence and release gates, and [`v0.5-plan.md`](./v0.5-plan.md) for the
+proposed run-first operations sequence.
 
 ### v0.4.1 — Enterprise AI smoke hardening
 
@@ -884,11 +885,12 @@ export bundle internally complete for downstream review and packaging tools.
 
 ### v0.5+ (long-tail)
 
+- `almanac run` — local runtime invocation and optional question mode. See
+  [`v0.5-plan.md`](./v0.5-plan.md) for the proposed implementation sequence.
 - Slack adapter
 - Almanac marketplace
 - Composable almanacs (one almanac calling another via MCP)
 - Enterprise private deploy
-- `almanac run` — local CLI orchestrator with bundled LLM SDK
 
 ---
 
