@@ -220,6 +220,30 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("DRY RUN");
     expect(result.stdout).toContain("Would add source");
   });
+
+  test("new validates Anthropic timeout override before running LLM stages", () => {
+    const result = runCli(
+      [
+        "new",
+        "Timeout Env",
+        "--slug",
+        "timeout-env",
+        "--profile",
+        "mixed",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: "dummy",
+        ALMANAC_ANTHROPIC_TIMEOUT_MS: "sixty-seconds",
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain(
+      "ALMANAC_ANTHROPIC_TIMEOUT_MS must be a positive integer number of milliseconds",
+    );
+  });
 });
 
 describe("almanac CLI product onboarding", () => {

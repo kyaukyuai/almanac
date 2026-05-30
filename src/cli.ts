@@ -278,6 +278,16 @@ function fail(message: string): never {
   process.exit(1);
 }
 
+function optionalPositiveIntegerEnv(name: string): number | undefined {
+  const raw = process.env[name];
+  if (raw === undefined || raw.trim() === "") return undefined;
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value <= 0) {
+    fail(`${name} must be a positive integer number of milliseconds`);
+  }
+  return value;
+}
+
 /**
  * Pick an `LlmProvider` for the run. Real Anthropic when `ANTHROPIC_API_KEY`
  * is set; `null` otherwise (callers skip LLM stages instead of crashing).
@@ -292,7 +302,9 @@ function resolveProvider(): LlmProvider | null {
     return createMockProvider({ defaultResponse: "" });
   }
   if (process.env["ANTHROPIC_API_KEY"]) {
-    return createAnthropicProvider();
+    return createAnthropicProvider({
+      timeoutMs: optionalPositiveIntegerEnv("ALMANAC_ANTHROPIC_TIMEOUT_MS"),
+    });
   }
   return null;
 }
