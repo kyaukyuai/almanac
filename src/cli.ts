@@ -147,6 +147,7 @@ import {
   ToolDesignResultSchema,
   type AlmanacManifest,
   type BenchmarkReport,
+  type BenchmarkSet,
   type CompileOptions,
   type CompileState,
   type DomainSpec,
@@ -405,7 +406,7 @@ async function readBenchmarkReportIfPresent(
 async function readBenchmarkSetIfPresent(
   almanacDir: string,
   almanacId: string,
-) {
+): Promise<BenchmarkSet | null> {
   const posPath = positiveJsonlPath(almanacDir);
   const negPath = negativeJsonlPath(almanacDir);
   if (existsSync(posPath) && existsSync(negPath)) {
@@ -426,6 +427,66 @@ async function readBenchmarkSetIfPresent(
   }
 
   return null;
+}
+
+interface BenchmarkCoverageGate {
+  applies: boolean;
+  ok: boolean;
+  positive: number;
+  negative: number;
+  total: number;
+  minimum: {
+    positive: number;
+    negative: number;
+    total: number;
+  };
+  issue: string | null;
+}
+
+function benchmarkCoverageGate(
+  almanacDir: string,
+  state: CompileState,
+  set: BenchmarkSet | null,
+): BenchmarkCoverageGate {
+  const minimum = {
+    positive: GENERATED_BENCHMARK_MIN_POSITIVE_FIXTURES,
+    negative: GENERATED_BENCHMARK_MIN_NEGATIVE_FIXTURES,
+    total: GENERATED_BENCHMARK_MIN_TOTAL_FIXTURES,
+  };
+  const positive = set?.positive.length ?? 0;
+  const negative = set?.negative.length ?? 0;
+  const total = positive + negative;
+  const applies =
+    set !== null &&
+    state.stages["11-benchmark-gen"].status === "completed" &&
+    existsSync(stage11OutputPath(almanacDir));
+  const ok =
+    !applies ||
+    (positive >= minimum.positive &&
+      negative >= minimum.negative &&
+      total >= minimum.total);
+  const issue = ok
+    ? null
+    : `benchmark coverage below minimum: ${positive} positive / ${negative} negative / ${total} total, require at least ${minimum.positive} positive / ${minimum.negative} negative / ${minimum.total} total`;
+
+  return {
+    applies,
+    ok,
+    positive,
+    negative,
+    total,
+    minimum,
+    issue,
+  };
+}
+
+function formatBenchmarkFixturesWithCoverage(
+  set: BenchmarkSet,
+  coverage: BenchmarkCoverageGate,
+): string {
+  const base = `${set.positive.length} positive / ${set.negative.length} negative`;
+  if (!coverage.applies) return base;
+  return `${base} (generated min ${coverage.minimum.positive} positive / ${coverage.minimum.negative} negative / ${coverage.minimum.total} total)`;
 }
 
 async function readFixtureJsonl<T>(
@@ -1411,6 +1472,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   const sources = await readSourcesFileIfPresent(dir);
   const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
+  const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
   const stageCounts = stageStatusCounts(state);
   const failedStages = (STAGE_IDS as readonly StageId[]).filter(
     (stageId) => state.stages[stageId].status === "failed",
@@ -1432,6 +1494,9 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   if (knowledge === null) healthIssues.push("knowledge index missing");
   if (benchmarkSet === null) healthIssues.push("benchmark fixtures missing");
   if (benchmarkReport === null) healthIssues.push("benchmark report missing");
+  if (benchmarkCoverage.issue !== null) {
+    healthIssues.push(benchmarkCoverage.issue);
+  }
   if (
     benchmarkReport !== null &&
     (benchmarkReport.summary.failed > 0 || benchmarkReport.summary.errored > 0)
@@ -1496,6 +1561,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
           sources,
           benchmarkSet,
           benchmarkReport,
+          benchmarkCoverage,
           health: {
             status: health,
             stageCounts,
@@ -1548,7 +1614,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   }
   if (benchmarkSet !== null) {
     process.stdout.write(
-      `  fixtures       ${benchmarkSet.positive.length} positive / ${benchmarkSet.negative.length} negative\n`,
+      `  fixtures       ${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)}\n`,
     );
   }
   if (benchmarkReport !== null) {
@@ -1587,6 +1653,9 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
 
 type ExpertiseStatus = "usable" | "needs-validation" | "not-ready";
 const HIGH_TRUST_ZERO_FACT_THRESHOLD = 0.9;
+const GENERATED_BENCHMARK_MIN_POSITIVE_FIXTURES = 8;
+const GENERATED_BENCHMARK_MIN_NEGATIVE_FIXTURES = 5;
+const GENERATED_BENCHMARK_MIN_TOTAL_FIXTURES = 13;
 
 interface ProfileOptions {
   root: string;
@@ -1659,6 +1728,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const facts = await readFactsJsonlIfPresent(dir);
   const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
+  const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
   const factsBySource = countFactsBySource(facts);
   const acceptedSources = sources?.sources ?? [];
   const highTrustZeroFactSources = acceptedSources
@@ -1732,6 +1802,8 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     blockingIssues.push(
       `benchmark has ${benchmarkReport.summary.failed} failed and ${benchmarkReport.summary.errored} errored fixture(s)`,
     );
+  } else if (benchmarkCoverage.issue !== null) {
+    validationIssues.push(benchmarkCoverage.issue);
   } else if (benchmarkReport.summary.citationRate < 1) {
     validationIssues.push("not every positive benchmark result carried citations");
   }
@@ -1827,6 +1899,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
               positive: benchmarkSet.positive.length,
               negative: benchmarkSet.negative.length,
             },
+      coverageGate: benchmarkCoverage,
       report:
         benchmarkReport === null
           ? null
@@ -1886,11 +1959,15 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   );
   if (benchmarkReport !== null) {
     process.stdout.write(
-      `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}\n`,
+      `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}` +
+        (benchmarkSet !== null
+          ? `, fixtures ${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)}`
+          : "") +
+        "\n",
     );
   } else if (benchmarkSet !== null) {
     process.stdout.write(
-      `  benchmark      not run (${benchmarkSet.positive.length} positive / ${benchmarkSet.negative.length} negative fixtures)\n`,
+      `  benchmark      not run (${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)} fixtures)\n`,
     );
   } else {
     process.stdout.write("  benchmark      fixtures missing\n");
@@ -2278,12 +2355,13 @@ async function cmdDoctor(
           almanacDir,
           manifest.almanacId,
         );
+        const benchmarkCoverage = benchmarkCoverageGate(almanacDir, state, set);
         add(
-          set === null ? "warn" : "ok",
+          set === null ? "warn" : benchmarkCoverage.ok ? "ok" : "warn",
           "fixtures",
           set === null
             ? "benchmark fixtures missing"
-            : `${set.positive.length} positive / ${set.negative.length} negative`,
+            : formatBenchmarkFixturesWithCoverage(set, benchmarkCoverage),
         );
         const report = await readBenchmarkReportIfPresent(almanacDir);
         add(

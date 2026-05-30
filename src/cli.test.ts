@@ -14,6 +14,7 @@ import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { STAGE_IDS } from "./core/types.ts";
 import {
   almanacDirPath,
+  compileStatePath,
   ensureAlmanacLayout,
   knowledgeIndexManifestPath,
   writeCompileState,
@@ -21,6 +22,11 @@ import {
 } from "./compile/storage.ts";
 import { bootstrapAlmanac } from "./compile/stages/s00-bootstrap.ts";
 import { markStageCompleted } from "./compile/pipeline.ts";
+import {
+  negativeJsonlPath,
+  positiveJsonlPath,
+  stage11OutputPath,
+} from "./compile/stages/s11-benchmark-gen.ts";
 
 let root: string;
 
@@ -364,5 +370,89 @@ describe("almanac CLI product onboarding", () => {
         ingestionMode: "snapshot",
       }),
     ]);
+  });
+
+  test("profile and inspect flag generated benchmark coverage below minimum", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const dir = almanacDirPath(root, "sqlite-demo");
+    const positive = (await readFile(positiveJsonlPath(dir), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const negative = (await readFile(negativeJsonlPath(dir), "utf8"))
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    await writeFile(
+      stage11OutputPath(dir),
+      JSON.stringify(
+        {
+          schemaVersion: "0.1.0",
+          set: {
+            schemaVersion: "0.1.0",
+            almanacId: "sqlite-demo",
+            positive,
+            negative,
+          },
+          rationale:
+            "Synthetic Stage 11 output used to exercise generated benchmark coverage gating.",
+        },
+        null,
+        2,
+      ) + "\n",
+      "utf8",
+    );
+
+    const state = JSON.parse(await readFile(compileStatePath(dir), "utf8"));
+    await writeCompileState(
+      dir,
+      markStageCompleted(
+        state,
+        "11-benchmark-gen",
+        new Date(),
+        { outputHash: "b".repeat(64), llmCalls: 1 },
+      ),
+    );
+
+    const inspect = runCli(["inspect", "sqlite-demo", "--root", root]);
+    expect(inspect.status).toBe(0);
+    expect(inspect.stderr).toBe("");
+    expect(inspect.stdout).toContain("health         attention");
+    expect(inspect.stdout).toContain(
+      "benchmark coverage below minimum: 1 positive / 1 negative / 2 total",
+    );
+    expect(inspect.stdout).toContain(
+      "fixtures       1 positive / 1 negative (generated min 8 positive / 5 negative / 13 total)",
+    );
+
+    const profile = runCli(["profile", "sqlite-demo", "--root", root]);
+    expect(profile.status).toBe(0);
+    expect(profile.stderr).toBe("");
+    expect(profile.stdout).toContain("status         needs-validation");
+    expect(profile.stdout).toContain(
+      "benchmark coverage below minimum: 1 positive / 1 negative / 2 total",
+    );
+
+    const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
+    const parsedProfile = JSON.parse(profileJson.stdout) as {
+      status: string;
+      benchmark: {
+        coverageGate: {
+          applies: boolean;
+          ok: boolean;
+          minimum: { positive: number; negative: number; total: number };
+        };
+      };
+    };
+    expect(parsedProfile.status).toBe("needs-validation");
+    expect(parsedProfile.benchmark.coverageGate).toEqual(
+      expect.objectContaining({
+        applies: true,
+        ok: false,
+        minimum: { positive: 8, negative: 5, total: 13 },
+      }),
+    );
   });
 });
