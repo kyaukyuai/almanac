@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.4.1 shipped** · last updated 2026-05-30.
+Status: **v0.4.2 shipped** · last updated 2026-05-30.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -874,6 +874,13 @@ Empirical result on 2026-05-30:
 | domain | depth | facts | sources with facts | tools (custom) | fixtures | passed | citationRate |
 |-------:|:------|------:|-------------------:|---------------:|---------:|-------:|-------------:|
 | Enterprise AI | standard | 387 | 7 | 2 | 11 positive / 6 negative | 17/17 | 1.00 |
+
+### v0.4.2 — Wiki export manifest polish
+
+v0.4.2 patches the `almanac wiki` inspection bundle so `artifacts.json.files`
+also lists `artifacts.json` itself. The manifest is rendered with a stable
+self-entry byte length that matches the file written to disk, which makes the
+export bundle internally complete for downstream review and packaging tools.
 
 ### v0.5+ (long-tail)
 
