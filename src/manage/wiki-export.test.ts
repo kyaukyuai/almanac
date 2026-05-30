@@ -4,6 +4,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  statSync,
   writeFileSync,
 } from "node:fs";
 import { mkdir } from "node:fs/promises";
@@ -181,9 +182,20 @@ describe("runWikiExport", () => {
     );
     const artifacts = JSON.parse(
       readFileSync(join(outputDir, "artifacts.json"), "utf8"),
-    ) as { almanacId: string; files: Array<{ name: string }> };
+    ) as {
+      almanacId: string;
+      files: Array<{ name: string; byteLength: number }>;
+    };
     expect(artifacts.almanacId).toBe("tinytool");
-    expect(artifacts.files.map((file) => file.name)).toContain("README.md");
+    expect(artifacts.files.map((file) => file.name)).toEqual(
+      result.files.map((file) => file.name),
+    );
+    const artifactsEntry = artifacts.files.find(
+      (file) => file.name === "artifacts.json",
+    );
+    expect(artifactsEntry?.byteLength).toBe(
+      statSync(join(outputDir, "artifacts.json")).size,
+    );
   });
 
   test("rejects relative paths", async () => {

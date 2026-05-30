@@ -125,30 +125,20 @@ export async function runWikiExport(
   await writeMarkdown("benchmark.md", renderBenchmark(benchmark));
 
   const artifactsPath = join(input.outputDir, "artifacts.json");
-  await writeFile(
-    artifactsPath,
-    JSON.stringify(
-      {
-        schemaVersion: "0.1.0",
-        almanacId: manifest.almanacId,
-        version: manifest.version,
-        generatedAt: new Date().toISOString(),
-        sourceDir: input.almanacDir,
-        files: files.map((file) => ({
-          name: file.name,
-          byteLength: file.byteLength,
-        })),
-      },
-      null,
-      2,
-    ) + "\n",
-    "utf8",
-  );
-  files.push({
+  const artifactsFile: WikiExportFile = {
     name: "artifacts.json",
     path: artifactsPath,
-    byteLength: (await stat(artifactsPath)).size,
+    byteLength: 0,
+  };
+  files.push(artifactsFile);
+  const artifactsBody = renderArtifactsManifest({
+    almanacId: manifest.almanacId,
+    version: manifest.version,
+    sourceDir: input.almanacDir,
+    files,
   });
+  artifactsFile.byteLength = Buffer.byteLength(artifactsBody, "utf8");
+  await writeFile(artifactsPath, artifactsBody, "utf8");
 
   log({ event: "wiki-export:done", outputDir: input.outputDir, files: files.length });
   return { outputDir: input.outputDir, files };
@@ -267,6 +257,38 @@ function renderOverview(input: {
     `- facts: ${factsJsonlPath(input.almanacDir)}`,
     `- benchmark report: ${benchmarkResultPath(input.almanacDir)}`,
   ].join("\n");
+}
+
+function renderArtifactsManifest(args: {
+  almanacId: string;
+  version: string;
+  sourceDir: string;
+  files: WikiExportFile[];
+}): string {
+  const generatedAt = new Date().toISOString();
+  let byteLength = 0;
+  while (true) {
+    const body =
+      JSON.stringify(
+        {
+          schemaVersion: "0.1.0",
+          almanacId: args.almanacId,
+          version: args.version,
+          generatedAt,
+          sourceDir: args.sourceDir,
+          files: args.files.map((file) => ({
+            name: file.name,
+            byteLength:
+              file.name === "artifacts.json" ? byteLength : file.byteLength,
+          })),
+        },
+        null,
+        2,
+      ) + "\n";
+    const nextByteLength = Buffer.byteLength(body, "utf8");
+    if (nextByteLength === byteLength) return body;
+    byteLength = nextByteLength;
+  }
 }
 
 function renderSources(sources: SourcesFile | null): string {
