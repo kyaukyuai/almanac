@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.4.1] — 2026-05-30
+
 ### Added
 
 - **Generated benchmark coverage gate.** `inspect`, `profile`, and `doctor`
@@ -675,7 +677,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.1...HEAD
+[0.4.1]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...v0.4.0
 [0.3.11]: https://github.com/kyaukyuai/almanac/compare/v0.3.10...v0.3.11
 [0.3.10]: https://github.com/kyaukyuai/almanac/compare/v0.3.9...v0.3.10
