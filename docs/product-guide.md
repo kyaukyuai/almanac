@@ -121,6 +121,14 @@ almanac benchmark my-almanac
 The command writes `.compile/benchmark-result.json` and exits non-zero when any
 fixture fails or errors, so it can be used in release scripts.
 
+Generated benchmarks also have a coverage floor. `inspect`, `profile`, and
+`doctor` expect at least 8 positive fixtures, 5 negative fixtures, and 13 total
+fixtures for a generated Stage 11 set. When the generation pipeline owns the
+fixtures, Stage 11 retries if deterministic preflight filtering would leave the
+set below that floor. Human-owned benchmark files can still be smaller for a
+focused acceptance gate, but release smoke runs should preserve the generated
+coverage minimum.
+
 ## Doctor
 
 ```bash

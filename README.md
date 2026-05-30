@@ -59,11 +59,11 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.4.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
-→ source discovery → fact extraction → tool design + implementation →
-knowledge index → contract files → SKILL.md → benchmark) runs
-end-to-end against both mocked and real Anthropic LLMs. The runtime
-(`almanac serve`) is wired into the MCP ecosystem; `register`
+**v0.4.0 (main, with post-release hardening).** The 12-stage compile pipeline
+(bootstrap → domain analysis → source discovery → fact extraction → tool
+design + implementation → knowledge index → contract files → SKILL.md →
+benchmark) runs end-to-end against both mocked and real Anthropic LLMs. The
+runtime (`almanac serve`) is wired into the MCP ecosystem; `register`
 configures Claude Code / Claude Desktop / Cursor / Codex.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
@@ -72,6 +72,12 @@ transport, and `almanac wiki` inspection exports. The release also includes the
 late-v0.3 and v0.4 product hardening work: `almanac profile`, community source
 discovery, `feed --replace`, PDF text extraction, and source/benchmark
 hardening from the Kubernetes operators smoke runs.
+
+Post-v0.4 hardening adds a generated benchmark coverage floor
+(8 positive / 5 negative / 13 total fixtures), Stage 11 retry behavior when
+preflight filtering would fall below that floor, a longer default Anthropic
+request timeout for large source-candidate evaluations, and deterministic
+rejection of known zero-fact landing-page sources.
 
 The v0.3 series closed eight structural failure classes that surfaced
 in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
@@ -85,8 +91,14 @@ real-Anthropic smokes at `--depth=standard`:
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 |-------:|--------:|------:|---------------:|-------:|-------------:|-----------------:|
+| Enterprise AI | main |   387 |              2 |  17/17 |         1.00 |              6/6 |
 | sqlite |  v0.3.0 |   620 |              2 |  14/15 |         0.90 |              5/5 |
 | Rust   | v0.3.10 |  1438 |              3 |  11/15 |         0.60 |              5/5 |
+
+The Enterprise AI smoke was run on 2026-05-30 against main with
+`--profile mixed --depth standard`. It produced 387 facts from 7 evidence
+sources, 6 tools total, generated 11 positive and 6 negative fixtures, and
+passed Stage 12 with 100% citation rate.
 
 Rust's pass count fluctuates ±2 across v0.3.x runs due to Stage 2
 source-discovery non-determinism (different source sets pick up

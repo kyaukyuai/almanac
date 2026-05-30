@@ -11,6 +11,29 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Generated benchmark coverage gate.** `inspect`, `profile`, and `doctor`
+  now surface whether LLM-generated Stage 11 fixtures meet the minimum
+  coverage floor of 8 positive fixtures, 5 negative fixtures, and 13 total
+  fixtures. The profile JSON includes the same gate metadata for automation.
+- **Anthropic timeout override.** `ALMANAC_ANTHROPIC_TIMEOUT_MS` can override
+  the Anthropic request timeout used by compile-time LLM stages.
+
+### Changed
+
+- **Stage 11 coverage minimum is enforced during generation.** Benchmark
+  generation now retries when deterministic preflight filtering or
+  stabilization would leave fewer than 8 positive / 5 negative / 13 total
+  fixtures, instead of persisting an under-covered benchmark that later needs
+  validation attention.
+- **Anthropic request timeout headroom restored.** Compile-time Anthropic calls
+  now use the SDK's 10-minute default unless explicitly overridden, avoiding
+  evaluator timeouts on larger source-candidate sets.
+- **Known landing-page source hardening.** The MITRE ATLAS root landing page is
+  rejected as a zero-fact landing page candidate rather than accepted as a
+  high-trust snapshot source.
+
 ## [0.4.0] — 2026-05-29
 
 ### Added

@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.4.0 shipped** · last updated 2026-05-29.
+Status: **v0.4.0 shipped + post-release hardening on main** · last updated 2026-05-30.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -854,6 +854,27 @@ Auto-refresh scheduling remains a v0.5+ candidate. See
 [`v0.4-plan.md`](./v0.4-plan.md) for the archived implementation
 sequence and release gates.
 
+### Post-v0.4 hardening — Enterprise AI smoke
+
+After v0.4.0, the Enterprise AI smoke exposed three product-readiness gaps:
+
+- Stage 2b source evaluation can exceed a short client timeout when discovery
+  produces larger candidate sets.
+- High-trust landing pages can be fetchable but contribute zero facts.
+- Stage 11 can pass runtime preflight after filtering but still leave too few
+  generated fixtures to satisfy the benchmark coverage floor.
+
+Main now addresses those gaps with a longer default Anthropic request timeout,
+known zero-fact landing-page rejection, generated benchmark coverage reporting,
+and Stage 11 retries when preflight filtering or stabilization would leave fewer
+than 8 positive / 5 negative / 13 total fixtures.
+
+Empirical result on 2026-05-30:
+
+| domain | depth | facts | sources with facts | tools (custom) | fixtures | passed | citationRate |
+|-------:|:------|------:|-------------------:|---------------:|---------:|-------:|-------------:|
+| Enterprise AI | standard | 387 | 7 | 2 | 11 positive / 6 negative | 17/17 | 1.00 |
+
 ### v0.5+ (long-tail)
 
 - Slack adapter
@@ -867,8 +888,8 @@ sequence and release gates.
 ## 9. Open questions / next steps
 
 The original v0.1 deliverables listed here have all shipped, as
-have the v0.3-era structural fixes (eleven point releases,
-documented in §8 above). Active questions carrying into v0.4:
+have the v0.3-era structural fixes and v0.4 feature set documented
+in §8 above. Active questions carrying into v0.5+:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
