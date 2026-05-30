@@ -59,12 +59,12 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.4.0 (main, with post-release hardening).** The 12-stage compile pipeline
-(bootstrap → domain analysis → source discovery → fact extraction → tool
-design + implementation → knowledge index → contract files → SKILL.md →
-benchmark) runs end-to-end against both mocked and real Anthropic LLMs. The
-runtime (`almanac serve`) is wired into the MCP ecosystem; `register`
-configures Claude Code / Claude Desktop / Cursor / Codex.
+**v0.4.1 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+→ source discovery → fact extraction → tool design + implementation →
+knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
+against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
+wired into the MCP ecosystem; `register` configures Claude Code / Claude
+Desktop / Cursor / Codex.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -73,7 +73,7 @@ late-v0.3 and v0.4 product hardening work: `almanac profile`, community source
 discovery, `feed --replace`, PDF text extraction, and source/benchmark
 hardening from the Kubernetes operators smoke runs.
 
-Post-v0.4 hardening adds a generated benchmark coverage floor
+v0.4.1 adds a generated benchmark coverage floor
 (8 positive / 5 negative / 13 total fixtures), Stage 11 retry behavior when
 preflight filtering would fall below that floor, a longer default Anthropic
 request timeout for large source-candidate evaluations, and deterministic

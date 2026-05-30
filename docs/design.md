@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.4.0 shipped + post-release hardening on main** · last updated 2026-05-30.
+Status: **v0.4.1 shipped** · last updated 2026-05-30.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -854,7 +854,7 @@ Auto-refresh scheduling remains a v0.5+ candidate. See
 [`v0.4-plan.md`](./v0.4-plan.md) for the archived implementation
 sequence and release gates.
 
-### Post-v0.4 hardening — Enterprise AI smoke
+### v0.4.1 — Enterprise AI smoke hardening
 
 After v0.4.0, the Enterprise AI smoke exposed three product-readiness gaps:
 
@@ -864,10 +864,10 @@ After v0.4.0, the Enterprise AI smoke exposed three product-readiness gaps:
 - Stage 11 can pass runtime preflight after filtering but still leave too few
   generated fixtures to satisfy the benchmark coverage floor.
 
-Main now addresses those gaps with a longer default Anthropic request timeout,
+v0.4.1 addresses those gaps with a longer default Anthropic request timeout,
 known zero-fact landing-page rejection, generated benchmark coverage reporting,
-and Stage 11 retries when preflight filtering or stabilization would leave fewer
-than 8 positive / 5 negative / 13 total fixtures.
+and Stage 11 retries when preflight filtering or stabilization would leave
+fewer than 8 positive / 5 negative / 13 total fixtures.
 
 Empirical result on 2026-05-30:
 
