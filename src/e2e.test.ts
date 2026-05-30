@@ -347,21 +347,19 @@ const BENCHMARK_SET: Stage11Output = {
   set: {
     schemaVersion: "0.1.0",
     almanacId: "kubernetes",
-    positive: [
-      {
-        id: "k8s-pos-pod-definition",
-        query: "what is a Pod in Kubernetes?",
-        intent: "lookup",
-        rationale:
-          "Stable Pod definition lookup over query_facts; should return ≥1 citation.",
-        invocation: { tool: "query_facts", input: { q: "Pod" } },
-        expected: {
-          minCitations: 1,
-          contains: ["Pod"],
-          acceptableStaleness: ["fresh"],
-        },
+    positive: Array.from({ length: 8 }, (_, i) => ({
+      id: i === 0 ? "k8s-pos-pod-definition" : `k8s-pos-pod-definition-${i + 1}`,
+      query: "what is a Pod in Kubernetes?",
+      intent: "lookup",
+      rationale:
+        "Stable Pod definition lookup over query_facts; should return at least one citation.",
+      invocation: { tool: "query_facts", input: { q: "Pod" } },
+      expected: {
+        minCitations: 1,
+        contains: ["Pod"],
+        acceptableStaleness: ["fresh"],
       },
-    ],
+    })),
     negative: [
       {
         id: "k8s-neg-stock-price",
@@ -372,10 +370,43 @@ const BENCHMARK_SET: Stage11Output = {
         refusalReason: "out-of-scope",
         expected: { maxCitations: 0 },
       },
+      {
+        id: "k8s-neg-weather",
+        query: "what is today's weather in Tokyo?",
+        rationale: "Out of scope: weather is not in the Kubernetes almanac.",
+        invocation: { tool: "query_facts", input: { q: "tokyo weather" } },
+        refusalReason: "out-of-scope",
+        expected: { maxCitations: 0 },
+      },
+      {
+        id: "k8s-neg-exchange-rate",
+        query: "what is the current USD JPY exchange rate?",
+        rationale:
+          "Out of scope: currency exchange rates are not in the Kubernetes almanac.",
+        invocation: { tool: "query_facts", input: { q: "usd jpy exchange rate" } },
+        refusalReason: "out-of-scope",
+        expected: { maxCitations: 0 },
+      },
+      {
+        id: "k8s-neg-recipe",
+        query: "how do I bake sourdough bread?",
+        rationale: "Out of scope: recipes are not in the Kubernetes almanac.",
+        invocation: { tool: "query_facts", input: { q: "sourdough bread" } },
+        refusalReason: "out-of-scope",
+        expected: { maxCitations: 0 },
+      },
+      {
+        id: "k8s-neg-movie",
+        query: "who won best picture this year?",
+        rationale: "Out of scope: film awards are not in the Kubernetes almanac.",
+        invocation: { tool: "query_facts", input: { q: "best picture film award" } },
+        refusalReason: "out-of-scope",
+        expected: { maxCitations: 0 },
+      },
     ],
   },
   rationale:
-    "Tiny e2e benchmark: one positive (Pod definition over query_facts) and one negative (out-of-scope query) to prove Stages 11 + 12 wire together end-to-end.",
+    "E2E benchmark with generated coverage minimums: eight positive Pod definition lookups and five out-of-scope negatives prove Stages 11 + 12 wire together end-to-end.",
 };
 
 const DOC_BODY =
@@ -691,15 +722,15 @@ describe("end-to-end pipeline (in-process, all stubs, zero LLM cost)", () => {
       expect(data.hits!.length).toBeGreaterThanOrEqual(1);
       expect(data.hits![0]!.text.toLowerCase()).toContain("pod");
 
-      // Stage 12 benchmark report: both fixtures must have passed against the
-      // real runtime.
+      // Stage 12 benchmark report: all generated fixtures must have passed
+      // against the real runtime.
       const reportBody = readFileSync(
         join(fx.almanacDir, ".compile/benchmark-result.json"),
         "utf8",
       );
       const report = BenchmarkReportSchema.parse(JSON.parse(reportBody));
-      expect(report.summary.total).toBe(2);
-      expect(report.summary.passed).toBe(2);
+      expect(report.summary.total).toBe(13);
+      expect(report.summary.passed).toBe(13);
       expect(report.summary.failed).toBe(0);
       expect(report.summary.errored).toBe(0);
       expect(report.summary.citationRate).toBe(1);

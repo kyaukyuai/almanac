@@ -93,8 +93,11 @@ import { LlmImplementer } from "./compile/stages/s07/llm-implementer.ts";
 import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
 import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
 import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
-import { createBenchmarkGenRunner } from "./compile/stages/s11-benchmark-gen.ts";
 import {
+  STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES,
+  STAGE11_MIN_GENERATED_POSITIVE_FIXTURES,
+  STAGE11_MIN_GENERATED_TOTAL_FIXTURES,
+  createBenchmarkGenRunner,
   negativeJsonlPath,
   positiveJsonlPath,
   stage11OutputPath,
@@ -1665,9 +1668,12 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
 
 type ExpertiseStatus = "usable" | "needs-validation" | "not-ready";
 const HIGH_TRUST_ZERO_FACT_THRESHOLD = 0.9;
-const GENERATED_BENCHMARK_MIN_POSITIVE_FIXTURES = 8;
-const GENERATED_BENCHMARK_MIN_NEGATIVE_FIXTURES = 5;
-const GENERATED_BENCHMARK_MIN_TOTAL_FIXTURES = 13;
+const GENERATED_BENCHMARK_MIN_POSITIVE_FIXTURES =
+  STAGE11_MIN_GENERATED_POSITIVE_FIXTURES;
+const GENERATED_BENCHMARK_MIN_NEGATIVE_FIXTURES =
+  STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES;
+const GENERATED_BENCHMARK_MIN_TOTAL_FIXTURES =
+  STAGE11_MIN_GENERATED_TOTAL_FIXTURES;
 
 interface ProfileOptions {
   root: string;

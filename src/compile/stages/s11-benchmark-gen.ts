@@ -70,8 +70,13 @@ export const STAGE11_DEFAULT_MAX_ATTEMPTS = 3;
  * the ~6 KB ToolManifest payload.
  */
 export const STAGE11_DEFAULT_FACT_SAMPLE_SIZE = 60;
-export const STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES = 8;
-export const STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES = 4;
+export const STAGE11_MIN_GENERATED_POSITIVE_FIXTURES = 8;
+export const STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES = 5;
+export const STAGE11_MIN_GENERATED_TOTAL_FIXTURES = 13;
+export const STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES =
+  STAGE11_MIN_GENERATED_POSITIVE_FIXTURES;
+export const STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES =
+  STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES;
 
 export const STAGE11_OUTPUT_REL_PATH = ".compile/stage11-output.json";
 export const POSITIVE_JSONL_REL_PATH = "tests/positive.jsonl";
@@ -147,6 +152,17 @@ export class BenchmarkPreflightCoverageError extends Error {
         : `Stage 11: generated benchmark included unpreflighted fixture(s): ${skippedFixtureIds.join(", ")}; ${blockedReason}`,
     );
     this.name = "BenchmarkPreflightCoverageError";
+  }
+}
+
+export class BenchmarkCoverageMinimumError extends Error {
+  constructor(
+    public readonly positive: number,
+    public readonly negative: number,
+    public readonly total: number,
+  ) {
+    super(formatBenchmarkCoverageMinimumIssue({ positive, negative, total }));
+    this.name = "BenchmarkCoverageMinimumError";
   }
 }
 
@@ -291,21 +307,18 @@ function stabilizeByDroppingFixtureIds(
 
   const positive = output.set.positive.filter((f) => !dropIds.has(f.id));
   const negative = output.set.negative.filter((f) => !dropIds.has(f.id));
-  const minPositive = Math.min(
-    output.set.positive.length,
-    STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES,
-  );
-  const minNegative = Math.min(
-    output.set.negative.length,
-    STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES,
-  );
-  if (positive.length < minPositive || negative.length < minNegative) {
+  const total = positive.length + negative.length;
+  if (
+    positive.length < STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES ||
+    negative.length < STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES ||
+    total < STAGE11_MIN_GENERATED_TOTAL_FIXTURES
+  ) {
     return {
       output,
       droppedFixtureIds: [],
       blockedReason:
-        `dropping failed fixtures would leave ${positive.length} positive / ${negative.length} negative, ` +
-        `below required ${minPositive} positive / ${minNegative} negative`,
+        `dropping failed fixtures would leave ${positive.length} positive / ${negative.length} negative / ${total} total, ` +
+        `below required ${STAGE11_MIN_STABILIZED_POSITIVE_FIXTURES} positive / ${STAGE11_MIN_STABILIZED_NEGATIVE_FIXTURES} negative / ${STAGE11_MIN_GENERATED_TOTAL_FIXTURES} total`,
     };
   }
 
@@ -385,6 +398,31 @@ function formatPreflightCoverageError(error: BenchmarkPreflightCoverageError): s
   ]
     .filter((line) => line.length > 0)
     .join("\n");
+}
+
+function benchmarkCoverageMinimumIssue(set: BenchmarkSet): string | null {
+  const positive = set.positive.length;
+  const negative = set.negative.length;
+  const total = positive + negative;
+  if (
+    positive >= STAGE11_MIN_GENERATED_POSITIVE_FIXTURES &&
+    negative >= STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES &&
+    total >= STAGE11_MIN_GENERATED_TOTAL_FIXTURES
+  ) {
+    return null;
+  }
+  return formatBenchmarkCoverageMinimumIssue({ positive, negative, total });
+}
+
+function formatBenchmarkCoverageMinimumIssue(args: {
+  positive: number;
+  negative: number;
+  total: number;
+}): string {
+  return (
+    `benchmark coverage below minimum: ${args.positive} positive / ${args.negative} negative / ${args.total} total, ` +
+    `require at least ${STAGE11_MIN_GENERATED_POSITIVE_FIXTURES} positive / ${STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES} negative / ${STAGE11_MIN_GENERATED_TOTAL_FIXTURES} total`
+  );
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -633,9 +671,45 @@ export function createBenchmarkGenRunner(
         | InvalidFixtureInvocationError
         | BenchmarkPreflightValidationError
         | BenchmarkPreflightCoverageError
+        | BenchmarkCoverageMinimumError
         | null = null;
       let output: Stage11Output | null = null;
       let lastDurationMs = 0;
+
+      const retryCoverageMinimumIfNeeded = (
+        candidateOutput: Stage11Output,
+        attempt: number,
+        completionText: string,
+      ): boolean => {
+        const detail = benchmarkCoverageMinimumIssue(candidateOutput.set);
+        if (detail === null) return false;
+        lastError = new BenchmarkCoverageMinimumError(
+          candidateOutput.set.positive.length,
+          candidateOutput.set.negative.length,
+          candidateOutput.set.positive.length + candidateOutput.set.negative.length,
+        );
+        if (attempt < maxAttempts) {
+          ctx.log({
+            event: "stage11:llm:retry",
+            callName,
+            attempt,
+            reason: "coverage-minimum",
+            message: detail,
+          });
+          messages.push(
+            { role: "assistant", content: completionText },
+            {
+              role: "user",
+              content: buildRetryFeedback({
+                reason: "coverage-minimum",
+                detail,
+              }),
+            },
+          );
+          return true;
+        }
+        throw lastError;
+      };
 
       for (let attempt = 1; attempt <= maxAttempts; attempt++) {
         const completion = await opts.provider.complete({
@@ -718,6 +792,11 @@ export function createBenchmarkGenRunner(
                   normalized.output.set.negative.length,
               });
               output = normalized.output;
+              if (
+                retryCoverageMinimumIfNeeded(output, attempt, completion.text)
+              ) {
+                continue;
+              }
               lastError = null;
               break;
             }
@@ -802,6 +881,11 @@ export function createBenchmarkGenRunner(
                 const stabilizedFailed = preflightFailures(stabilizedReport);
                 if (stabilizedFailed.length === 0) {
                   output = stabilized.output;
+                  if (
+                    retryCoverageMinimumIfNeeded(output, attempt, completion.text)
+                  ) {
+                    continue;
+                  }
                   lastError = null;
                   break;
                 }
@@ -860,6 +944,11 @@ export function createBenchmarkGenRunner(
                   negatives: stabilized.output.set.negative.length,
                 });
                 output = stabilized.output;
+                if (
+                  retryCoverageMinimumIfNeeded(output, attempt, completion.text)
+                ) {
+                  continue;
+                }
                 lastError = null;
                 break;
               }
@@ -867,6 +956,9 @@ export function createBenchmarkGenRunner(
           }
 
           output = normalized.output;
+          if (retryCoverageMinimumIfNeeded(output, attempt, completion.text)) {
+            continue;
+          }
           lastError = null;
           break;
         } catch (e) {
@@ -874,7 +966,8 @@ export function createBenchmarkGenRunner(
           if (
             e instanceof InvalidFixtureInvocationError ||
             e instanceof BenchmarkPreflightValidationError ||
-            e instanceof BenchmarkPreflightCoverageError
+            e instanceof BenchmarkPreflightCoverageError ||
+            e instanceof BenchmarkCoverageMinimumError
           ) {
             lastError = e;
           } else {
@@ -979,7 +1072,8 @@ function buildRetryFeedback(args: {
     | "json-parse"
     | "schema-validation"
     | "invalid-invocation"
-    | "preflight-failed";
+    | "preflight-failed"
+    | "coverage-minimum";
   detail: string;
   enabledTools?: readonly string[];
 }): string {
@@ -990,7 +1084,9 @@ function buildRetryFeedback(args: {
         ? "Your previous response was valid JSON but did not match the required schema."
         : args.reason === "invalid-invocation"
           ? "Your previous response referenced a tool name that is not in the enabled tool set."
-          : "Your previous response matched the schema but failed runtime benchmark preflight.";
+          : args.reason === "coverage-minimum"
+            ? "Your previous response matched the schema but did not meet the minimum benchmark coverage."
+            : "Your previous response matched the schema but failed runtime benchmark preflight.";
   const lines = [
     header,
     "",
@@ -1004,6 +1100,8 @@ function buildRetryFeedback(args: {
     "",
     args.reason === "preflight-failed"
       ? "Please re-emit a corrected benchmark set. Remove or replace every fixture that failed or was skipped by preflight; prefer deterministic facts-backed tools for benchmark fixtures."
+      : args.reason === "coverage-minimum"
+        ? "Please re-emit a corrected benchmark set with enough deterministic fixtures to satisfy the minimum positive, negative, and total fixture counts after preflight filtering."
       : "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
     "Return ONLY the JSON object — no prose, no code fences, no explanation.",
   );
