@@ -21,11 +21,14 @@ export interface AnthropicProviderOptions {
   apiKey?: string;
   /** Override the SDK base URL (useful for proxies or tests). */
   baseURL?: string;
-  /** Per-request timeout. Default 60_000 ms. */
+  /** Per-request timeout. Default matches Anthropic SDK's 10 minute default. */
   timeoutMs?: number;
   /** Max SDK-level retries for transient errors. Default 2. */
   maxRetries?: number;
 }
+
+export const ANTHROPIC_DEFAULT_TIMEOUT_MS = 600_000;
+export const ANTHROPIC_DEFAULT_MAX_RETRIES = 2;
 
 /**
  * Construct an Anthropic-backed `LlmProvider`. Throws if no API key is
@@ -46,8 +49,8 @@ export function createAnthropicProvider(
   const client = new Anthropic({
     apiKey,
     ...(opts.baseURL !== undefined ? { baseURL: opts.baseURL } : {}),
-    timeout: opts.timeoutMs ?? 60_000,
-    maxRetries: opts.maxRetries ?? 2,
+    timeout: opts.timeoutMs ?? ANTHROPIC_DEFAULT_TIMEOUT_MS,
+    maxRetries: opts.maxRetries ?? ANTHROPIC_DEFAULT_MAX_RETRIES,
   });
 
   return {
