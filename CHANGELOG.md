@@ -11,6 +11,14 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.4.2] — 2026-05-30
+
+### Fixed
+
+- **Wiki export manifest self-entry.** `almanac wiki` now includes
+  `artifacts.json` itself in `artifacts.json.files`, and records a stable
+  `byteLength` for that self-entry that matches the file written to disk.
+
 ## [0.4.1] — 2026-05-30
 
 ### Added
@@ -677,7 +685,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.1...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.2...HEAD
+[0.4.2]: https://github.com/kyaukyuai/almanac/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...v0.4.0
 [0.3.11]: https://github.com/kyaukyuai/almanac/compare/v0.3.10...v0.3.11

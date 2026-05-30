@@ -59,7 +59,7 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.4.1 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.4.2 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
 against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
@@ -78,6 +78,10 @@ v0.4.1 adds a generated benchmark coverage floor
 preflight filtering would fall below that floor, a longer default Anthropic
 request timeout for large source-candidate evaluations, and deterministic
 rejection of known zero-fact landing-page sources.
+
+v0.4.2 patches `almanac wiki` artifact metadata so `artifacts.json.files`
+includes `artifacts.json` itself with a byte length that matches the file
+written to disk.
 
 The v0.3 series closed eight structural failure classes that surfaced
 in the v0.2.5 cross-domain validation — see `docs/design.md §8.5`
