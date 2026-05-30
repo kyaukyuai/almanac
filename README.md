@@ -195,10 +195,13 @@ that the v0.2.5 smokes empirically motivated.
 - Streamable HTTP/SSE MCP transport for browser and network MCP clients.
 - `almanac wiki` Markdown inspection export for review and handoff.
 
-Auto-refresh scheduling remains a v0.5+ candidate. See
+v0.5 planning starts with run-first operations: a local `almanac run` path for
+deterministic tool invocation, optional LLM-backed question mode after that
+foundation is stable, and refresh scheduling design for v0.6+. See
 [`docs/design.md §8`](./docs/design.md) for the worked release summary and
-[`docs/v0.4-plan.md`](./docs/v0.4-plan.md) for the archived implementation
-sequence.
+[`docs/v0.5-plan.md`](./docs/v0.5-plan.md) for the proposed next sequence.
+The archived v0.4 implementation sequence remains in
+[`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
 
 ## Changelog
 
