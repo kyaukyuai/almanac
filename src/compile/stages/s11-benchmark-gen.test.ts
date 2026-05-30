@@ -41,6 +41,7 @@ import { ensureAlmanacLayout } from "../storage.ts";
 import { bootstrapAlmanac } from "./s00-bootstrap.ts";
 import { domainSpecPath } from "./s01-domain-analysis.ts";
 import {
+  BenchmarkCoverageMinimumError,
   BenchmarkPreflightCoverageError,
   BenchmarkPreflightValidationError,
   InvalidFixtureInvocationError,
@@ -228,6 +229,12 @@ function addDeterministicCoverage(
       invocation: { tool: toolName, input: { q: `out-of-scope ${i}` } },
     });
   }
+}
+
+function buildCoveredStage11Output(toolName: string): Stage11Output {
+  const output = buildStage11Output(toolName);
+  addDeterministicCoverage(output, toolName, 8, 5);
+  return output;
 }
 
 function benchmarkReportFor(
@@ -547,7 +554,9 @@ describe("createBenchmarkGenRunner", () => {
     const fx = await freshFixture();
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
+        "11-benchmark-gen@v3": JSON.stringify(
+          buildCoveredStage11Output("query_facts"),
+        ),
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -571,8 +580,8 @@ describe("createBenchmarkGenRunner", () => {
     const negLines = readFileSync(negativeJsonlPath(fx.almanacDir), "utf8")
       .split("\n")
       .filter((l) => l.length > 0);
-    expect(posLines).toHaveLength(1);
-    expect(negLines).toHaveLength(1);
+    expect(posLines).toHaveLength(8);
+    expect(negLines).toHaveLength(5);
     expect(() => PositiveFixtureSchema.parse(JSON.parse(posLines[0]!))).not.toThrow();
     expect(() => NegativeFixtureSchema.parse(JSON.parse(negLines[0]!))).not.toThrow();
   });
@@ -594,7 +603,9 @@ describe("createBenchmarkGenRunner", () => {
 
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("fetch_docs")),
+        "11-benchmark-gen@v3": JSON.stringify(
+          buildCoveredStage11Output("fetch_docs"),
+        ),
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -632,7 +643,9 @@ describe("createBenchmarkGenRunner", () => {
 
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
+        "11-benchmark-gen@v3": JSON.stringify(
+          buildCoveredStage11Output("query_facts"),
+        ),
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -669,7 +682,9 @@ describe("createBenchmarkGenRunner", () => {
     const observedSets: BenchmarkSet[] = [];
     const provider = createMockProvider({
       responses: {
-        "11-benchmark-gen@v3": JSON.stringify(buildStage11Output("query_facts")),
+        "11-benchmark-gen@v3": JSON.stringify(
+          buildCoveredStage11Output("query_facts"),
+        ),
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -696,7 +711,7 @@ describe("createBenchmarkGenRunner", () => {
   test("does not execute live/network fixtures during Stage 11 preflight", async () => {
     const fx = await freshFixture();
     const out = buildStage11Output("query_facts");
-    addDeterministicCoverage(out, "query_facts", 8, 4);
+    addDeterministicCoverage(out, "query_facts", 8, 5);
     out.set.positive.push({
       ...out.set.positive[0]!,
       id: "k8s-pos-live",
@@ -739,7 +754,7 @@ describe("createBenchmarkGenRunner", () => {
     expect(persisted.set.positive.map((f) => f.id)).not.toContain("k8s-pos-live");
     expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
     expect(persisted.set.positive).toHaveLength(8);
-    expect(persisted.set.negative).toHaveLength(4);
+    expect(persisted.set.negative).toHaveLength(5);
     expect(logs).toContainEqual(
       expect.objectContaining({
         event: "stage11:preflight:filtered",
@@ -755,21 +770,80 @@ describe("createBenchmarkGenRunner", () => {
     );
   });
 
+  test("retries when a preflight-passing set is below minimum coverage", async () => {
+    const fx = await freshFixture();
+    const undercovered = buildStage11Output("query_facts");
+    addDeterministicCoverage(undercovered, "query_facts", 8, 4);
+    const repaired = buildStage11Output("query_facts");
+    addDeterministicCoverage(repaired, "query_facts", 8, 5);
+
+    let call = 0;
+    const logs: object[] = [];
+    const provider = createMockProvider({
+      defaultResponse: () => {
+        call += 1;
+        return JSON.stringify(call === 1 ? undercovered : repaired);
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 2,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => benchmarkReportFor(set),
+      readEnabledManifests: async () => [buildManifest("query_facts", "slow")],
+    });
+
+    const outcome = await runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    expect(call).toBe(2);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:llm:retry",
+        reason: "coverage-minimum",
+      }),
+    );
+    const persisted = Stage11OutputSchema.parse(
+      JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
+    );
+    expect(persisted.set.positive).toHaveLength(8);
+    expect(persisted.set.negative).toHaveLength(5);
+  });
+
+  test("throws coverage minimum error after exhausting attempts", async () => {
+    const fx = await freshFixture();
+    const undercovered = buildStage11Output("query_facts");
+    addDeterministicCoverage(undercovered, "query_facts", 8, 4);
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(undercovered),
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 1,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => benchmarkReportFor(set),
+      readEnabledManifests: async () => [buildManifest("query_facts", "slow")],
+    });
+
+    await expect(runner.run(makeCtx(fx))).rejects.toBeInstanceOf(
+      BenchmarkCoverageMinimumError,
+    );
+    expect(existsSync(stage11OutputPath(fx.almanacDir))).toBe(false);
+  });
+
   test("retries when unpreflighted fixtures would drop below minimum coverage", async () => {
     const fx = await freshFixture();
     const unstable = buildStage11Output("query_facts");
-    unstable.set.positive.push({
-      ...unstable.set.positive[0]!,
-      id: "k8s-pos-live",
-      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
-    });
+    addDeterministicCoverage(unstable, "query_facts", 8, 4);
     unstable.set.negative.push({
       ...unstable.set.negative[0]!,
       id: "k8s-neg-live",
       invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
     });
     const repaired = buildStage11Output("query_facts");
-    addDeterministicCoverage(repaired, "query_facts", 8, 4);
+    addDeterministicCoverage(repaired, "query_facts", 8, 5);
 
     let call = 0;
     const logs: object[] = [];
@@ -803,7 +877,6 @@ describe("createBenchmarkGenRunner", () => {
     const persisted = Stage11OutputSchema.parse(
       JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
     );
-    expect(persisted.set.positive.map((f) => f.id)).not.toContain("k8s-pos-live");
     expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
   });
 
@@ -851,7 +924,7 @@ describe("createBenchmarkGenRunner", () => {
 
   test("skips Stage 11 preflight when every fixture is live/network-backed", async () => {
     const fx = await freshFixture();
-    const out = buildStage11Output("latest_releases");
+    const out = buildCoveredStage11Output("latest_releases");
     const logs: object[] = [];
     const provider = createMockProvider({
       responses: {
@@ -884,7 +957,7 @@ describe("createBenchmarkGenRunner", () => {
     const provider = createMockProvider({
       defaultResponse: () => {
         call += 1;
-        return JSON.stringify(buildStage11Output("query_facts"));
+        return JSON.stringify(buildCoveredStage11Output("query_facts"));
       },
     });
     let preflightCall = 0;
@@ -928,6 +1001,7 @@ describe("createBenchmarkGenRunner", () => {
         invocation: { tool: "query_facts", input: { q: `controller ${i}` } },
       });
     }
+    addDeterministicCoverage(out, "query_facts", 9, 5);
     const provider = createMockProvider({
       responses: {
         "11-benchmark-gen@v3": JSON.stringify(out),
@@ -978,6 +1052,7 @@ describe("createBenchmarkGenRunner", () => {
         invocation: { tool: "query_facts", input: { q: `controller ${i}` } },
       });
     }
+    addDeterministicCoverage(out, "query_facts", 9, 5);
     const provider = createMockProvider({
       responses: {
         "11-benchmark-gen@v3": JSON.stringify(out),
@@ -1021,7 +1096,7 @@ describe("createBenchmarkGenRunner", () => {
       defaultResponse: () => {
         call += 1;
         if (call === 1) return "not json at all";
-        return JSON.stringify(buildStage11Output("query_facts"));
+        return JSON.stringify(buildCoveredStage11Output("query_facts"));
       },
     });
     const runner = createBenchmarkGenRunner({
@@ -1045,7 +1120,7 @@ describe("createBenchmarkGenRunner", () => {
           // First attempt: references a tool that is not enabled.
           return JSON.stringify(buildStage11Output("ghost_tool"));
         }
-        return JSON.stringify(buildStage11Output("query_facts"));
+        return JSON.stringify(buildCoveredStage11Output("query_facts"));
       },
     });
     const runner = createBenchmarkGenRunner({
