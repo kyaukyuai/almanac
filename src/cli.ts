@@ -19,6 +19,7 @@
  *   almanac doctor [id] [opts]             diagnose environment + artifacts
  *   almanac path <id> [opts]               print the absolute almanac dir path
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
+ *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
@@ -187,9 +188,13 @@ import {
 import {
   RunToolSetupError,
   exitCodeForRunTool,
+  formatRunToolArtifactHuman,
+  formatRunToolArtifactListHuman,
   formatRunToolHuman,
   formatRunToolListHuman,
+  listRunToolArtifacts,
   listRunTools,
+  readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
 } from "./manage/run-tool.ts";
@@ -2055,6 +2060,74 @@ function cmdPath(id: string, opts: PathOptions): void {
   process.stdout.write(almanacDirPath(opts.root, id) + "\n");
 }
 
+interface RunsOptions {
+  root: string;
+  json?: boolean;
+  latest?: boolean;
+  limit?: string;
+}
+
+async function cmdRuns(
+  id: string,
+  runId: string | undefined,
+  opts: RunsOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+
+  try {
+    if (runId !== undefined) {
+      if (opts.latest === true || opts.limit !== undefined) {
+        runsUsageError(
+          "[runId] cannot be combined with --latest or --limit",
+        );
+      }
+      const read = await readRunToolArtifact({ almanacDir, runId });
+      process.stdout.write(
+        opts.json === true
+          ? JSON.stringify(read.artifact, null, 2) + "\n"
+          : formatRunToolArtifactHuman(read.artifact),
+      );
+      return;
+    }
+
+    if (opts.latest === true && opts.limit !== undefined) {
+      runsUsageError("--latest and --limit are mutually exclusive");
+    }
+    const limit =
+      opts.latest === true ? 1 : parseRunsLimit(opts.limit ?? undefined);
+    const list = await listRunToolArtifacts(
+      limit === undefined ? { almanacDir } : { almanacDir, limit },
+    );
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(list, null, 2) + "\n"
+        : formatRunToolArtifactListHuman(list),
+    );
+  } catch (e) {
+    if (e instanceof RunToolSetupError) {
+      if (e.code === "bad-run-id") {
+        runsUsageError(e.message);
+      }
+      fail(`runs: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+function parseRunsLimit(raw: string | undefined): number | undefined {
+  if (raw === undefined) return undefined;
+  const limit = Number.parseInt(raw, 10);
+  if (!Number.isInteger(limit) || limit <= 0 || `${limit}` !== raw.trim()) {
+    runsUsageError(`--limit must be a positive integer (got "${raw}")`);
+  }
+  return limit;
+}
+
+function runsUsageError(message: string): never {
+  process.stderr.write(`error: runs: ${message}\n`);
+  process.exit(2);
+}
+
 interface RunOptions {
   root: string;
   tool?: string;
@@ -3414,6 +3487,15 @@ program
   .option("--save", "Save a run artifact under <almanac>/.runs/")
   .addOption(rootOption)
   .action(cmdRun);
+
+program
+  .command("runs <id> [runId]")
+  .description("view saved local run artifacts")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--latest", "Show only the newest run artifact")
+  .option("--limit <n>", "Maximum number of newest run artifacts to list")
+  .addOption(rootOption)
+  .action(cmdRuns);
 
 program
   .command("sources <id>")

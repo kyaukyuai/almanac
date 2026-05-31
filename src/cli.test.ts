@@ -464,6 +464,7 @@ describe("almanac CLI product onboarding", () => {
     expect(badInputSaved.stderr).toBe("");
     const badInputArtifact = JSON.parse(badInputSaved.stdout) as {
       artifactRelPath: string;
+      runId: string;
       status: string;
       exitCode: number;
       result: { ok: boolean; error?: { code: string } };
@@ -481,6 +482,97 @@ describe("almanac CLI product onboarding", () => {
         "utf8",
       ),
     ).toContain('"status": "bad-input"');
+
+    const runsList = runCli(["runs", "sqlite-demo", "--root", root]);
+    expect(runsList.status).toBe(0);
+    expect(runsList.stderr).toBe("");
+    expect(runsList.stdout).toContain("runs: sqlite-demo");
+    expect(runsList.stdout).toContain(savedArtifact.runId);
+    expect(runsList.stdout).toContain("query_facts");
+
+    const runsJson = runCli([
+      "runs",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(runsJson.status).toBe(0);
+    expect(runsJson.stderr).toBe("");
+    const parsedRuns = JSON.parse(runsJson.stdout) as {
+      almanacId: string;
+      runs: Array<{ runId: string; status: string; artifactRelPath: string }>;
+    };
+    expect(parsedRuns.almanacId).toBe("sqlite-demo");
+    expect(parsedRuns.runs.map((run) => run.runId).sort()).toEqual(
+      [savedArtifact.runId, badInputArtifact.runId].sort(),
+    );
+
+    const latestRun = runCli([
+      "runs",
+      "sqlite-demo",
+      "--latest",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(latestRun.status).toBe(0);
+    const latestParsed = JSON.parse(latestRun.stdout) as {
+      runs: Array<{ runId: string }>;
+    };
+    expect(latestParsed.runs).toHaveLength(1);
+
+    const limitedRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--limit",
+      "1",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(limitedRuns.status).toBe(0);
+    expect(
+      (JSON.parse(limitedRuns.stdout) as { runs: unknown[] }).runs,
+    ).toHaveLength(1);
+
+    const runDetail = runCli([
+      "runs",
+      "sqlite-demo",
+      savedArtifact.runId,
+      "--root",
+      root,
+    ]);
+    expect(runDetail.status).toBe(0);
+    expect(runDetail.stderr).toBe("");
+    expect(runDetail.stdout).toContain(`run: ${savedArtifact.runId}`);
+    expect(runDetail.stdout).toContain("status: ok");
+    expect(runDetail.stdout).toContain("data:");
+
+    const runDetailJson = runCli([
+      "runs",
+      "sqlite-demo",
+      savedArtifact.runId,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(runDetailJson.status).toBe(0);
+    expect(JSON.parse(runDetailJson.stdout)).toEqual(savedArtifact);
+
+    const invalidRunsUsage = runCli([
+      "runs",
+      "sqlite-demo",
+      "--latest",
+      "--limit",
+      "1",
+      "--root",
+      root,
+    ]);
+    expect(invalidRunsUsage.status).toBe(2);
+    expect(invalidRunsUsage.stderr).toContain(
+      "--latest and --limit are mutually exclusive",
+    );
 
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
     expect(missingToolOption.status).toBe(2);

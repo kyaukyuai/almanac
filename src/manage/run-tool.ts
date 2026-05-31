@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import type {
@@ -21,6 +21,7 @@ import {
 } from "../core/runtime.ts";
 import {
   RunToolArtifactSchema,
+  RunToolRunIdSchema,
   ToolResultSchema,
   type RunToolArtifact,
   type RunToolExitCode,
@@ -86,9 +87,51 @@ export interface SaveRunToolArtifactResult {
   relPath: string;
 }
 
+export interface ListRunToolArtifactsOptions {
+  /** Absolute path to the compiled almanac directory. */
+  almanacDir: string;
+  /** Maximum number of newest artifacts to return. */
+  limit?: number;
+}
+
+export interface RunToolArtifactSummary {
+  artifactRelPath: string;
+  runId: string;
+  invokedAt: string;
+  toolName: string;
+  status: RunToolStatus;
+  exitCode: RunToolExitCode;
+  durationMs: number;
+  citationsCount: number;
+}
+
+export interface RunToolArtifactList {
+  almanacId: string;
+  version: string;
+  artifactsDir: string;
+  runs: RunToolArtifactSummary[];
+}
+
+export interface ReadRunToolArtifactOptions {
+  /** Absolute path to the compiled almanac directory. */
+  almanacDir: string;
+  runId: string;
+}
+
+export interface ReadRunToolArtifactResult {
+  artifact: RunToolArtifact;
+  path: string;
+  relPath: string;
+}
+
 export class RunToolSetupError extends Error {
   constructor(
-    public readonly code: "bad-almanac-dir" | "almanac-not-found",
+    public readonly code:
+      | "bad-almanac-dir"
+      | "almanac-not-found"
+      | "bad-run-id"
+      | "run-artifact-not-found"
+      | "run-artifact-invalid",
     message: string,
   ) {
     super(message);
@@ -201,6 +244,44 @@ export function runToolArtifactRelPath(runId: string): string {
   return `.runs/${runId}.json`;
 }
 
+export async function listRunToolArtifacts(
+  options: ListRunToolArtifactsOptions,
+): Promise<RunToolArtifactList> {
+  const manifest = await readRunToolManifest(options.almanacDir);
+  const artifactsDir = runToolArtifactsDirPath(options.almanacDir);
+  const files = await readRunToolArtifactFiles(artifactsDir);
+  const artifacts = await Promise.all(
+    files.map(async (fileName) => {
+      const relPath = `.runs/${fileName}`;
+      const path = join(options.almanacDir, relPath);
+      return readAndParseRunToolArtifact(path);
+    }),
+  );
+  artifacts.sort(compareRunToolArtifactsNewestFirst);
+
+  const limit = options.limit ?? artifacts.length;
+  return {
+    almanacId: manifest.almanacId,
+    version: manifest.version,
+    artifactsDir,
+    runs: artifacts.slice(0, limit).map(summarizeRunToolArtifact),
+  };
+}
+
+export async function readRunToolArtifact(
+  options: ReadRunToolArtifactOptions,
+): Promise<ReadRunToolArtifactResult> {
+  await readRunToolManifest(options.almanacDir);
+  const runId = parseRunToolRunId(options.runId);
+  const relPath = runToolArtifactRelPath(runId);
+  const path = join(options.almanacDir, relPath);
+  return {
+    artifact: await readAndParseRunToolArtifact(path),
+    path,
+    relPath,
+  };
+}
+
 export async function listRunTools(
   options: ListRunToolsOptions,
 ): Promise<RunToolList> {
@@ -283,6 +364,58 @@ export function formatRunToolListHuman(list: RunToolList): string {
   return lines.join("\n") + "\n";
 }
 
+export function formatRunToolArtifactListHuman(
+  list: RunToolArtifactList,
+): string {
+  const lines = [
+    `runs: ${list.almanacId} (${list.version})`,
+  ];
+  if (list.runs.length === 0) {
+    lines.push("  (none)");
+    return lines.join("\n") + "\n";
+  }
+
+  for (const run of list.runs) {
+    lines.push(
+      `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms`,
+    );
+  }
+  return lines.join("\n") + "\n";
+}
+
+export function formatRunToolArtifactHuman(artifact: RunToolArtifact): string {
+  const lines = [
+    `run: ${artifact.runId}`,
+    `tool: ${artifact.toolName}`,
+    `status: ${artifact.status}`,
+    `exit: ${artifact.exitCode}`,
+    `almanac: ${artifact.almanacId} (${artifact.version})`,
+    `invoked: ${artifact.invokedAt}`,
+    `duration: ${artifact.durationMs}ms`,
+    `citations: ${artifact.citationsCount}`,
+    `artifact: ${artifact.artifactRelPath}`,
+  ];
+
+  if (artifact.result.ok) {
+    lines.push(
+      `freshness: ${artifact.result.freshness.class}/${artifact.result.freshness.staleness}`,
+    );
+    lines.push("data:");
+    lines.push(JSON.stringify(artifact.result.data, null, 2));
+  } else {
+    lines.push(
+      `error: ${artifact.result.error.code}: ${artifact.result.error.message}`,
+    );
+    if (artifact.availableTools !== undefined) {
+      lines.push(
+        `available tools: ${artifact.availableTools.join(", ") || "(none)"}`,
+      );
+    }
+  }
+
+  return lines.join("\n") + "\n";
+}
+
 async function readRunToolManifest(almanacDir: string) {
   if (!isAbsolute(almanacDir)) {
     throw new RunToolSetupError(
@@ -297,6 +430,90 @@ async function readRunToolManifest(almanacDir: string) {
     );
   }
   return readManifest(almanacDir);
+}
+
+async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]> {
+  try {
+    const entries = await readdir(artifactsDir, { withFileTypes: true });
+    return entries
+      .filter((entry) => entry.isFile())
+      .map((entry) => entry.name)
+      .filter((name) => /^run-[A-Za-z0-9-]+\.json$/.test(name));
+  } catch (e) {
+    if (errorCode(e) === "ENOENT") {
+      return [];
+    }
+    throw e;
+  }
+}
+
+async function readAndParseRunToolArtifact(
+  path: string,
+): Promise<RunToolArtifact> {
+  let raw: string;
+  try {
+    raw = await readFile(path, "utf8");
+  } catch (e) {
+    if (errorCode(e) === "ENOENT") {
+      throw new RunToolSetupError(
+        "run-artifact-not-found",
+        `run artifact does not exist: ${path}`,
+      );
+    }
+    throw e;
+  }
+
+  try {
+    return RunToolArtifactSchema.parse(JSON.parse(raw));
+  } catch (e) {
+    throw new RunToolSetupError(
+      "run-artifact-invalid",
+      `invalid run artifact ${path}: ${(e as Error).message}`,
+    );
+  }
+}
+
+function errorCode(error: unknown): string | undefined {
+  if (typeof error !== "object" || error === null || !("code" in error)) {
+    return undefined;
+  }
+  const code = (error as { code: unknown }).code;
+  return typeof code === "string" ? code : undefined;
+}
+
+function parseRunToolRunId(runId: string): string {
+  const parsed = RunToolRunIdSchema.safeParse(runId);
+  if (!parsed.success) {
+    throw new RunToolSetupError(
+      "bad-run-id",
+      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
+    );
+  }
+  return parsed.data;
+}
+
+function summarizeRunToolArtifact(
+  artifact: RunToolArtifact,
+): RunToolArtifactSummary {
+  return {
+    artifactRelPath: artifact.artifactRelPath,
+    runId: artifact.runId,
+    invokedAt: artifact.invokedAt,
+    toolName: artifact.toolName,
+    status: artifact.status,
+    exitCode: artifact.exitCode,
+    durationMs: artifact.durationMs,
+    citationsCount: artifact.citationsCount,
+  };
+}
+
+function compareRunToolArtifactsNewestFirst(
+  a: RunToolArtifact,
+  b: RunToolArtifact,
+): number {
+  const byInvokedAt = b.invokedAt.localeCompare(a.invokedAt);
+  if (byInvokedAt !== 0) return byInvokedAt;
+  return b.runId.localeCompare(a.runId);
 }
 
 function generateRunToolRunId(invokedAt: string): string {
