@@ -18,6 +18,7 @@
  *   almanac benchmark <id> [opts]          init/run human golden fixtures
  *   almanac doctor [id] [opts]             diagnose environment + artifacts
  *   almanac path <id> [opts]               print the absolute almanac dir path
+ *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
@@ -183,6 +184,14 @@ import {
   defaultWikiExportDir,
   runWikiExport,
 } from "./manage/wiki-export.ts";
+import {
+  RunToolSetupError,
+  exitCodeForRunTool,
+  formatRunToolHuman,
+  formatRunToolListHuman,
+  listRunTools,
+  runTool,
+} from "./manage/run-tool.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 function readForgerVersion(): string {
@@ -1150,6 +1159,7 @@ async function cmdDemo(
       `Try:\n` +
       `    almanac inspect ${almanacId} --root ${opts.root}\n` +
       `    almanac profile ${almanacId} --root ${opts.root}\n` +
+      `    almanac run ${almanacId} --tool query_facts --input '{"q":"transactions atomic"}' --root ${opts.root}\n` +
       `    almanac sources ${almanacId} --root ${opts.root}\n` +
       `    almanac benchmark ${almanacId} --root ${opts.root}\n`,
   );
@@ -2042,6 +2052,96 @@ interface PathOptions {
 
 function cmdPath(id: string, opts: PathOptions): void {
   process.stdout.write(almanacDirPath(opts.root, id) + "\n");
+}
+
+interface RunOptions {
+  root: string;
+  tool?: string;
+  input?: string;
+  inputFile?: string;
+  json?: boolean;
+  listTools?: boolean;
+}
+
+async function cmdRun(id: string, opts: RunOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+
+  try {
+    if (opts.listTools === true) {
+      if (
+        opts.tool !== undefined ||
+        opts.input !== undefined ||
+        opts.inputFile !== undefined
+      ) {
+        runUsageError(
+          "--list-tools cannot be combined with --tool, --input, or --input-file",
+        );
+        return;
+      }
+      const tools = await listRunTools({ almanacDir });
+      process.stdout.write(
+        opts.json === true
+          ? JSON.stringify(tools, null, 2) + "\n"
+          : formatRunToolListHuman(tools),
+      );
+      return;
+    }
+
+    if (opts.tool === undefined || opts.tool.trim().length === 0) {
+      runUsageError("missing required --tool <name> (or use --list-tools)");
+      return;
+    }
+
+    const input = await readRunInput(opts);
+    const execution = await runTool({
+      almanacDir,
+      toolName: opts.tool,
+      input,
+    });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(execution, null, 2) + "\n"
+        : formatRunToolHuman(execution),
+    );
+    process.exitCode = exitCodeForRunTool(execution);
+  } catch (e) {
+    if (e instanceof RunToolSetupError) {
+      fail(`run: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+async function readRunInput(opts: RunOptions): Promise<unknown> {
+  if (opts.input !== undefined && opts.inputFile !== undefined) {
+    runUsageError("--input and --input-file are mutually exclusive");
+  }
+  if (opts.inputFile !== undefined) {
+    const path = resolve(opts.inputFile);
+    let body: string;
+    try {
+      body = await readFile(path, "utf8");
+    } catch (e) {
+      runUsageError(
+        `could not read --input-file ${path}: ${(e as Error).message}`,
+      );
+    }
+    return parseRunJson(body, `--input-file ${path}`);
+  }
+  return parseRunJson(opts.input ?? "{}", "--input");
+}
+
+function parseRunJson(raw: string, label: string): unknown {
+  try {
+    return JSON.parse(raw) as unknown;
+  } catch (e) {
+    runUsageError(`${label} must be valid JSON: ${(e as Error).message}`);
+  }
+}
+
+function runUsageError(message: string): never {
+  process.stderr.write(`error: run: ${message}\n`);
+  process.exit(2);
 }
 
 interface SourcesOptions {
@@ -3290,6 +3390,17 @@ program
   .description("print the absolute path to an almanac directory")
   .addOption(rootOption)
   .action(cmdPath);
+
+program
+  .command("run <id>")
+  .description("invoke one compiled almanac tool locally")
+  .option("--tool <name>", "Tool name to invoke, e.g. query_facts")
+  .option("--input <json>", "JSON object input for the tool (default: {})")
+  .option("--input-file <path>", "Read JSON object input from a file")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--list-tools", "List enabled tools without invoking one")
+  .addOption(rootOption)
+  .action(cmdRun);
 
 program
   .command("sources <id>")

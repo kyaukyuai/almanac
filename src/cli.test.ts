@@ -255,6 +255,7 @@ describe("almanac CLI product onboarding", () => {
     expect(demo.stdout).toContain('creating offline demo almanac "sqlite-demo"');
     expect(demo.stdout).toContain("benchmark  2/2 passed");
     expect(demo.stdout).toContain(`almanac profile sqlite-demo --root ${root}`);
+    expect(demo.stdout).toContain("almanac run sqlite-demo --tool query_facts");
 
     const inspect = runCli(["inspect", "sqlite-demo", "--root", root]);
     expect(inspect.status).toBe(0);
@@ -324,6 +325,97 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
     expect(doctor.stdout).toContain("embeddings");
+  });
+
+  test("run invokes compiled tools with stable output and exit codes", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const list = runCli(["run", "sqlite-demo", "--list-tools", "--root", root]);
+    expect(list.status).toBe(0);
+    expect(list.stderr).toBe("");
+    expect(list.stdout).toContain("tools: sqlite-demo");
+    expect(list.stdout).toContain("query_facts");
+
+    const human = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"transactions atomic","limit":3}',
+      "--root",
+      root,
+    ]);
+    expect(human.status).toBe(0);
+    expect(human.stderr).toBe("");
+    expect(human.stdout).toContain("tool: query_facts");
+    expect(human.stdout).toContain("status: ok");
+    expect(human.stdout).toContain("citations: 1");
+    expect(human.stdout).toContain("atomic");
+
+    const inputFile = join(root, "run-input.json");
+    await writeFile(
+      inputFile,
+      JSON.stringify({ q: "journal mode", limit: 3 }),
+      "utf8",
+    );
+    const json = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input-file",
+      inputFile,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(json.status).toBe(0);
+    expect(json.stderr).toBe("");
+    const parsed = JSON.parse(json.stdout) as {
+      status: string;
+      result: {
+        ok: boolean;
+        data?: { hits?: Array<{ text: string }> };
+      };
+      citationsCount: number;
+    };
+    expect(parsed.status).toBe("ok");
+    expect(parsed.result.ok).toBe(true);
+    expect(parsed.citationsCount).toBe(1);
+    expect(parsed.result.data?.hits?.[0]?.text).toContain("journal_mode");
+
+    const missing = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "missing_tool",
+      "--root",
+      root,
+    ]);
+    expect(missing.status).toBe(2);
+    expect(missing.stderr).toBe("");
+    expect(missing.stdout).toContain("status: tool-not-found");
+    expect(missing.stdout).toContain("available tools:");
+
+    const badInput = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '"not an object"',
+      "--root",
+      root,
+    ]);
+    expect(badInput.status).toBe(2);
+    expect(badInput.stderr).toBe("");
+    expect(badInput.stdout).toContain("status: bad-input");
+
+    const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
+    expect(missingToolOption.status).toBe(2);
+    expect(missingToolOption.stderr).toContain("missing required --tool");
   });
 
   test("profile flags high-trust snapshot sources with no extracted facts", async () => {

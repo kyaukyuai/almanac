@@ -19,6 +19,7 @@ import {
 } from "../core/runtime.ts";
 import {
   ToolResultSchema,
+  type ToolManifest,
   type ToolResult,
 } from "../core/types.ts";
 import { readManifest } from "../compile/storage.ts";
@@ -56,6 +57,21 @@ export interface RunToolExecution {
   availableTools?: string[];
 }
 
+export interface ListRunToolsOptions {
+  /** Absolute path to the compiled almanac directory. */
+  almanacDir: string;
+  /** Optional runtime dependency overrides, mainly for tests. */
+  resolveSecret?: AlmanacRuntimeOptions["resolveSecret"];
+  fetchImpl?: AlmanacRuntimeOptions["fetchImpl"];
+  log?: ToolLogger;
+}
+
+export interface RunToolList {
+  almanacId: string;
+  version: string;
+  tools: ToolManifest[];
+}
+
 export class RunToolSetupError extends Error {
   constructor(
     public readonly code: "bad-almanac-dir" | "almanac-not-found",
@@ -74,21 +90,7 @@ export async function runTool(
   options: RunToolOptions,
 ): Promise<RunToolExecution> {
   const startedAt = Date.now();
-  const almanacDir = options.almanacDir;
-  if (!isAbsolute(almanacDir)) {
-    throw new RunToolSetupError(
-      "bad-almanac-dir",
-      `almanacDir must be absolute: ${almanacDir}`,
-    );
-  }
-  if (!existsSync(almanacDir)) {
-    throw new RunToolSetupError(
-      "almanac-not-found",
-      `almanac directory does not exist: ${almanacDir}`,
-    );
-  }
-
-  const manifest = await readManifest(almanacDir);
+  const manifest = await readRunToolManifest(options.almanacDir);
   const input = normalizeToolInput(options.input);
   if (input === null) {
     return {
@@ -107,7 +109,7 @@ export async function runTool(
   }
 
   const runtime = await createAlmanacRuntime({
-    almanacDir,
+    almanacDir: options.almanacDir,
     resolveSecret: options.resolveSecret,
     fetchImpl: options.fetchImpl,
     log: options.log,
@@ -146,6 +148,28 @@ export async function runTool(
       };
     }
     throw cause;
+  } finally {
+    closeRuntime(runtime);
+  }
+}
+
+export async function listRunTools(
+  options: ListRunToolsOptions,
+): Promise<RunToolList> {
+  const manifest = await readRunToolManifest(options.almanacDir);
+  const runtime = await createAlmanacRuntime({
+    almanacDir: options.almanacDir,
+    resolveSecret: options.resolveSecret,
+    fetchImpl: options.fetchImpl,
+    log: options.log,
+  });
+
+  try {
+    return {
+      almanacId: manifest.almanacId,
+      version: manifest.version,
+      tools: await runtime.listTools(),
+    };
   } finally {
     closeRuntime(runtime);
   }
@@ -190,6 +214,40 @@ export function formatRunToolHuman(execution: RunToolExecution): string {
   }
 
   return lines.join("\n") + "\n";
+}
+
+export function formatRunToolListHuman(list: RunToolList): string {
+  const lines = [
+    `tools: ${list.almanacId} (${list.version})`,
+  ];
+  if (list.tools.length === 0) {
+    lines.push("  (none)");
+    return lines.join("\n") + "\n";
+  }
+
+  for (const tool of list.tools) {
+    lines.push(
+      `  - ${tool.name}  ${tool.volatilityClass}  facts=${tool.knowledgeUsage.facts ? "yes" : "no"}`,
+    );
+    lines.push(`    ${tool.description}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+async function readRunToolManifest(almanacDir: string) {
+  if (!isAbsolute(almanacDir)) {
+    throw new RunToolSetupError(
+      "bad-almanac-dir",
+      `almanacDir must be absolute: ${almanacDir}`,
+    );
+  }
+  if (!existsSync(almanacDir)) {
+    throw new RunToolSetupError(
+      "almanac-not-found",
+      `almanac directory does not exist: ${almanacDir}`,
+    );
+  }
+  return readManifest(almanacDir);
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> | null {
