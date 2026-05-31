@@ -386,6 +386,41 @@ describe("almanac CLI product onboarding", () => {
     expect(parsed.citationsCount).toBe(1);
     expect(parsed.result.data?.hits?.[0]?.text).toContain("journal_mode");
 
+    const savedJson = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"transactions atomic","limit":3}',
+      "--json",
+      "--save",
+      "--root",
+      root,
+    ]);
+    expect(savedJson.status).toBe(0);
+    expect(savedJson.stderr).toBe("");
+    const savedArtifact = JSON.parse(savedJson.stdout) as {
+      schemaVersion: string;
+      artifactRelPath: string;
+      runId: string;
+      status: string;
+      exitCode: number;
+      result: { ok: boolean };
+    };
+    expect(savedArtifact.schemaVersion).toBe("0.1.0");
+    expect(savedArtifact.status).toBe("ok");
+    expect(savedArtifact.exitCode).toBe(0);
+    expect(savedArtifact.result.ok).toBe(true);
+    expect(savedArtifact.artifactRelPath).toBe(
+      `.runs/${savedArtifact.runId}.json`,
+    );
+    const savedPath = join(
+      almanacDirPath(root, "sqlite-demo"),
+      savedArtifact.artifactRelPath,
+    );
+    expect(JSON.parse(await readFile(savedPath, "utf8"))).toEqual(savedArtifact);
+
     const missing = runCli([
       "run",
       "sqlite-demo",
@@ -412,6 +447,40 @@ describe("almanac CLI product onboarding", () => {
     expect(badInput.status).toBe(2);
     expect(badInput.stderr).toBe("");
     expect(badInput.stdout).toContain("status: bad-input");
+
+    const badInputSaved = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '"not an object"',
+      "--save",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(badInputSaved.status).toBe(2);
+    expect(badInputSaved.stderr).toBe("");
+    const badInputArtifact = JSON.parse(badInputSaved.stdout) as {
+      artifactRelPath: string;
+      status: string;
+      exitCode: number;
+      result: { ok: boolean; error?: { code: string } };
+    };
+    expect(badInputArtifact.status).toBe("bad-input");
+    expect(badInputArtifact.exitCode).toBe(2);
+    expect(badInputArtifact.result.ok).toBe(false);
+    expect(badInputArtifact.result.error?.code).toBe("bad-input");
+    expect(
+      await readFile(
+        join(
+          almanacDirPath(root, "sqlite-demo"),
+          badInputArtifact.artifactRelPath,
+        ),
+        "utf8",
+      ),
+    ).toContain('"status": "bad-input"');
 
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
     expect(missingToolOption.status).toBe(2);

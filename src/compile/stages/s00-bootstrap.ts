@@ -92,5 +92,6 @@ export const ALMANAC_SUBDIRECTORIES: readonly string[] = [
   "adapters",
   "adapters/skill",
   "tests",
+  ".runs",
   ".compile",
 ];
