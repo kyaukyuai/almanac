@@ -131,6 +131,7 @@ describe("ALMANAC_SUBDIRECTORIES", () => {
       "adapters",
       "adapters/skill",
       "tests",
+      ".runs",
       ".compile",
     ]);
   });

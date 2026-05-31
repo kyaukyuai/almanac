@@ -18,6 +18,7 @@
  *     adapters/
  *       skill/SKILL.md                    Stage 10
  *     tests/                              Stage 11 fixtures
+ *     .runs/                              saved `almanac run` audit records
  *     .compile/
  *       compile-state.json                CompileState
  *

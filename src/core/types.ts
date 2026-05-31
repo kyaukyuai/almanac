@@ -3418,6 +3418,57 @@ export type ToolResult<T = unknown> =
     }
   | { ok: false; error: ToolError };
 
+// ── RunToolArtifact — local audit trail for `almanac run --tool` ─────────────
+
+export const RunToolStatusSchema = z.enum([
+  "ok",
+  "bad-input",
+  "tool-not-found",
+  "tool-error",
+]);
+export type RunToolStatus = z.infer<typeof RunToolStatusSchema>;
+
+export const RunToolExitCodeSchema = z.union([
+  z.literal(0),
+  z.literal(1),
+  z.literal(2),
+]);
+export type RunToolExitCode = z.infer<typeof RunToolExitCodeSchema>;
+
+export const RunToolRunIdSchema = z
+  .string()
+  .max(80)
+  .regex(
+    /^run-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/,
+    "must be run-<ISO timestamp with - separators>-<8 hex chars>",
+  );
+
+export const RunToolArtifactRelPathSchema = z
+  .string()
+  .max(120)
+  .regex(/^\.runs\/run-[A-Za-z0-9-]+\.json$/);
+
+export const RunToolArtifactSchema = z.object({
+  schemaVersion: z.literal("0.1.0"),
+  artifactRelPath: RunToolArtifactRelPathSchema,
+  runId: RunToolRunIdSchema,
+  invokedAt: z.string().regex(ISO_8601),
+  almanacId: z
+    .string()
+    .max(32)
+    .regex(CANONICAL_SLUG, "must be lowercase kebab-case"),
+  version: z.string().regex(SEMVER_RE, "must be semver"),
+  toolName: ToolNameSchema,
+  input: z.record(z.unknown()).nullable(),
+  status: RunToolStatusSchema,
+  exitCode: RunToolExitCodeSchema,
+  result: ToolResultSchema,
+  durationMs: z.number().int().nonnegative(),
+  citationsCount: z.number().int().nonnegative(),
+  availableTools: z.array(ToolNameSchema).optional(),
+});
+export type RunToolArtifact = z.infer<typeof RunToolArtifactSchema>;
+
 // ── ResourceDescriptor — MCP resources/list, resources/read ──────────────────
 
 /**

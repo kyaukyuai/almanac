@@ -191,6 +191,7 @@ import {
   formatRunToolListHuman,
   listRunTools,
   runTool,
+  saveRunToolArtifact,
 } from "./manage/run-tool.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
@@ -2061,6 +2062,7 @@ interface RunOptions {
   inputFile?: string;
   json?: boolean;
   listTools?: boolean;
+  save?: boolean;
 }
 
 async function cmdRun(id: string, opts: RunOptions): Promise<void> {
@@ -2071,10 +2073,11 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
       if (
         opts.tool !== undefined ||
         opts.input !== undefined ||
-        opts.inputFile !== undefined
+        opts.inputFile !== undefined ||
+        opts.save === true
       ) {
         runUsageError(
-          "--list-tools cannot be combined with --tool, --input, or --input-file",
+          "--list-tools cannot be combined with --tool, --input, --input-file, or --save",
         );
         return;
       }
@@ -2098,11 +2101,20 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
       toolName: opts.tool,
       input,
     });
-    process.stdout.write(
-      opts.json === true
-        ? JSON.stringify(execution, null, 2) + "\n"
-        : formatRunToolHuman(execution),
-    );
+    const saved =
+      opts.save === true
+        ? await saveRunToolArtifact({ almanacDir, execution })
+        : null;
+    if (opts.json === true) {
+      process.stdout.write(
+        JSON.stringify(saved ? saved.artifact : execution, null, 2) + "\n",
+      );
+    } else {
+      process.stdout.write(formatRunToolHuman(execution));
+      if (saved) {
+        process.stdout.write(`artifact: ${saved.path}\n`);
+      }
+    }
     process.exitCode = exitCodeForRunTool(execution);
   } catch (e) {
     if (e instanceof RunToolSetupError) {
@@ -3399,6 +3411,7 @@ program
   .option("--input-file <path>", "Read JSON object input from a file")
   .option("--json", "Emit JSON instead of a human-readable summary")
   .option("--list-tools", "List enabled tools without invoking one")
+  .option("--save", "Save a run artifact under <almanac>/.runs/")
   .addOption(rootOption)
   .action(cmdRun);
 

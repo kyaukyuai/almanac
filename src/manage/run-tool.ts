@@ -6,8 +6,10 @@
  * gives tests one deterministic place to pin status / exit-code semantics.
  */
 
+import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { isAbsolute } from "node:path";
+import { mkdir, writeFile } from "node:fs/promises";
+import { isAbsolute, join } from "node:path";
 
 import type {
   AlmanacRuntimeOptions,
@@ -18,19 +20,17 @@ import {
   ToolNotFoundError,
 } from "../core/runtime.ts";
 import {
+  RunToolArtifactSchema,
   ToolResultSchema,
+  type RunToolArtifact,
+  type RunToolExitCode,
+  type RunToolStatus,
   type ToolManifest,
   type ToolResult,
 } from "../core/types.ts";
 import { readManifest } from "../compile/storage.ts";
 
-export type RunToolStatus =
-  | "ok"
-  | "bad-input"
-  | "tool-not-found"
-  | "tool-error";
-
-export type RunToolExitCode = 0 | 1 | 2;
+export type { RunToolExitCode, RunToolStatus } from "../core/types.ts";
 
 export interface RunToolOptions {
   /** Absolute path to the compiled almanac directory. */
@@ -46,6 +46,8 @@ export interface RunToolOptions {
 }
 
 export interface RunToolExecution {
+  runId: string;
+  invokedAt: string;
   almanacId: string;
   version: string;
   toolName: string;
@@ -72,6 +74,18 @@ export interface RunToolList {
   tools: ToolManifest[];
 }
 
+export interface SaveRunToolArtifactOptions {
+  /** Absolute path to the compiled almanac directory. */
+  almanacDir: string;
+  execution: RunToolExecution;
+}
+
+export interface SaveRunToolArtifactResult {
+  artifact: RunToolArtifact;
+  path: string;
+  relPath: string;
+}
+
 export class RunToolSetupError extends Error {
   constructor(
     public readonly code: "bad-almanac-dir" | "almanac-not-found",
@@ -90,10 +104,14 @@ export async function runTool(
   options: RunToolOptions,
 ): Promise<RunToolExecution> {
   const startedAt = Date.now();
+  const invokedAt = new Date(startedAt).toISOString();
+  const runId = generateRunToolRunId(invokedAt);
   const manifest = await readRunToolManifest(options.almanacDir);
   const input = normalizeToolInput(options.input);
   if (input === null) {
     return {
+      runId,
+      invokedAt,
       almanacId: manifest.almanacId,
       version: manifest.version,
       toolName: options.toolName,
@@ -118,6 +136,8 @@ export async function runTool(
   try {
     const result = await runtime.execTool(options.toolName, input);
     return {
+      runId,
+      invokedAt,
       almanacId: manifest.almanacId,
       version: manifest.version,
       toolName: options.toolName,
@@ -133,6 +153,8 @@ export async function runTool(
         (tool) => tool.name,
       );
       return {
+        runId,
+        invokedAt,
         almanacId: manifest.almanacId,
         version: manifest.version,
         toolName: options.toolName,
@@ -151,6 +173,32 @@ export async function runTool(
   } finally {
     closeRuntime(runtime);
   }
+}
+
+export async function saveRunToolArtifact(
+  options: SaveRunToolArtifactOptions,
+): Promise<SaveRunToolArtifactResult> {
+  await readRunToolManifest(options.almanacDir);
+  const relPath = runToolArtifactRelPath(options.execution.runId);
+  const path = join(options.almanacDir, relPath);
+  const artifact = RunToolArtifactSchema.parse({
+    schemaVersion: "0.1.0",
+    artifactRelPath: relPath,
+    ...options.execution,
+    exitCode: exitCodeForRunTool(options.execution),
+  });
+
+  await mkdir(runToolArtifactsDirPath(options.almanacDir), { recursive: true });
+  await writeFile(path, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  return { artifact, path, relPath };
+}
+
+export function runToolArtifactsDirPath(almanacDir: string): string {
+  return join(almanacDir, ".runs");
+}
+
+export function runToolArtifactRelPath(runId: string): string {
+  return `.runs/${runId}.json`;
 }
 
 export async function listRunTools(
@@ -193,6 +241,7 @@ export function formatRunToolHuman(execution: RunToolExecution): string {
     `tool: ${execution.toolName}`,
     `status: ${execution.status}`,
     `almanac: ${execution.almanacId} (${execution.version})`,
+    `run: ${execution.runId}`,
   ];
 
   if (execution.result.ok) {
@@ -248,6 +297,13 @@ async function readRunToolManifest(almanacDir: string) {
     );
   }
   return readManifest(almanacDir);
+}
+
+function generateRunToolRunId(invokedAt: string): string {
+  return (
+    `run-${invokedAt.replace(/[:.]/g, "-")}-` +
+    randomBytes(4).toString("hex")
+  );
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> | null {

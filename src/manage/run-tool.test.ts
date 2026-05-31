@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -32,6 +34,7 @@ import {
   exitCodeForRunTool,
   formatRunToolHuman,
   runTool,
+  saveRunToolArtifact,
 } from "./run-tool.ts";
 
 const cleanup: string[] = [];
@@ -124,6 +127,57 @@ describe("runTool", () => {
     expect(formatted).toContain("tool: query_facts");
     expect(formatted).toContain("status: tool-error");
     expect(formatted).toContain("error: no-results");
+  });
+
+  test("saves schema-valid audit artifacts for successful and failed executions", async () => {
+    const almanacDir = await buildRunToolFixture("run-save");
+
+    const okExecution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const okSaved = await saveRunToolArtifact({
+      almanacDir,
+      execution: okExecution,
+    });
+
+    expect(okSaved.relPath).toBe(`.runs/${okExecution.runId}.json`);
+    expect(existsSync(okSaved.path)).toBe(true);
+    const okArtifact = JSON.parse(readFileSync(okSaved.path, "utf8")) as {
+      schemaVersion: string;
+      artifactRelPath: string;
+      runId: string;
+      status: string;
+      exitCode: number;
+      citationsCount: number;
+    };
+    expect(okArtifact.schemaVersion).toBe("0.1.0");
+    expect(okArtifact.artifactRelPath).toBe(okSaved.relPath);
+    expect(okArtifact.runId).toBe(okExecution.runId);
+    expect(okArtifact.status).toBe("ok");
+    expect(okArtifact.exitCode).toBe(0);
+    expect(okArtifact.citationsCount).toBe(1);
+
+    const missingExecution = await runTool({
+      almanacDir,
+      toolName: "missing_tool",
+      input: {},
+    });
+    const missingSaved = await saveRunToolArtifact({
+      almanacDir,
+      execution: missingExecution,
+    });
+    const missingArtifact = JSON.parse(
+      readFileSync(missingSaved.path, "utf8"),
+    ) as {
+      status: string;
+      exitCode: number;
+      availableTools: string[];
+    };
+    expect(missingArtifact.status).toBe("tool-not-found");
+    expect(missingArtifact.exitCode).toBe(2);
+    expect(missingArtifact.availableTools).toEqual(["query_facts"]);
   });
 
   test("rejects relative almanac dirs with a setup error", async () => {
