@@ -204,6 +204,29 @@ describe("runTool", () => {
       "label=release-smoke",
     );
 
+    const okStatusList = await listRunToolArtifacts({
+      almanacDir,
+      status: "ok",
+    });
+    expect(okStatusList.runs.map((run) => run.runId)).toEqual([
+      okExecution.runId,
+    ]);
+
+    const labelList = await listRunToolArtifacts({
+      almanacDir,
+      label: "release-smoke",
+    });
+    expect(labelList.runs.map((run) => run.runId)).toEqual([
+      okExecution.runId,
+    ]);
+
+    const noMatchList = await listRunToolArtifacts({
+      almanacDir,
+      status: "tool-not-found",
+      label: "release-smoke",
+    });
+    expect(noMatchList.runs).toEqual([]);
+
     const limitedList = await listRunToolArtifacts({ almanacDir, limit: 1 });
     expect(limitedList.runs).toHaveLength(1);
 
