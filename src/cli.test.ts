@@ -393,6 +393,10 @@ describe("almanac CLI product onboarding", () => {
       "query_facts",
       "--input",
       '{"q":"transactions atomic","limit":3}',
+      "--label",
+      "release-smoke",
+      "--note",
+      "Validate the saved run artifact viewer.",
       "--json",
       "--save",
       "--root",
@@ -406,11 +410,15 @@ describe("almanac CLI product onboarding", () => {
       runId: string;
       status: string;
       exitCode: number;
+      label?: string;
+      note?: string;
       result: { ok: boolean };
     };
     expect(savedArtifact.schemaVersion).toBe("0.1.0");
     expect(savedArtifact.status).toBe("ok");
     expect(savedArtifact.exitCode).toBe(0);
+    expect(savedArtifact.label).toBe("release-smoke");
+    expect(savedArtifact.note).toBe("Validate the saved run artifact viewer.");
     expect(savedArtifact.result.ok).toBe(true);
     expect(savedArtifact.artifactRelPath).toBe(
       `.runs/${savedArtifact.runId}.json`,
@@ -489,6 +497,7 @@ describe("almanac CLI product onboarding", () => {
     expect(runsList.stdout).toContain("runs: sqlite-demo");
     expect(runsList.stdout).toContain(savedArtifact.runId);
     expect(runsList.stdout).toContain("query_facts");
+    expect(runsList.stdout).toContain("label=release-smoke");
 
     const runsJson = runCli([
       "runs",
@@ -501,12 +510,20 @@ describe("almanac CLI product onboarding", () => {
     expect(runsJson.stderr).toBe("");
     const parsedRuns = JSON.parse(runsJson.stdout) as {
       almanacId: string;
-      runs: Array<{ runId: string; status: string; artifactRelPath: string }>;
+      runs: Array<{
+        runId: string;
+        label?: string;
+        status: string;
+        artifactRelPath: string;
+      }>;
     };
     expect(parsedRuns.almanacId).toBe("sqlite-demo");
     expect(parsedRuns.runs.map((run) => run.runId).sort()).toEqual(
       [savedArtifact.runId, badInputArtifact.runId].sort(),
     );
+    expect(
+      parsedRuns.runs.find((run) => run.runId === savedArtifact.runId)?.label,
+    ).toBe("release-smoke");
 
     const latestRun = runCli([
       "runs",
@@ -547,6 +564,11 @@ describe("almanac CLI product onboarding", () => {
     expect(runDetail.stderr).toBe("");
     expect(runDetail.stdout).toContain(`run: ${savedArtifact.runId}`);
     expect(runDetail.stdout).toContain("status: ok");
+    expect(runDetail.stdout).toContain("label: release-smoke");
+    expect(runDetail.stdout).toContain("note:");
+    expect(runDetail.stdout).toContain(
+      "Validate the saved run artifact viewer.",
+    );
     expect(runDetail.stdout).toContain("data:");
 
     const runDetailJson = runCli([
@@ -572,6 +594,23 @@ describe("almanac CLI product onboarding", () => {
     expect(invalidRunsUsage.status).toBe(2);
     expect(invalidRunsUsage.stderr).toContain(
       "--latest and --limit are mutually exclusive",
+    );
+
+    const metadataWithoutSave = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"transactions atomic","limit":3}',
+      "--label",
+      "unsaved",
+      "--root",
+      root,
+    ]);
+    expect(metadataWithoutSave.status).toBe(2);
+    expect(metadataWithoutSave.stderr).toContain(
+      "--label and --note require --save",
     );
 
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);

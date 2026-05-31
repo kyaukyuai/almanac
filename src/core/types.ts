@@ -3448,6 +3448,18 @@ export const RunToolArtifactRelPathSchema = z
   .max(120)
   .regex(/^\.runs\/run-[A-Za-z0-9-]+\.json$/);
 
+export const RunToolArtifactLabelSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(80);
+
+export const RunToolArtifactNoteSchema = z
+  .string()
+  .trim()
+  .min(1)
+  .max(1000);
+
 export const RunToolArtifactSchema = z.object({
   schemaVersion: z.literal("0.1.0"),
   artifactRelPath: RunToolArtifactRelPathSchema,
@@ -3460,6 +3472,8 @@ export const RunToolArtifactSchema = z.object({
   version: z.string().regex(SEMVER_RE, "must be semver"),
   toolName: ToolNameSchema,
   input: z.record(z.unknown()).nullable(),
+  label: RunToolArtifactLabelSchema.optional(),
+  note: RunToolArtifactNoteSchema.optional(),
   status: RunToolStatusSchema,
   exitCode: RunToolExitCodeSchema,
   result: ToolResultSchema,

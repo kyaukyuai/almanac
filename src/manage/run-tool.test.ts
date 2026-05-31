@@ -144,6 +144,8 @@ describe("runTool", () => {
     const okSaved = await saveRunToolArtifact({
       almanacDir,
       execution: okExecution,
+      label: "release-smoke",
+      note: "Validate query_facts before tagging v0.5.",
     });
 
     expect(okSaved.relPath).toBe(`.runs/${okExecution.runId}.json`);
@@ -155,6 +157,8 @@ describe("runTool", () => {
       status: string;
       exitCode: number;
       citationsCount: number;
+      label?: string;
+      note?: string;
     };
     expect(okArtifact.schemaVersion).toBe("0.1.0");
     expect(okArtifact.artifactRelPath).toBe(okSaved.relPath);
@@ -162,6 +166,8 @@ describe("runTool", () => {
     expect(okArtifact.status).toBe("ok");
     expect(okArtifact.exitCode).toBe(0);
     expect(okArtifact.citationsCount).toBe(1);
+    expect(okArtifact.label).toBe("release-smoke");
+    expect(okArtifact.note).toBe("Validate query_facts before tagging v0.5.");
 
     const missingExecution = await runTool({
       almanacDir,
@@ -191,6 +197,12 @@ describe("runTool", () => {
     expect(formatRunToolArtifactListHuman(artifactList)).toContain(
       missingExecution.runId,
     );
+    expect(
+      artifactList.runs.find((run) => run.runId === okExecution.runId)?.label,
+    ).toBe("release-smoke");
+    expect(formatRunToolArtifactListHuman(artifactList)).toContain(
+      "label=release-smoke",
+    );
 
     const limitedList = await listRunToolArtifacts({ almanacDir, limit: 1 });
     expect(limitedList.runs).toHaveLength(1);
@@ -202,9 +214,10 @@ describe("runTool", () => {
     expect(readBack.relPath).toBe(okSaved.relPath);
     expect(readBack.artifact.runId).toBe(okExecution.runId);
     expect(readBack.artifact.result.ok).toBe(true);
-    expect(formatRunToolArtifactHuman(readBack.artifact)).toContain(
-      "data:",
-    );
+    const formattedArtifact = formatRunToolArtifactHuman(readBack.artifact);
+    expect(formattedArtifact).toContain("label: release-smoke");
+    expect(formattedArtifact).toContain("note:");
+    expect(formattedArtifact).toContain("data:");
   });
 
   test("returns an empty artifact list when no runs were saved", async () => {
