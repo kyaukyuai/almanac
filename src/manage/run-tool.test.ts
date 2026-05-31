@@ -32,7 +32,11 @@ import {
 import {
   RunToolSetupError,
   exitCodeForRunTool,
+  formatRunToolArtifactHuman,
+  formatRunToolArtifactListHuman,
   formatRunToolHuman,
+  listRunToolArtifacts,
+  readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
 } from "./run-tool.ts";
@@ -178,6 +182,39 @@ describe("runTool", () => {
     expect(missingArtifact.status).toBe("tool-not-found");
     expect(missingArtifact.exitCode).toBe(2);
     expect(missingArtifact.availableTools).toEqual(["query_facts"]);
+
+    const artifactList = await listRunToolArtifacts({ almanacDir });
+    expect(artifactList.almanacId).toBe("run-save");
+    expect(artifactList.runs.map((run) => run.runId).sort()).toEqual(
+      [missingExecution.runId, okExecution.runId].sort(),
+    );
+    expect(formatRunToolArtifactListHuman(artifactList)).toContain(
+      missingExecution.runId,
+    );
+
+    const limitedList = await listRunToolArtifacts({ almanacDir, limit: 1 });
+    expect(limitedList.runs).toHaveLength(1);
+
+    const readBack = await readRunToolArtifact({
+      almanacDir,
+      runId: okExecution.runId,
+    });
+    expect(readBack.relPath).toBe(okSaved.relPath);
+    expect(readBack.artifact.runId).toBe(okExecution.runId);
+    expect(readBack.artifact.result.ok).toBe(true);
+    expect(formatRunToolArtifactHuman(readBack.artifact)).toContain(
+      "data:",
+    );
+  });
+
+  test("returns an empty artifact list when no runs were saved", async () => {
+    const almanacDir = await buildRunToolFixture("run-empty-list");
+
+    const artifactList = await listRunToolArtifacts({ almanacDir });
+
+    expect(artifactList.almanacId).toBe("run-empty-list");
+    expect(artifactList.runs).toEqual([]);
+    expect(formatRunToolArtifactListHuman(artifactList)).toContain("(none)");
   });
 
   test("rejects relative almanac dirs with a setup error", async () => {
