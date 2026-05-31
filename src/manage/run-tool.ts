@@ -79,6 +79,10 @@ export interface SaveRunToolArtifactOptions {
   /** Absolute path to the compiled almanac directory. */
   almanacDir: string;
   execution: RunToolExecution;
+  /** Optional short human label for later audit lookup. */
+  label?: string;
+  /** Optional human note describing why this run was saved. */
+  note?: string;
 }
 
 export interface SaveRunToolArtifactResult {
@@ -99,6 +103,7 @@ export interface RunToolArtifactSummary {
   runId: string;
   invokedAt: string;
   toolName: string;
+  label?: string;
   status: RunToolStatus;
   exitCode: RunToolExitCode;
   durationMs: number;
@@ -228,6 +233,7 @@ export async function saveRunToolArtifact(
     schemaVersion: "0.1.0",
     artifactRelPath: relPath,
     ...options.execution,
+    ...runToolArtifactMetadata(options),
     exitCode: exitCodeForRunTool(options.execution),
   });
 
@@ -376,8 +382,9 @@ export function formatRunToolArtifactListHuman(
   }
 
   for (const run of list.runs) {
+    const label = run.label === undefined ? "" : `  label=${run.label}`;
     lines.push(
-      `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms`,
+      `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
     );
   }
   return lines.join("\n") + "\n";
@@ -395,6 +402,13 @@ export function formatRunToolArtifactHuman(artifact: RunToolArtifact): string {
     `citations: ${artifact.citationsCount}`,
     `artifact: ${artifact.artifactRelPath}`,
   ];
+  if (artifact.label !== undefined) {
+    lines.push(`label: ${artifact.label}`);
+  }
+  if (artifact.note !== undefined) {
+    lines.push("note:");
+    lines.push(artifact.note);
+  }
 
   if (artifact.result.ok) {
     lines.push(
@@ -500,10 +514,20 @@ function summarizeRunToolArtifact(
     runId: artifact.runId,
     invokedAt: artifact.invokedAt,
     toolName: artifact.toolName,
+    ...(artifact.label === undefined ? {} : { label: artifact.label }),
     status: artifact.status,
     exitCode: artifact.exitCode,
     durationMs: artifact.durationMs,
     citationsCount: artifact.citationsCount,
+  };
+}
+
+function runToolArtifactMetadata(
+  options: SaveRunToolArtifactOptions,
+): Partial<Pick<RunToolArtifact, "label" | "note">> {
+  return {
+    ...(options.label === undefined ? {} : { label: options.label }),
+    ...(options.note === undefined ? {} : { note: options.note }),
   };
 }
 

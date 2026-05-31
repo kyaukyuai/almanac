@@ -2133,8 +2133,10 @@ interface RunOptions {
   tool?: string;
   input?: string;
   inputFile?: string;
+  label?: string;
   json?: boolean;
   listTools?: boolean;
+  note?: string;
   save?: boolean;
 }
 
@@ -2147,10 +2149,12 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
         opts.tool !== undefined ||
         opts.input !== undefined ||
         opts.inputFile !== undefined ||
+        opts.label !== undefined ||
+        opts.note !== undefined ||
         opts.save === true
       ) {
         runUsageError(
-          "--list-tools cannot be combined with --tool, --input, --input-file, or --save",
+          "--list-tools cannot be combined with --tool, --input, --input-file, --label, --note, or --save",
         );
         return;
       }
@@ -2167,7 +2171,15 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
       runUsageError("missing required --tool <name> (or use --list-tools)");
       return;
     }
+    if (
+      opts.save !== true &&
+      (opts.label !== undefined || opts.note !== undefined)
+    ) {
+      runUsageError("--label and --note require --save");
+    }
 
+    const metadata =
+      opts.save === true ? runArtifactMetadataFromOptions(opts) : {};
     const input = await readRunInput(opts);
     const execution = await runTool({
       almanacDir,
@@ -2176,7 +2188,11 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
     });
     const saved =
       opts.save === true
-        ? await saveRunToolArtifact({ almanacDir, execution })
+        ? await saveRunToolArtifact({
+            almanacDir,
+            execution,
+            ...metadata,
+          })
         : null;
     if (opts.json === true) {
       process.stdout.write(
@@ -2195,6 +2211,35 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
     }
     throw e;
   }
+}
+
+function runArtifactMetadataFromOptions(
+  opts: RunOptions,
+): { label?: string; note?: string } {
+  return {
+    ...(opts.label === undefined
+      ? {}
+      : { label: normalizeRunArtifactLabel(opts.label) }),
+    ...(opts.note === undefined
+      ? {}
+      : { note: normalizeRunArtifactNote(opts.note) }),
+  };
+}
+
+function normalizeRunArtifactLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.length === 0 || normalized.length > 80) {
+    runUsageError("--label must be between 1 and 80 characters");
+  }
+  return normalized;
+}
+
+function normalizeRunArtifactNote(note: string): string {
+  const normalized = note.trim();
+  if (normalized.length === 0 || normalized.length > 1000) {
+    runUsageError("--note must be between 1 and 1000 characters");
+  }
+  return normalized;
 }
 
 async function readRunInput(opts: RunOptions): Promise<unknown> {
@@ -3483,7 +3528,9 @@ program
   .option("--input <json>", "JSON object input for the tool (default: {})")
   .option("--input-file <path>", "Read JSON object input from a file")
   .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--label <name>", "Short label for --save audit artifacts")
   .option("--list-tools", "List enabled tools without invoking one")
+  .option("--note <text>", "Human note for --save audit artifacts")
   .option("--save", "Save a run artifact under <almanac>/.runs/")
   .addOption(rootOption)
   .action(cmdRun);
