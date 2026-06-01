@@ -11,6 +11,37 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.7.0] — 2026-06-01
+
+### Added
+
+- **Cited answer mode.** `almanac ask <id> <question>` runs a one-shot
+  LLM-backed answer session over the compiled runtime, selecting enabled tools
+  through `AlmanacRuntime.execTool` instead of giving the model arbitrary
+  filesystem or network access.
+- **Answer synthesis citation gate.** Final answers must cite citations
+  returned by observed tool calls; otherwise the session abstains with a stable
+  JSON status.
+- **Saved answer artifacts.** `almanac ask --save` writes validated answer
+  records under `.runs/` with label/note metadata, tool-call summaries,
+  citations, freshness, usage, and final answer or abstention fields.
+- **Answer artifact visibility.** `almanac runs --kind answer` lists, reads,
+  filters, and prunes saved answer sessions alongside existing tool and
+  refresh artifacts.
+
+### Changed
+
+- **Run artifact export inclusion.** `almanac export` continues to exclude
+  `.runs/` by default, while `--include-runs` now deliberately carries tool,
+  refresh, and answer artifacts.
+- **Planner hardening for real providers.** Answer planning now handles real
+  provider prose after tool observations by stopping planning and proceeding to
+  synthesis or abstention, and generated `query_facts` retries shortened
+  phrases when over-specific searches miss.
+- **Release posture.** v0.7 keeps MCP clients as the primary end-user
+  experience while adding `ask` as a local release-gate and automation path for
+  cited one-shot answers.
+
 ## [0.6.0] — 2026-06-01
 
 ### Added

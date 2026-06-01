@@ -66,7 +66,7 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.7.0 release candidate (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.7.0 shipped.** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
 against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
@@ -89,7 +89,7 @@ refresh attempts without opening the JSON artifact by hand. See
 [`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md) for the cron, CI,
 and launchd contract.
 
-v0.7 adds an optional LLM-backed `almanac ask` mode: a one-shot answer
+v0.7.0 ships an optional LLM-backed `almanac ask` mode: a one-shot answer
 orchestration boundary over compiled tools, with strict cited-answer or
 abstain behavior and optional saved answer artifacts under `.runs/`. See
 [`docs/v0.7-plan.md`](./docs/v0.7-plan.md).
@@ -285,7 +285,7 @@ sequence remains in
   hardening so refresh artifacts remain private unless `--include-runs` is
   explicitly requested.
 
-### v0.7 — release candidate
+### v0.7 — shipped (2026-06-01)
 
 - One-shot `almanac ask` answer orchestration over compiled tools.
 - LLM-backed tool selection with explicit call and duration budgets.
