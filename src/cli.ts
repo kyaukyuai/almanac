@@ -203,6 +203,7 @@ import {
   saveRunToolArtifact,
   type RunArtifactKind,
   type RunArtifactStatus,
+  type RunToolArtifactSummary,
 } from "./manage/run-tool.ts";
 import {
   RefreshStatusError,
@@ -234,6 +235,71 @@ interface DisplayCounts {
   manifestFacts: number;
   manifestTools: number;
   toolsReadable: boolean;
+}
+
+interface RefreshRunVisibility {
+  latest: RunToolArtifactSummary | null;
+  readError: string | null;
+  issue: string | null;
+}
+
+async function readRefreshRunVisibility(
+  almanacDir: string,
+): Promise<RefreshRunVisibility> {
+  try {
+    const list = await listRunToolArtifacts({
+      almanacDir,
+      kind: "refresh",
+      limit: 1,
+    });
+    const latest = list.runs[0] ?? null;
+    return {
+      latest,
+      readError: null,
+      issue: refreshRunVisibilityIssue(latest),
+    };
+  } catch (e) {
+    const message = e instanceof Error ? e.message : String(e);
+    return {
+      latest: null,
+      readError: message,
+      issue: `refresh artifacts unreadable: ${message}`,
+    };
+  }
+}
+
+function refreshRunVisibilityIssue(
+  latest: RunToolArtifactSummary | null,
+): string | null {
+  if (latest === null) return null;
+  if (latest.status === "failed") {
+    return `latest refresh run failed: ${latest.runId}`;
+  }
+  if (latest.status === "locked") {
+    return `latest refresh run was locked: ${latest.runId}`;
+  }
+  if (latest.exitCode !== 0) {
+    return `latest refresh run exited ${latest.exitCode}: ${latest.runId}`;
+  }
+  return null;
+}
+
+function formatRefreshRunVisibility(
+  latest: RunToolArtifactSummary | null,
+): string {
+  if (latest === null) return "none saved";
+  const parts = [
+    `last ${latest.status} @ ${latest.invokedAt}`,
+    `from ${latest.fromStage ?? "(unknown)"}`,
+    `exit=${latest.exitCode}`,
+  ];
+  if (latest.benchmarkStatus !== undefined) {
+    parts.push(`benchmark=${latest.benchmarkStatus}`);
+  }
+  if (latest.label !== undefined) {
+    parts.push(`label=${latest.label}`);
+  }
+  return parts.join(", ");
 }
 
 async function readDisplayCounts(
@@ -1520,6 +1586,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
   const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
+  const refreshRunVisibility = await readRefreshRunVisibility(dir);
   const stageCounts = stageStatusCounts(state);
   const failedStages = (STAGE_IDS as readonly StageId[]).filter(
     (stageId) => state.stages[stageId].status === "failed",
@@ -1543,6 +1610,9 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   if (benchmarkReport === null) healthIssues.push("benchmark report missing");
   if (benchmarkCoverage.issue !== null) {
     healthIssues.push(benchmarkCoverage.issue);
+  }
+  if (refreshRunVisibility.issue !== null) {
+    healthIssues.push(refreshRunVisibility.issue);
   }
   if (
     benchmarkReport !== null &&
@@ -1594,6 +1664,19 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
       `register with Claude Code: almanac register ${id} --client=claude-code --apply${rootSuffix}`,
     );
   }
+  if (
+    refreshRunVisibility.latest !== null &&
+    refreshRunVisibility.issue !== null
+  ) {
+    nextActions.push(
+      `inspect latest refresh run: almanac runs ${id} ${refreshRunVisibility.latest.runId}${rootSuffix}`,
+    );
+    nextActions.push(
+      `rerun manual refresh: almanac refresh run ${id} --from-stage ${refreshRunVisibility.latest.fromStage ?? "04-source-fetch"} --save${rootSuffix}`,
+    );
+  } else if (refreshRunVisibility.readError !== null) {
+    nextActions.push(`inspect saved runs: almanac runs ${id}${rootSuffix}`);
+  }
   nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
 
   if (opts.json) {
@@ -1609,6 +1692,7 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
           benchmarkSet,
           benchmarkReport,
           benchmarkCoverage,
+          refresh: refreshRunVisibility,
           health: {
             status: health,
             stageCounts,
@@ -1667,6 +1751,18 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
   if (benchmarkReport !== null) {
     process.stdout.write(
       `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}\n`,
+    );
+  }
+  if (
+    refreshRunVisibility.latest !== null ||
+    refreshRunVisibility.readError !== null
+  ) {
+    process.stdout.write(
+      `  refresh        ${
+        refreshRunVisibility.readError === null
+          ? formatRefreshRunVisibility(refreshRunVisibility.latest)
+          : `unreadable: ${refreshRunVisibility.readError}`
+      }\n`,
     );
   }
   if (healthIssues.length > 0) {
@@ -1779,6 +1875,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const benchmarkSet = await readBenchmarkSetIfPresent(dir, manifest.almanacId);
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
   const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
+  const refreshRunVisibility = await readRefreshRunVisibility(dir);
   const factsBySource = countFactsBySource(facts);
   const acceptedSources = sources?.sources ?? [];
   const highTrustZeroFactSources = acceptedSources
@@ -1857,6 +1954,9 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   } else if (benchmarkReport.summary.citationRate < 1) {
     validationIssues.push("not every positive benchmark result carried citations");
   }
+  if (refreshRunVisibility.issue !== null) {
+    validationIssues.push(refreshRunVisibility.issue);
+  }
 
   const status: ExpertiseStatus =
     blockingIssues.length > 0
@@ -1905,6 +2005,19 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     nextActions.push(`run human fixtures: almanac benchmark ${id}${rootSuffix}`);
   } else {
     nextActions.push(`rerun validation gate: almanac benchmark ${id}${rootSuffix}`);
+  }
+  if (
+    refreshRunVisibility.latest !== null &&
+    refreshRunVisibility.issue !== null
+  ) {
+    nextActions.push(
+      `inspect latest refresh run: almanac runs ${id} ${refreshRunVisibility.latest.runId}${rootSuffix}`,
+    );
+    nextActions.push(
+      `rerun manual refresh: almanac refresh run ${id} --from-stage ${refreshRunVisibility.latest.fromStage ?? "04-source-fetch"} --save${rootSuffix}`,
+    );
+  } else if (refreshRunVisibility.readError !== null) {
+    nextActions.push(`inspect saved runs: almanac runs ${id}${rootSuffix}`);
   }
   nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
 
@@ -1961,6 +2074,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
               citationRate: benchmarkReport.summary.citationRate,
             },
     },
+    refresh: refreshRunVisibility,
     artifacts: {
       domainSpec: domainSpec === null ? null : domainSpecPath(dir),
       facts: factsJsonlPath(dir),
@@ -2021,6 +2135,18 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     );
   } else {
     process.stdout.write("  benchmark      fixtures missing\n");
+  }
+  if (
+    refreshRunVisibility.latest !== null ||
+    refreshRunVisibility.readError !== null
+  ) {
+    process.stdout.write(
+      `  refresh        ${
+        refreshRunVisibility.readError === null
+          ? formatRefreshRunVisibility(refreshRunVisibility.latest)
+          : `unreadable: ${refreshRunVisibility.readError}`
+      }\n`,
+    );
   }
 
   if (domainSpec !== null) {
@@ -2903,6 +3029,15 @@ async function cmdDoctor(
           report === null
             ? "benchmark report missing"
             : `${report.summary.passed}/${report.summary.total} passed, failed=${report.summary.failed}, errored=${report.summary.errored}`,
+        );
+        const refreshRunVisibility =
+          await readRefreshRunVisibility(almanacDir);
+        add(
+          refreshRunVisibility.issue !== null ? "warn" : "ok",
+          "refresh",
+          refreshRunVisibility.readError !== null
+            ? `refresh artifacts unreadable: ${refreshRunVisibility.readError}`
+            : formatRefreshRunVisibility(refreshRunVisibility.latest),
         );
       } catch (e) {
         add("fail", "almanac-read", (e as Error).message);

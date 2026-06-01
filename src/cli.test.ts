@@ -247,7 +247,7 @@ describe("almanac CLI legacy artifact counts", () => {
 });
 
 describe("almanac CLI product onboarding", () => {
-  test("demo creates an inspectable almanac with sources, fixtures, and benchmark report", () => {
+  test("demo creates an inspectable almanac with sources, fixtures, and benchmark report", async () => {
     const demo = runCli(["demo", "--root", root]);
 
     expect(demo.status).toBe(0);
@@ -398,6 +398,56 @@ describe("almanac CLI product onboarding", () => {
       /^\.runs\/refresh-/,
     );
 
+    const inspectWithRefresh = runCli(["inspect", "sqlite-demo", "--root", root]);
+    expect(inspectWithRefresh.status).toBe(0);
+    expect(inspectWithRefresh.stderr).toBe("");
+    expect(inspectWithRefresh.stdout).toContain("health         ok");
+    expect(inspectWithRefresh.stdout).toContain("refresh        last ok");
+    expect(inspectWithRefresh.stdout).toContain("from 12-benchmark-run");
+    expect(inspectWithRefresh.stdout).toContain("benchmark=passed");
+    expect(inspectWithRefresh.stdout).toContain("label=rc-smoke");
+
+    const profileWithRefresh = runCli(["profile", "sqlite-demo", "--root", root]);
+    expect(profileWithRefresh.status).toBe(0);
+    expect(profileWithRefresh.stderr).toBe("");
+    expect(profileWithRefresh.stdout).toContain("status         usable");
+    expect(profileWithRefresh.stdout).toContain("refresh        last ok");
+    expect(profileWithRefresh.stdout).toContain("label=rc-smoke");
+
+    const profileWithRefreshJson = runCli([
+      "profile",
+      "sqlite-demo",
+      "--root",
+      root,
+      "--json",
+    ]);
+    expect(profileWithRefreshJson.status).toBe(0);
+    expect(profileWithRefreshJson.stderr).toBe("");
+    expect(
+      (JSON.parse(profileWithRefreshJson.stdout) as {
+        refresh: {
+          latest: { status: string; label?: string; fromStage?: string };
+          issue: string | null;
+        };
+      }).refresh,
+    ).toEqual(
+      expect.objectContaining({
+        latest: expect.objectContaining({
+          status: "ok",
+          label: "rc-smoke",
+          fromStage: "12-benchmark-run",
+        }),
+        issue: null,
+      }),
+    );
+
+    const doctorWithRefresh = runCli(["doctor", "sqlite-demo", "--root", root]);
+    expect(doctorWithRefresh.status).toBe(0);
+    expect(doctorWithRefresh.stderr).toBe("");
+    expect(doctorWithRefresh.stdout).toContain("ok   refresh");
+    expect(doctorWithRefresh.stdout).toContain("last ok");
+    expect(doctorWithRefresh.stdout).toContain("label=rc-smoke");
+
     const refreshRuns = runCli([
       "runs",
       "sqlite-demo",
@@ -446,6 +496,72 @@ describe("almanac CLI product onboarding", () => {
     expect(exported.status).toBe(0);
     expect(exported.stderr).toBe("");
     expect(exported.stdout).toContain("INCLUDE .runs/");
+
+    const failedRefreshId = "refresh-2099-01-05T00-00-00-000Z-00000005";
+    const failedRefreshArtifact = RefreshArtifactSchema.parse({
+      schemaVersion: "0.1.0",
+      kind: "refresh",
+      artifactRelPath: `.runs/${failedRefreshId}.json`,
+      refreshId: failedRefreshId,
+      startedAt: "2099-01-05T00:00:00.000Z",
+      finishedAt: "2099-01-05T00:00:05.000Z",
+      almanacId: "sqlite-demo",
+      version: "0.1.0",
+      status: "failed",
+      exitCode: 1,
+      requestedFromStage: "04-source-fetch",
+      effectiveFromStage: "04-source-fetch",
+      dueDecision: {
+        due: true,
+        recommendedFromStage: "04-source-fetch",
+        reasonCodes: ["source-fetch-failed"],
+      },
+      stageSummary: {
+        succeeded: ["04-source-fetch"],
+        skipped: [],
+        failed: ["05-fact-extraction"],
+      },
+      benchmark: {
+        status: "failed",
+        total: 2,
+        passed: 1,
+        failed: 1,
+        errored: 0,
+        citationRate: 0.5,
+      },
+      durationMs: 5000,
+      error: {
+        code: "refresh-run-failed",
+        message: "fixture failure",
+      },
+    });
+    await writeFile(
+      join(almanacDirPath(root, "sqlite-demo"), failedRefreshArtifact.artifactRelPath),
+      JSON.stringify(failedRefreshArtifact, null, 2) + "\n",
+      "utf8",
+    );
+
+    const failedInspect = runCli(["inspect", "sqlite-demo", "--root", root]);
+    expect(failedInspect.status).toBe(0);
+    expect(failedInspect.stdout).toContain("health         attention");
+    expect(failedInspect.stdout).toContain(
+      `latest refresh run failed: ${failedRefreshId}`,
+    );
+    expect(failedInspect.stdout).toContain(
+      `almanac runs sqlite-demo ${failedRefreshId} --root ${root}`,
+    );
+
+    const failedProfile = runCli(["profile", "sqlite-demo", "--root", root]);
+    expect(failedProfile.status).toBe(0);
+    expect(failedProfile.stdout).toContain("status         needs-validation");
+    expect(failedProfile.stdout).toContain(
+      `latest refresh run failed: ${failedRefreshId}`,
+    );
+
+    const failedDoctor = runCli(["doctor", "sqlite-demo", "--root", root]);
+    expect(failedDoctor.status).toBe(0);
+    expect(failedDoctor.stdout).toContain("warn refresh");
+    expect(failedDoctor.stdout).toContain("last failed");
   });
 
   test("run invokes compiled tools with stable output and exit codes", async () => {

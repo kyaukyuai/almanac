@@ -156,6 +156,11 @@ almanac runs sqlite-demo --kind tool --root "$tmp"
 almanac runs sqlite-demo --kind refresh --root "$tmp"
 ```
 
+`inspect`, `profile`, and `doctor` also surface the latest saved refresh run.
+Failed or locked latest refresh artifacts are treated as validation signals, so
+operators can see a broken manual refresh even if the current compiled almanac
+still serves successfully.
+
 Retention cleanup is dry-run by default:
 
 ```bash
@@ -212,6 +217,7 @@ almanac doctor sqlite-demo --strict
 
 `doctor` reports local runtime status, CLI version, expected environment keys,
 root existence, stage health, knowledge index health, actual vs manifest counts,
-source file status, fixture status, and the latest benchmark result.
+source file status, fixture status, the latest benchmark result, and the latest
+saved refresh run when one exists.
 
 Use `--strict` in automation when warnings should block promotion.
