@@ -11,7 +11,7 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { STAGE_IDS } from "./core/types.ts";
+import { RefreshArtifactSchema, STAGE_IDS } from "./core/types.ts";
 import {
   almanacDirPath,
   compileStatePath,
@@ -441,6 +441,7 @@ describe("almanac CLI product onboarding", () => {
     expect(savedJson.stderr).toBe("");
     const savedArtifact = JSON.parse(savedJson.stdout) as {
       schemaVersion: string;
+      kind: string;
       artifactRelPath: string;
       runId: string;
       status: string;
@@ -450,6 +451,7 @@ describe("almanac CLI product onboarding", () => {
       result: { ok: boolean };
     };
     expect(savedArtifact.schemaVersion).toBe("0.1.0");
+    expect(savedArtifact.kind).toBe("tool");
     expect(savedArtifact.status).toBe("ok");
     expect(savedArtifact.exitCode).toBe(0);
     expect(savedArtifact.label).toBe("release-smoke");
@@ -664,6 +666,97 @@ describe("almanac CLI product onboarding", () => {
     expect(runDetailJson.status).toBe(0);
     expect(JSON.parse(runDetailJson.stdout)).toEqual(savedArtifact);
 
+    const refreshId = "refresh-2026-01-04T00-00-00-000Z-00000004";
+    const refreshArtifact = RefreshArtifactSchema.parse({
+      schemaVersion: "0.1.0",
+      kind: "refresh",
+      artifactRelPath: `.runs/${refreshId}.json`,
+      refreshId,
+      startedAt: "2026-01-04T00:00:00.000Z",
+      finishedAt: "2026-01-04T00:00:04.000Z",
+      almanacId: "sqlite-demo",
+      version: "0.1.0",
+      label: "nightly",
+      status: "ok",
+      exitCode: 0,
+      requestedFromStage: "04-source-fetch",
+      effectiveFromStage: "04-source-fetch",
+      dueDecision: {
+        due: true,
+        recommendedFromStage: "04-source-fetch",
+        reasonCodes: ["source-fetch-manifest-missing"],
+      },
+      benchmark: {
+        status: "passed",
+        total: 2,
+        passed: 2,
+        failed: 0,
+        errored: 0,
+        citationRate: 1,
+      },
+      durationMs: 4000,
+    });
+    await writeFile(
+      join(almanacDirPath(root, "sqlite-demo"), refreshArtifact.artifactRelPath),
+      JSON.stringify(refreshArtifact, null, 2) + "\n",
+      "utf8",
+    );
+
+    const refreshRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "refresh",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshRuns.status).toBe(0);
+    expect(
+      (JSON.parse(refreshRuns.stdout) as {
+        runs: Array<{
+          kind: string;
+          runId: string;
+          fromStage?: string;
+          benchmarkStatus?: string;
+        }>;
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        kind: "refresh",
+        runId: refreshId,
+        fromStage: "04-source-fetch",
+        benchmarkStatus: "passed",
+      }),
+    ]);
+
+    const toolRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "tool",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(toolRuns.status).toBe(0);
+    expect(
+      (JSON.parse(toolRuns.stdout) as {
+        runs: Array<{ kind: string; runId: string }>;
+      }).runs.map((run) => run.kind),
+    ).toEqual(["tool", "tool"]);
+
+    const refreshDetail = runCli([
+      "runs",
+      "sqlite-demo",
+      refreshId,
+      "--root",
+      root,
+    ]);
+    expect(refreshDetail.status).toBe(0);
+    expect(refreshDetail.stdout).toContain(`refresh: ${refreshId}`);
+    expect(refreshDetail.stdout).toContain("benchmark: passed");
+
     const invalidRunsUsage = runCli([
       "runs",
       "sqlite-demo",
@@ -689,7 +782,7 @@ describe("almanac CLI product onboarding", () => {
     ]);
     expect(invalidDetailFilter.status).toBe(2);
     expect(invalidDetailFilter.stderr).toContain(
-      "[runId] cannot be combined with --latest, --limit, --status, or --label",
+      "[runId] cannot be combined with --latest, --limit, --status, --label, or --kind",
     );
 
     const pruneDryRun = runCli([

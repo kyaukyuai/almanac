@@ -106,6 +106,37 @@ stage failures or pending stages, benchmark report status, and a
 `recommendedFromStage` value suitable for a later `almanac update` or refresh
 runner.
 
+## Run artifacts
+
+Use `almanac run --save` when a local tool invocation should leave an audit
+record:
+
+```bash
+almanac run sqlite-demo \
+  --tool query_facts \
+  --input '{"q":"transactions"}' \
+  --label release-smoke \
+  --save \
+  --root "$tmp"
+```
+
+Saved artifacts live under `.runs/`. Tool artifacts use `run-*.json`; refresh
+artifacts use `refresh-*.json`. `almanac runs` reads both envelopes and can
+filter by artifact kind:
+
+```bash
+almanac runs sqlite-demo --root "$tmp"
+almanac runs sqlite-demo --kind tool --root "$tmp"
+almanac runs sqlite-demo --kind refresh --root "$tmp"
+```
+
+Retention cleanup is dry-run by default:
+
+```bash
+almanac runs sqlite-demo --prune --keep-latest 20 --dry-run --root "$tmp"
+almanac runs sqlite-demo --prune --older-than 30d --apply --root "$tmp"
+```
+
 ## Human golden benchmarks
 
 Generated Stage 11 fixtures are useful, but product acceptance needs a small

@@ -20,18 +20,30 @@ import {
   ToolNotFoundError,
 } from "../core/runtime.ts";
 import {
+  RefreshArtifactSchema,
+  RunArtifactIdSchema,
   RunToolArtifactSchema,
-  RunToolRunIdSchema,
   ToolResultSchema,
+  type RefreshArtifact,
+  type RunArtifactEnvelope,
+  type RunArtifactKind,
+  type RunArtifactStatus,
   type RunToolArtifact,
   type RunToolExitCode,
   type RunToolStatus,
+  type StageId,
   type ToolManifest,
   type ToolResult,
 } from "../core/types.ts";
 import { readManifest } from "../compile/storage.ts";
 
-export type { RunToolExitCode, RunToolStatus } from "../core/types.ts";
+export type {
+  RefreshArtifactStatus,
+  RunArtifactKind,
+  RunArtifactStatus,
+  RunToolExitCode,
+  RunToolStatus,
+} from "../core/types.ts";
 
 export interface RunToolOptions {
   /** Absolute path to the compiled almanac directory. */
@@ -94,8 +106,10 @@ export interface SaveRunToolArtifactResult {
 export interface ListRunToolArtifactsOptions {
   /** Absolute path to the compiled almanac directory. */
   almanacDir: string;
+  /** Keep only artifacts of this kind. Omitted means all known kinds. */
+  kind?: RunArtifactKind;
   /** Keep only artifacts with this status. */
-  status?: RunToolStatus;
+  status?: RunArtifactStatus;
   /** Keep only artifacts with this exact label. */
   label?: string;
   /** Maximum number of newest artifacts to return. */
@@ -105,8 +119,10 @@ export interface ListRunToolArtifactsOptions {
 export interface PruneRunToolArtifactsOptions {
   /** Absolute path to the compiled almanac directory. */
   almanacDir: string;
+  /** Keep only artifacts of this kind before applying retention criteria. */
+  kind?: RunArtifactKind;
   /** Keep only artifacts with this status before applying retention criteria. */
-  status?: RunToolStatus;
+  status?: RunArtifactStatus;
   /** Keep only artifacts with this exact label before applying retention criteria. */
   label?: string;
   /** Preserve this many newest matching artifacts. */
@@ -120,15 +136,18 @@ export interface PruneRunToolArtifactsOptions {
 }
 
 export interface RunToolArtifactSummary {
+  kind: RunArtifactKind;
   artifactRelPath: string;
   runId: string;
   invokedAt: string;
-  toolName: string;
+  toolName?: string;
   label?: string;
-  status: RunToolStatus;
+  status: RunArtifactStatus;
   exitCode: RunToolExitCode;
   durationMs: number;
-  citationsCount: number;
+  citationsCount?: number;
+  fromStage?: StageId;
+  benchmarkStatus?: "missing" | "passed" | "failed";
 }
 
 export interface RunToolArtifactList {
@@ -144,7 +163,8 @@ export interface PruneRunToolArtifactsResult {
   artifactsDir: string;
   applied: boolean;
   criteria: {
-    status?: RunToolStatus;
+    kind?: RunArtifactKind;
+    status?: RunArtifactStatus;
     label?: string;
     keepLatest?: number;
     olderThanMs?: number;
@@ -161,7 +181,7 @@ export interface ReadRunToolArtifactOptions {
 }
 
 export interface ReadRunToolArtifactResult {
-  artifact: RunToolArtifact;
+  artifact: RunArtifactEnvelope;
   path: string;
   relPath: string;
 }
@@ -330,7 +350,7 @@ export async function pruneRunToolArtifacts(
     }
     if (
       cutoff !== undefined &&
-      new Date(artifact.invokedAt).getTime() >= cutoff.getTime()
+      new Date(artifactTimestamp(artifact)).getTime() >= cutoff.getTime()
     ) {
       return false;
     }
@@ -349,6 +369,7 @@ export async function pruneRunToolArtifacts(
     artifactsDir,
     applied: options.apply === true,
     criteria: {
+      ...(options.kind === undefined ? {} : { kind: options.kind }),
       ...(options.status === undefined ? {} : { status: options.status }),
       ...(options.label === undefined ? {} : { label: options.label }),
       ...(options.keepLatest === undefined
@@ -371,7 +392,7 @@ export async function readRunToolArtifact(
 ): Promise<ReadRunToolArtifactResult> {
   await readRunToolManifest(options.almanacDir);
   const runId = parseRunToolRunId(options.runId);
-  const relPath = runToolArtifactRelPath(runId);
+  const relPath = runArtifactRelPath(runId);
   const path = join(options.almanacDir, relPath);
   return {
     artifact: await readAndParseRunToolArtifact(path),
@@ -475,9 +496,17 @@ export function formatRunToolArtifactListHuman(
 
   for (const run of list.runs) {
     const label = run.label === undefined ? "" : `  label=${run.label}`;
-    lines.push(
-      `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
-    );
+    if (run.kind === "refresh") {
+      const benchmark =
+        run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
+      lines.push(
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark} duration=${run.durationMs}ms${label}`,
+      );
+    } else {
+      lines.push(
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
+      );
+    }
   }
   return lines.join("\n") + "\n";
 }
@@ -499,9 +528,17 @@ export function formatPruneRunToolArtifactsHuman(
   } else {
     for (const run of result.runs) {
       const label = run.label === undefined ? "" : `  label=${run.label}`;
-      lines.push(
-        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
-      );
+      if (run.kind === "refresh") {
+        const benchmark =
+          run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
+        lines.push(
+          `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark} duration=${run.durationMs}ms${label}`,
+        );
+      } else {
+        lines.push(
+          `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
+        );
+      }
     }
   }
   lines.push(
@@ -512,7 +549,10 @@ export function formatPruneRunToolArtifactsHuman(
   return lines.join("\n") + "\n";
 }
 
-export function formatRunToolArtifactHuman(artifact: RunToolArtifact): string {
+export function formatRunToolArtifactHuman(artifact: RunArtifactEnvelope): string {
+  if (artifact.kind === "refresh") {
+    return formatRefreshArtifactHuman(artifact);
+  }
   const lines = [
     `run: ${artifact.runId}`,
     `tool: ${artifact.toolName}`,
@@ -552,6 +592,40 @@ export function formatRunToolArtifactHuman(artifact: RunToolArtifact): string {
   return lines.join("\n") + "\n";
 }
 
+function formatRefreshArtifactHuman(artifact: RefreshArtifact): string {
+  const lines = [
+    `refresh: ${artifact.refreshId}`,
+    `status: ${artifact.status}`,
+    `exit: ${artifact.exitCode}`,
+    `almanac: ${artifact.almanacId} (${artifact.version})`,
+    `started: ${artifact.startedAt}`,
+    `finished: ${artifact.finishedAt}`,
+    `duration: ${artifact.durationMs}ms`,
+    `from-stage: ${artifact.effectiveFromStage}`,
+    `requested-from-stage: ${artifact.requestedFromStage}`,
+    `artifact: ${artifact.artifactRelPath}`,
+    `due: ${artifact.dueDecision.due}`,
+    `recommended-from-stage: ${artifact.dueDecision.recommendedFromStage}`,
+  ];
+  if (artifact.label !== undefined) {
+    lines.push(`label: ${artifact.label}`);
+  }
+  if (artifact.note !== undefined) {
+    lines.push("note:");
+    lines.push(artifact.note);
+  }
+  if (artifact.dueDecision.reasonCodes.length > 0) {
+    lines.push(`reasons: ${artifact.dueDecision.reasonCodes.join(", ")}`);
+  }
+  if (artifact.benchmark !== undefined) {
+    lines.push(`benchmark: ${artifact.benchmark.status}`);
+  }
+  if (artifact.error !== undefined) {
+    lines.push(`error: ${artifact.error.code}: ${artifact.error.message}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
 async function readRunToolManifest(almanacDir: string) {
   if (!isAbsolute(almanacDir)) {
     throw new RunToolSetupError(
@@ -570,7 +644,7 @@ async function readRunToolManifest(almanacDir: string) {
 
 async function loadRunToolArtifacts(
   almanacDir: string,
-): Promise<{ artifactsDir: string; artifacts: RunToolArtifact[] }> {
+): Promise<{ artifactsDir: string; artifacts: RunArtifactEnvelope[] }> {
   const artifactsDir = runToolArtifactsDirPath(almanacDir);
   const files = await readRunToolArtifactFiles(artifactsDir);
   const artifacts = await Promise.all(
@@ -589,7 +663,7 @@ async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]>
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => /^run-[A-Za-z0-9-]+\.json$/.test(name));
+      .filter((name) => /^(run|refresh)-[A-Za-z0-9-]+\.json$/.test(name));
   } catch (e) {
     if (errorCode(e) === "ENOENT") {
       return [];
@@ -600,7 +674,7 @@ async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]>
 
 async function readAndParseRunToolArtifact(
   path: string,
-): Promise<RunToolArtifact> {
+): Promise<RunArtifactEnvelope> {
   let raw: string;
   try {
     raw = await readFile(path, "utf8");
@@ -615,7 +689,11 @@ async function readAndParseRunToolArtifact(
   }
 
   try {
-    return RunToolArtifactSchema.parse(JSON.parse(raw));
+    const parsed = JSON.parse(raw) as unknown;
+    if (isRefreshArtifactLike(parsed)) {
+      return RefreshArtifactSchema.parse(parsed);
+    }
+    return RunToolArtifactSchema.parse(parsed);
   } catch (e) {
     throw new RunToolSetupError(
       "run-artifact-invalid",
@@ -632,21 +710,53 @@ function errorCode(error: unknown): string | undefined {
   return typeof code === "string" ? code : undefined;
 }
 
+function isRefreshArtifactLike(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === "refresh"
+  );
+}
+
 function parseRunToolRunId(runId: string): string {
-  const parsed = RunToolRunIdSchema.safeParse(runId);
+  const parsed = RunArtifactIdSchema.safeParse(runId);
   if (!parsed.success) {
     throw new RunToolSetupError(
       "bad-run-id",
-      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
+      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx or refresh-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
     );
   }
   return parsed.data;
 }
 
+function runArtifactRelPath(runId: string): string {
+  return runId.startsWith("refresh-")
+    ? `.runs/${runId}.json`
+    : runToolArtifactRelPath(runId);
+}
+
 function summarizeRunToolArtifact(
-  artifact: RunToolArtifact,
+  artifact: RunArtifactEnvelope,
 ): RunToolArtifactSummary {
+  if (artifact.kind === "refresh") {
+    return {
+      kind: "refresh",
+      artifactRelPath: artifact.artifactRelPath,
+      runId: artifact.refreshId,
+      invokedAt: artifact.startedAt,
+      ...(artifact.label === undefined ? {} : { label: artifact.label }),
+      status: artifact.status,
+      exitCode: artifact.exitCode,
+      durationMs: artifact.durationMs,
+      fromStage: artifact.effectiveFromStage,
+      ...(artifact.benchmark === undefined
+        ? {}
+        : { benchmarkStatus: artifact.benchmark.status }),
+    };
+  }
   return {
+    kind: "tool",
     artifactRelPath: artifact.artifactRelPath,
     runId: artifact.runId,
     invokedAt: artifact.invokedAt,
@@ -660,10 +770,16 @@ function summarizeRunToolArtifact(
 }
 
 function filterRunToolArtifacts(
-  artifacts: RunToolArtifact[],
+  artifacts: RunArtifactEnvelope[],
   options: ListRunToolArtifactsOptions,
-): RunToolArtifact[] {
+): RunArtifactEnvelope[] {
   return artifacts.filter((artifact) => {
+    if (
+      options.kind !== undefined &&
+      artifactKind(artifact) !== options.kind
+    ) {
+      return false;
+    }
     if (options.status !== undefined && artifact.status !== options.status) {
       return false;
     }
@@ -672,6 +788,10 @@ function filterRunToolArtifacts(
     }
     return true;
   });
+}
+
+function artifactKind(artifact: RunArtifactEnvelope): RunArtifactKind {
+  return artifact.kind;
 }
 
 function runToolArtifactMetadata(
@@ -687,6 +807,7 @@ function formatPruneCriteria(
   criteria: PruneRunToolArtifactsResult["criteria"],
 ): string[] {
   return [
+    ...(criteria.kind === undefined ? [] : [`kind=${criteria.kind}`]),
     ...(criteria.status === undefined ? [] : [`status=${criteria.status}`]),
     ...(criteria.label === undefined ? [] : [`label=${criteria.label}`]),
     ...(criteria.keepLatest === undefined
@@ -717,12 +838,20 @@ function formatDurationMs(ms: number): string {
 }
 
 function compareRunToolArtifactsNewestFirst(
-  a: RunToolArtifact,
-  b: RunToolArtifact,
+  a: RunArtifactEnvelope,
+  b: RunArtifactEnvelope,
 ): number {
-  const byInvokedAt = b.invokedAt.localeCompare(a.invokedAt);
+  const byInvokedAt = artifactTimestamp(b).localeCompare(artifactTimestamp(a));
   if (byInvokedAt !== 0) return byInvokedAt;
-  return b.runId.localeCompare(a.runId);
+  return artifactId(b).localeCompare(artifactId(a));
+}
+
+function artifactTimestamp(artifact: RunArtifactEnvelope): string {
+  return artifact.kind === "refresh" ? artifact.startedAt : artifact.invokedAt;
+}
+
+function artifactId(artifact: RunArtifactEnvelope): string {
+  return artifact.kind === "refresh" ? artifact.refreshId : artifact.runId;
 }
 
 function generateRunToolRunId(invokedAt: string): string {

@@ -200,7 +200,8 @@ import {
   readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
-  type RunToolStatus,
+  type RunArtifactKind,
+  type RunArtifactStatus,
 } from "./manage/run-tool.ts";
 import {
   RefreshStatusError,
@@ -2080,7 +2081,8 @@ interface RunsOptions {
   limit?: string;
   olderThan?: string;
   prune?: boolean;
-  status?: RunToolStatus;
+  kind?: RunArtifactKind;
+  status?: RunArtifactStatus;
 }
 
 async function cmdRuns(
@@ -2096,10 +2098,11 @@ async function cmdRuns(
         opts.latest === true ||
         opts.limit !== undefined ||
         opts.status !== undefined ||
-        opts.label !== undefined
+        opts.label !== undefined ||
+        opts.kind !== undefined
       ) {
         runsUsageError(
-          "[runId] cannot be combined with --latest, --limit, --status, or --label",
+          "[runId] cannot be combined with --latest, --limit, --status, --label, or --kind",
         );
       }
       if (hasRunsPruneOptions(opts)) {
@@ -2194,8 +2197,9 @@ function hasRunsPruneOptions(opts: RunsOptions): boolean {
 
 function runsFiltersFromOptions(
   opts: RunsOptions,
-): { status?: RunToolStatus; label?: string } {
+): { kind?: RunArtifactKind; status?: RunArtifactStatus; label?: string } {
   return {
+    ...(opts.kind === undefined ? {} : { kind: opts.kind }),
     ...(opts.status === undefined ? {} : { status: opts.status }),
     ...(opts.label === undefined
       ? {}
@@ -3705,6 +3709,12 @@ program
   .option("--dry-run", "Preview --prune without deleting artifacts")
   .option("--json", "Emit JSON instead of a human-readable summary")
   .option("--keep-latest <n>", "With --prune, keep this many newest artifacts")
+  .addOption(
+    new Option("--kind <kind>", "Filter list by saved artifact kind").choices([
+      "tool",
+      "refresh",
+    ]),
+  )
   .option("--label <name>", "Filter list by saved artifact label")
   .option("--latest", "Show only the newest run artifact")
   .option("--limit <n>", "Maximum number of newest run artifacts to list")
@@ -3715,7 +3725,15 @@ program
   .option("--prune", "Select saved run artifacts for retention cleanup")
   .addOption(
     new Option("--status <status>", "Filter list by saved artifact status")
-      .choices(["ok", "tool-error", "bad-input", "tool-not-found"]),
+      .choices([
+        "ok",
+        "tool-error",
+        "bad-input",
+        "tool-not-found",
+        "failed",
+        "not-due",
+        "locked",
+      ]),
   )
   .addOption(rootOption)
   .action(cmdRuns);

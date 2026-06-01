@@ -76,6 +76,10 @@ persists `.runs/run-*.json` audit artifacts with label/note metadata, and
 export` keeps `.runs/` out of portable bundles by default and includes it only
 with `--include-runs`.
 
+v0.6 development starts the refresh automation line: `refresh due` reports
+deterministic refresh decisions without writes, and `.runs/` now has a typed
+envelope for both tool artifacts and refresh artifacts.
+
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
 transport, and `almanac wiki` inspection exports. The release also includes the
@@ -142,8 +146,9 @@ structurally closed.
   `--list-tools` to inspect enabled tools and `--save` to persist an audit
   artifact.
 - **`almanac runs <id>`** — list, inspect, filter, and prune saved
-  `.runs/run-*.json` artifacts. Cleanup is dry-run by default and requires
-  `--apply` to delete files.
+  `.runs/run-*.json` tool artifacts and `.runs/refresh-*.json` refresh
+  artifacts. Use `--kind tool` or `--kind refresh` to narrow history. Cleanup
+  is dry-run by default and requires `--apply` to delete files.
 - **`almanac refresh due <id>`** — read-only refresh planning for CI/cron:
   reports expired sources, failed/pending stages, missing benchmark reports,
   and the recommended `--from-stage` without writing files or requiring

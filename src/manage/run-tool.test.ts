@@ -26,6 +26,7 @@ import {
 } from "../compile/storage.ts";
 import {
   AlmanacManifestSchema,
+  RefreshArtifactSchema,
   type FactRecord,
 } from "../core/types.ts";
 
@@ -163,6 +164,7 @@ describe("runTool", () => {
       note?: string;
     };
     expect(okArtifact.schemaVersion).toBe("0.1.0");
+    expect(okSaved.artifact.kind).toBe("tool");
     expect(okArtifact.artifactRelPath).toBe(okSaved.relPath);
     expect(okArtifact.runId).toBe(okExecution.runId);
     expect(okArtifact.status).toBe("ok");
@@ -237,12 +239,75 @@ describe("runTool", () => {
       runId: okExecution.runId,
     });
     expect(readBack.relPath).toBe(okSaved.relPath);
+    if (readBack.artifact.kind !== "tool") {
+      throw new Error(`expected tool artifact, got ${readBack.artifact.kind}`);
+    }
     expect(readBack.artifact.runId).toBe(okExecution.runId);
     expect(readBack.artifact.result.ok).toBe(true);
     const formattedArtifact = formatRunToolArtifactHuman(readBack.artifact);
     expect(formattedArtifact).toContain("label: release-smoke");
     expect(formattedArtifact).toContain("note:");
     expect(formattedArtifact).toContain("data:");
+  });
+
+  test("lists and reads refresh artifacts alongside tool artifacts", async () => {
+    const almanacDir = await buildRunToolFixture("run-refresh");
+    const execution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const savedTool = await saveRunToolArtifact({
+      almanacDir,
+      execution,
+      label: "tool-smoke",
+    });
+    const refreshArtifact = writeRefreshArtifact(almanacDir);
+
+    const allArtifacts = await listRunToolArtifacts({ almanacDir });
+    expect(allArtifacts.runs.map((run) => run.kind).sort()).toEqual([
+      "refresh",
+      "tool",
+    ]);
+    expect(allArtifacts.runs.map((run) => run.runId).sort()).toEqual(
+      [savedTool.artifact.runId, refreshArtifact.refreshId].sort(),
+    );
+
+    const refreshOnly = await listRunToolArtifacts({
+      almanacDir,
+      kind: "refresh",
+    });
+    expect(refreshOnly.runs).toEqual([
+      expect.objectContaining({
+        kind: "refresh",
+        runId: refreshArtifact.refreshId,
+        status: "ok",
+        fromStage: "04-source-fetch",
+        benchmarkStatus: "passed",
+      }),
+    ]);
+    expect(formatRunToolArtifactListHuman(refreshOnly)).toContain("refresh");
+    expect(formatRunToolArtifactListHuman(refreshOnly)).toContain(
+      "benchmark=passed",
+    );
+
+    const toolOnly = await listRunToolArtifacts({
+      almanacDir,
+      kind: "tool",
+    });
+    expect(toolOnly.runs.map((run) => run.runId)).toEqual([
+      savedTool.artifact.runId,
+    ]);
+
+    const readRefresh = await readRunToolArtifact({
+      almanacDir,
+      runId: refreshArtifact.refreshId,
+    });
+    expect(readRefresh.relPath).toBe(refreshArtifact.artifactRelPath);
+    expect(readRefresh.artifact.kind).toBe("refresh");
+    expect(formatRunToolArtifactHuman(readRefresh.artifact)).toContain(
+      `refresh: ${refreshArtifact.refreshId}`,
+    );
   });
 
   test("prunes saved artifacts only when apply is enabled", async () => {
@@ -470,4 +535,45 @@ function fixtureFact(): FactRecord {
     extractedAt: "2026-01-01T00:00:00.000Z",
     extractor: { model: "test", promptVersion: "v1" },
   };
+}
+
+function writeRefreshArtifact(almanacDir: string) {
+  const refreshId = "refresh-2026-01-04T00-00-00-000Z-00000004";
+  const artifact = RefreshArtifactSchema.parse({
+    schemaVersion: "0.1.0",
+    kind: "refresh",
+    artifactRelPath: `.runs/${refreshId}.json`,
+    refreshId,
+    startedAt: "2026-01-04T00:00:00.000Z",
+    finishedAt: "2026-01-04T00:00:05.000Z",
+    almanacId: "run-refresh",
+    version: "0.1.0",
+    label: "nightly",
+    status: "ok",
+    exitCode: 0,
+    requestedFromStage: "04-source-fetch",
+    effectiveFromStage: "04-source-fetch",
+    dueDecision: {
+      due: true,
+      recommendedFromStage: "04-source-fetch",
+      reasonCodes: ["source-expired"],
+    },
+    stageSummary: {
+      succeeded: ["04-source-fetch", "05-fact-extraction", "12-benchmark-run"],
+      skipped: [],
+      failed: [],
+    },
+    benchmark: {
+      status: "passed",
+      total: 2,
+      passed: 2,
+      failed: 0,
+      errored: 0,
+      citationRate: 1,
+    },
+    durationMs: 5000,
+  });
+  const path = join(almanacDir, artifact.artifactRelPath);
+  writeFileSync(path, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  return artifact;
 }
