@@ -11,6 +11,32 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.5.0] — 2026-06-01
+
+### Added
+
+- **Local runtime invocation.** `almanac run <id> --tool <name>` invokes a
+  compiled almanac tool directly from the CLI, with structured JSON input,
+  `--input-file`, `--json`, and `--list-tools` support.
+- **Saved run artifacts.** `almanac run --save` writes validated audit records
+  under `.runs/`, including almanac id, version, tool name, input, status,
+  result envelope, citation count, duration, label, and note metadata.
+- **Run artifact viewer.** `almanac runs <id>` lists saved artifacts, reads a
+  single run by id, and supports JSON output for CI and debugging.
+- **Run artifact filters and retention cleanup.** `almanac runs` can filter by
+  status, label, latest, and limit, and can prune saved artifacts with
+  dry-run-by-default cleanup using `--keep-latest`, `--older-than`, and
+  `--apply`.
+- **Run artifact export inclusion.** `almanac export` excludes `.runs/` by
+  default and adds `--include-runs` for deliberate audit handoff while keeping
+  `.compile/` inclusion independent.
+
+### Changed
+
+- **Run-first release posture.** The no-key demo and release smoke now validate
+  compiled almanacs through direct local runtime calls before registration with
+  an MCP client.
+
 ## [0.4.2] — 2026-05-30
 
 ### Fixed
@@ -685,7 +711,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.4.2...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.5.0...HEAD
+[0.5.0]: https://github.com/kyaukyuai/almanac/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/kyaukyuai/almanac/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...v0.4.1
 [0.4.0]: https://github.com/kyaukyuai/almanac/compare/v0.3.11...v0.4.0

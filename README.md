@@ -24,6 +24,8 @@ almanac profile sqlite-demo --root "$tmp"
 almanac sources sqlite-demo --root "$tmp"
 almanac benchmark sqlite-demo --root "$tmp"
 almanac doctor sqlite-demo --root "$tmp"
+almanac run sqlite-demo --tool query_facts --input '{"q":"transactions atomic"}' --root "$tmp"
+almanac runs sqlite-demo --root "$tmp"
 almanac wiki sqlite-demo --root "$tmp" --output "$tmp/sqlite-demo-wiki"
 ```
 
@@ -31,9 +33,10 @@ The demo creates a complete offline almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
 golden benchmark fixtures.
 
-End-user querying happens through the host LLM (Claude Code, Cursor, Claude
-Desktop, …) after `register`. The `almanac` CLI itself is for build and
-management only — there is no built-in `run` orchestrator in v0.1.
+End-user conversational use still happens through the host LLM (Claude Code,
+Cursor, Claude Desktop, …) after `register`. The `almanac` CLI also includes a
+deterministic `run --tool` path so users and CI can validate compiled tools
+locally without standing up an MCP client.
 
 An almanac has **no persona**. It is a domain-specialized retrieval-and-tools
 layer that returns sourced, freshness-aware answers. Every fact carries a
@@ -59,12 +62,19 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.4.2 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.5.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
 against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
 wired into the MCP ecosystem; `register` configures Claude Code / Claude
 Desktop / Cursor / Codex.
+
+v0.5.0 adds run-first operations for local validation and auditability:
+`almanac run --tool` invokes compiled tools directly, `almanac run --save`
+persists `.runs/run-*.json` audit artifacts with label/note metadata, and
+`almanac runs` lists, filters, reads, and prunes those artifacts. `almanac
+export` keeps `.runs/` out of portable bundles by default and includes it only
+with `--include-runs`.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -127,6 +137,13 @@ structurally closed.
   coverage, supported query shapes, benchmark status, and declared limits.
 - **`almanac benchmark <id> --init` / `almanac benchmark <id>`** — create
   editable human golden JSONL fixtures, then run them through the runtime.
+- **`almanac run <id> --tool <name>`** — invoke one compiled tool locally with
+  JSON input, human or JSON output, and citation visibility. Use
+  `--list-tools` to inspect enabled tools and `--save` to persist an audit
+  artifact.
+- **`almanac runs <id>`** — list, inspect, filter, and prune saved
+  `.runs/run-*.json` artifacts. Cleanup is dry-run by default and requires
+  `--apply` to delete files.
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact
   health, source coverage, and benchmark status.
 - **`almanac export <id>`** — package a compiled almanac as a
@@ -198,12 +215,22 @@ that the v0.2.5 smokes empirically motivated.
 - Streamable HTTP/SSE MCP transport for browser and network MCP clients.
 - `almanac wiki` Markdown inspection export for review and handoff.
 
-v0.5 planning starts with run-first operations: a local `almanac run` path for
-deterministic tool invocation, optional LLM-backed question mode after that
-foundation is stable, and refresh scheduling design for v0.6+. See
+### v0.5 — shipped (2026-06-01)
+
+- Deterministic local `almanac run --tool` invocation over the same runtime
+  contract used by MCP.
+- Optional saved `.runs/` audit artifacts with label and note metadata.
+- `almanac runs` viewer with JSON output, status/label/latest/limit filters,
+  detail reads, and retention cleanup.
+- `almanac export --include-runs`, with `.runs/` excluded by default.
+- Release smoke covering typecheck, the full test suite, offline demo,
+  run/runs workflows, wiki self-entry, and export inclusion/exclusion.
+
+Question-mode orchestration and refresh scheduling remain future work; v0.5
+keeps the local run path deterministic and LLM-free. See
 [`docs/design.md §8`](./docs/design.md) for the worked release summary and
-[`docs/v0.5-plan.md`](./docs/v0.5-plan.md) for the proposed next sequence.
-The archived v0.4 implementation sequence remains in
+[`docs/v0.5-plan.md`](./docs/v0.5-plan.md) for the shipped implementation
+sequence. The archived v0.4 implementation sequence remains in
 [`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
 
 ## Changelog
