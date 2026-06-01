@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.7.0 release candidate** · last updated 2026-06-01.
+Status: **v0.7.0 shipped** · last updated 2026-06-01.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -947,7 +947,7 @@ include/exclude checks for refresh artifacts.
 
 ### v0.7.0 — Cited answer mode
 
-v0.7 adds an optional one-shot answer orchestration layer over the compiled
+v0.7.0 shipped an optional one-shot answer orchestration layer over the compiled
 runtime:
 
 - `almanac ask <id> <question>` asks an LLM to select and call compiled tools
@@ -965,6 +965,11 @@ runtime:
   provider runs, with `ALMANAC_LLM=mock` available for local smoke tests.
 
 See [`docs/v0.7-plan.md`](./v0.7-plan.md) for the implementation sequence.
+
+The v0.7 release gate passed on 2026-06-01 with `bun run typecheck`,
+`bun test`, a fresh offline demo, deterministic `run --tool`, real-provider
+grounded and abstention `ask` checks, saved answer artifact visibility through
+`runs --kind answer`, and export inclusion/exclusion coverage for `.runs/`.
 
 ### v0.8+ (long-tail)
 
