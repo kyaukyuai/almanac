@@ -273,6 +273,45 @@ describe("runAnswerToolPlanningSession", () => {
     expect(session.error?.code).toBe("model-error");
     expect(session.toolCalls).toEqual([]);
   });
+
+  test("planner parse failures after an observation stop planning", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-plan-prose-stop");
+    let calls = 0;
+    const provider = createMockProvider({
+      defaultResponse: () => {
+        calls += 1;
+        return calls === 1
+          ? JSON.stringify({
+              action: "call_tool",
+              toolName: "query_facts",
+              input: { q: "transactions" },
+            })
+          : "I have enough evidence to answer.";
+      },
+    });
+
+    const session = await runAnswerToolPlanningSession({
+      almanacDir,
+      question: "Are SQLite transactions atomic?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => okToolResult(),
+      }),
+    });
+
+    expect(session.status).toBe("ok");
+    expect(session.stopReason).toBe("planner-stop");
+    expect(session.plannerCalls).toBe(2);
+    expect(session.error).toBeUndefined();
+    expect(session.toolCalls).toEqual([
+      expect.objectContaining({
+        toolName: "query_facts",
+        status: "ok",
+        citationsCount: 1,
+      }),
+    ]);
+  });
 });
 
 describe("runAnswerSession synthesis gate", () => {
@@ -404,6 +443,56 @@ describe("runAnswerSession synthesis gate", () => {
     const session = await runAnswerSession({
       almanacDir,
       question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => ({
+          ok: false,
+          error: {
+            code: "no-results",
+            message: "no facts found",
+            retryable: false,
+          },
+        }),
+      }),
+    });
+
+    expect(session.status).toBe("abstained");
+    expect(session.abstentionReason).toBe("tool-errors-only");
+    expect(session.synthesisCalls).toBe(0);
+    expect(
+      provider.callLog.some((entry) =>
+        entry.request.callName === synthesisCallName()
+      ),
+    ).toBe(false);
+  });
+
+  test("tool errors plus planner prose still abstain instead of model-error", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-prose-after-error");
+    let plannerCalls = 0;
+    const provider = createMockProvider({
+      responses: {
+        [plannerCallName()]: () => {
+          plannerCalls += 1;
+          return plannerCalls === 1
+            ? JSON.stringify({
+                action: "call_tool",
+                toolName: "query_facts",
+                input: { q: "transactions atomic ACID" },
+              })
+            : "There are no matching facts, so I should abstain.";
+        },
+        [synthesisCallName()]: JSON.stringify({
+          status: "ok",
+          answer: "This should not be used.",
+          citations: [],
+        }),
+      },
+    });
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "Are SQLite transactions atomic?",
       provider,
       runtime: fakeRuntime({
         tools: [queryFactsManifest()],

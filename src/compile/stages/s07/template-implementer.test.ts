@@ -293,6 +293,47 @@ describe("default tools are loadable + invocable via the runtime", () => {
     }
   });
 
+  test("query_facts retries shortened phrases when an over-specific query misses", async () => {
+    const facts: FactRecord[] = [
+      {
+        id: "01HYYYYYYYYYYYYYYYYYYYYYYY",
+        text: "SQLite transactions are atomic: either all changes persist or none do.",
+        type: "fact",
+        entities: ["sqlite", "transactions", "atomic"],
+        source: {
+          sourceId: "sqlite-transactions",
+          contentHash: "b".repeat(64),
+          url: "https://www.sqlite.org/lang_transaction.html",
+          excerpt: "SQLite transactions are atomic.",
+        },
+        freshnessClass: "static",
+        validUntil: null,
+        confidence: 0.96,
+        extractedAt: "2026-01-01T00:00:00.000Z",
+        extractor: { model: "test", promptVersion: "v1" },
+      },
+    ];
+    const m = synthesizeDefaultToolManifest("query_facts");
+    const results: ToolImplementationResult[] = [];
+    const dir = await buildAlmanacDirWithTools(
+      "rt-query-facts-fallback",
+      [m],
+      results,
+      facts,
+    );
+
+    const rt = await createAlmanacRuntimeAsync({ almanacDir: dir });
+    const r = await rt.execTool("query_facts", {
+      q: "SQLite transactions atomic ACID",
+    });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      const data = r.data as { hits: Array<{ text: string }> };
+      expect(data.hits[0]!.text).toContain("SQLite transactions");
+      expect(r.citations[0]!.sourceId).toBe("sqlite-transactions");
+    }
+  });
+
   test("fetch_official_docs runs end-to-end with allowlisted host", async () => {
     const m = synthesizeDefaultToolManifest("fetch_official_docs", {
       networkAllowlist: ["example.com"],

@@ -318,6 +318,20 @@ export async function runAnswerToolPlanningSession(
         decision = planned.decision;
         usage = addUsage(usage, planned.completionUsage);
       } catch (cause) {
+        if (toolCalls.length > 0 && isPlannerJsonModeError(cause)) {
+          return sessionResult({
+            manifest,
+            question: options.question,
+            status: "ok",
+            stopReason: "planner-stop",
+            toolCalls,
+            plannerCalls,
+            model,
+            startedAt,
+            now,
+            usage,
+          });
+        }
         return sessionResult({
           manifest,
           question: options.question,
@@ -1002,6 +1016,15 @@ function plannerErrorMessage(cause: unknown): string {
     return cause.message;
   }
   return errorMessage(cause);
+}
+
+function isPlannerJsonModeError(
+  cause: unknown,
+): cause is LlmJsonParseError | LlmSchemaValidationError {
+  return (
+    cause instanceof LlmJsonParseError ||
+    cause instanceof LlmSchemaValidationError
+  );
 }
 
 function errorMessage(cause: unknown): string {
