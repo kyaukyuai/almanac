@@ -62,7 +62,7 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.5.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.6.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
 against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
@@ -76,12 +76,12 @@ persists `.runs/run-*.json` audit artifacts with label/note metadata, and
 export` keeps `.runs/` out of portable bundles by default and includes it only
 with `--include-runs`.
 
-v0.6 development starts the refresh automation line: `refresh due` reports
-deterministic refresh decisions without writes, `refresh run` executes a manual
-locked refresh over the update pipeline, and `.runs/` now has a typed envelope
-for both tool artifacts and refresh artifacts. `inspect`, `profile`, and
-`doctor` surface the latest saved refresh run so operators can see failed or
-locked refresh attempts without opening the JSON artifact by hand. See
+v0.6.0 ships the refresh automation line: `refresh due` reports deterministic
+refresh decisions without writes, `refresh run` executes a manual locked
+refresh over the update pipeline, and `.runs/` now has a typed envelope for
+both tool artifacts and refresh artifacts. `inspect`, `profile`, and `doctor`
+surface the latest saved refresh run so operators can see failed or locked
+refresh attempts without opening the JSON artifact by hand. See
 [`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md) for the cron, CI,
 and launchd contract.
 
@@ -246,14 +246,29 @@ that the v0.2.5 smokes empirically motivated.
 - Release smoke covering typecheck, the full test suite, offline demo,
   run/runs workflows, wiki self-entry, and export inclusion/exclusion.
 
-Question-mode orchestration and refresh scheduling remain future work; v0.5
-keeps the local run path deterministic and LLM-free. See
+Question-mode orchestration and a hosted refresh daemon remain future work;
+v0.5 keeps the local run path deterministic and LLM-free. See
 [`docs/design.md §8`](./docs/design.md) for the worked release summary and
 [`docs/v0.5-plan.md`](./docs/v0.5-plan.md) for the shipped implementation
-sequence. Refresh scheduling is planned in
-[`docs/v0.6-plan.md`](./docs/v0.6-plan.md). The archived v0.4 implementation
+sequence. The v0.6 refresh scheduling readiness sequence is archived in
+[`docs/v0.6-plan.md`](./docs/v0.6-plan.md), and the v0.4 implementation
 sequence remains in
 [`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
+
+### v0.6 — shipped (2026-06-01)
+
+- Read-only `almanac refresh due` planning from source freshness, compile
+  state, benchmark state, and latest refresh artifacts.
+- Manual `almanac refresh run` over the update pipeline with explicit
+  `--from-stage`, per-almanac locking, stable exit codes, and optional saved
+  refresh artifacts.
+- Typed `.runs/` operational artifact envelope for both tool and refresh runs,
+  with kind-aware listing, filtering, detail reads, and retention cleanup.
+- `inspect`, `profile`, and `doctor` visibility for latest refresh status,
+  failed/locked readiness issues, and benchmark result.
+- Scheduler contract docs for cron, CI, and launchd, plus export/retention
+  hardening so refresh artifacts remain private unless `--include-runs` is
+  explicitly requested.
 
 ## Changelog
 
