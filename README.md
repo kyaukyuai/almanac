@@ -79,7 +79,9 @@ with `--include-runs`.
 v0.6 development starts the refresh automation line: `refresh due` reports
 deterministic refresh decisions without writes, `refresh run` executes a manual
 locked refresh over the update pipeline, and `.runs/` now has a typed envelope
-for both tool artifacts and refresh artifacts.
+for both tool artifacts and refresh artifacts. `inspect`, `profile`, and
+`doctor` surface the latest saved refresh run so operators can see failed or
+locked refresh attempts without opening the JSON artifact by hand.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -158,7 +160,8 @@ structurally closed.
   explicit `--from-stage`, with per-almanac lock protection. Use `--save` with
   `--label`/`--note` to persist a `.runs/refresh-*.json` audit artifact.
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact
-  health, source coverage, and benchmark status.
+  health, source coverage, benchmark status, and latest saved refresh run
+  status.
 - **`almanac export <id>`** — package a compiled almanac as a
   portable `.tar.gz` archive (≈190 KiB for a 231-fact almanac).
   Unpack anywhere; `almanac serve` works immediately. Stage scratch
