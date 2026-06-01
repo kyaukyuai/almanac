@@ -3461,12 +3461,26 @@ export const RefreshArtifactRelPathSchema = z
   .max(124)
   .regex(/^\.runs\/refresh-[A-Za-z0-9-]+\.json$/);
 
+export const AnswerRunIdSchema = z
+  .string()
+  .max(83)
+  .regex(
+    /^answer-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/,
+    "must be answer-<ISO timestamp with - separators>-<8 hex chars>",
+  );
+
+export const AnswerArtifactRelPathSchema = z
+  .string()
+  .max(123)
+  .regex(/^\.runs\/answer-[A-Za-z0-9-]+\.json$/);
+
 export const RunArtifactIdSchema = z.union([
   RunToolRunIdSchema,
   RefreshRunIdSchema,
+  AnswerRunIdSchema,
 ]);
 
-export const RunArtifactKindSchema = z.enum(["tool", "refresh"]);
+export const RunArtifactKindSchema = z.enum(["tool", "refresh", "answer"]);
 export type RunArtifactKind = z.infer<typeof RunArtifactKindSchema>;
 
 export const RunToolArtifactLabelSchema = z
@@ -3513,9 +3527,21 @@ export const RefreshArtifactStatusSchema = z.enum([
 ]);
 export type RefreshArtifactStatus = z.infer<typeof RefreshArtifactStatusSchema>;
 
+export const AnswerArtifactStatusSchema = z.enum([
+  "ok",
+  "abstained",
+  "tool-error",
+  "tool-not-found",
+  "bad-tool-input",
+  "budget-exhausted",
+  "model-error",
+]);
+export type AnswerArtifactStatus = z.infer<typeof AnswerArtifactStatusSchema>;
+
 export const RunArtifactStatusSchema = z.union([
   RunToolStatusSchema,
   RefreshArtifactStatusSchema,
+  AnswerArtifactStatusSchema,
 ]);
 export type RunArtifactStatus = z.infer<typeof RunArtifactStatusSchema>;
 
@@ -3581,9 +3607,112 @@ export const RefreshArtifactSchema = z
   });
 export type RefreshArtifact = z.infer<typeof RefreshArtifactSchema>;
 
+export const AnswerToolCallSummarySchema = z.object({
+  toolName: ToolNameSchema,
+  input: z.record(z.unknown()).nullable(),
+  status: z.enum(["ok", "tool-error", "tool-not-found", "bad-tool-input"]),
+  durationMs: z.number().int().nonnegative(),
+  citationsCount: z.number().int().nonnegative(),
+  error: ToolErrorSchema.optional(),
+});
+export type AnswerToolCallSummary = z.infer<
+  typeof AnswerToolCallSummarySchema
+>;
+
+export const AnswerArtifactSchema = z
+  .object({
+    schemaVersion: z.literal("0.1.0"),
+    kind: z.literal("answer"),
+    artifactRelPath: AnswerArtifactRelPathSchema,
+    answerId: AnswerRunIdSchema,
+    startedAt: z.string().regex(ISO_8601),
+    finishedAt: z.string().regex(ISO_8601),
+    almanacId: z
+      .string()
+      .max(32)
+      .regex(CANONICAL_SLUG, "must be lowercase kebab-case"),
+    version: z.string().regex(SEMVER_RE, "must be semver"),
+    forgerVersion: z.string().min(1).max(40),
+    question: z.string().trim().min(1).max(4000),
+    label: RunToolArtifactLabelSchema.optional(),
+    note: RunToolArtifactNoteSchema.optional(),
+    status: AnswerArtifactStatusSchema,
+    exitCode: RunToolExitCodeSchema,
+    model: z.string().min(1).max(120).optional(),
+    promptVersions: z
+      .object({
+        planner: z.string().min(1).max(80).optional(),
+        synthesis: z.string().min(1).max(80).optional(),
+      })
+      .optional(),
+    answer: z.string().min(1).max(12000).optional(),
+    abstentionReason: z.string().min(1).max(2000).optional(),
+    toolCalls: z.array(AnswerToolCallSummarySchema).max(20),
+    citations: z.array(CitationSchema).max(20),
+    freshness: ToolResultFreshnessSchema.optional(),
+    usage: z
+      .object({
+        inputTokens: z.number().int().nonnegative().optional(),
+        outputTokens: z.number().int().nonnegative().optional(),
+        totalTokens: z.number().int().nonnegative().optional(),
+      })
+      .passthrough()
+      .optional(),
+    durationMs: z.number().int().nonnegative(),
+    error: ToolErrorSchema.optional(),
+  })
+  .superRefine((artifact, ctx) => {
+    if (Date.parse(artifact.finishedAt) < Date.parse(artifact.startedAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["finishedAt"],
+        message: "finishedAt must be >= startedAt",
+      });
+    }
+    if (artifact.status === "ok") {
+      if (artifact.answer === undefined) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["answer"],
+          message: "answer is required when status is ok",
+        });
+      }
+      if (artifact.citations.length === 0) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          path: ["citations"],
+          message: "at least one citation is required when status is ok",
+        });
+      }
+    }
+    if (
+      artifact.status === "abstained" &&
+      artifact.abstentionReason === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["abstentionReason"],
+        message: "abstentionReason is required when status is abstained",
+      });
+    }
+    if (
+      artifact.status !== "ok" &&
+      artifact.status !== "abstained" &&
+      artifact.error === undefined
+    ) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["error"],
+        message: "error is required for failed answer artifacts",
+      });
+    }
+  });
+export type AnswerArtifact = z.infer<typeof AnswerArtifactSchema>;
+
 export const RunArtifactEnvelopeSchema = z.union([
   RunToolArtifactSchema,
   RefreshArtifactSchema,
+  AnswerArtifactSchema,
 ]);
 export type RunArtifactEnvelope = z.infer<typeof RunArtifactEnvelopeSchema>;
 
