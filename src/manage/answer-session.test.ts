@@ -365,6 +365,57 @@ describe("runAnswerSession synthesis gate", () => {
       planner: ANSWER_PLANNER_PROMPT_VERSION,
       synthesis: ANSWER_SYNTHESIS_PROMPT_VERSION,
     });
+    expect(session.trace.planner).toEqual(
+      expect.objectContaining({
+        promptVersion: ANSWER_PLANNER_PROMPT_VERSION,
+        calls: 2,
+        stopReason: "planner-stop",
+        maxToolCalls: 4,
+        maxDurationMs: 120_000,
+      }),
+    );
+    expect(session.trace.planner.steps).toEqual([
+      expect.objectContaining({
+        stepIndex: 0,
+        action: "call_tool",
+        toolName: "query_facts",
+        outcome: "executed",
+      }),
+      expect.objectContaining({
+        stepIndex: 1,
+        action: "stop",
+        outcome: "stopped",
+      }),
+    ]);
+    expect(session.trace.tools.observations).toEqual([
+      expect.objectContaining({
+        callIndex: 0,
+        toolName: "query_facts",
+        status: "ok",
+        citationsCount: 1,
+      }),
+    ]);
+    expect(session.trace.citations).toEqual(
+      expect.objectContaining({
+        usedCount: 1,
+        staleCount: 1,
+        observed: [
+          expect.objectContaining({
+            sourceId: citation.sourceId,
+            url: citation.url,
+            usedInAnswer: true,
+            stale: true,
+          }),
+        ],
+      }),
+    );
+    expect(session.trace.synthesis).toEqual(
+      expect.objectContaining({
+        promptVersion: ANSWER_SYNTHESIS_PROMPT_VERSION,
+        calls: 1,
+        status: "ok",
+      }),
+    );
     expect(
       provider.callLog.find((entry) =>
         entry.request.callName === synthesisCallName()
@@ -396,6 +447,11 @@ describe("runAnswerSession synthesis gate", () => {
     expect(session.abstentionReason).toBe("no-citations");
     expect(session.answer).toBeUndefined();
     expect(session.citations).toEqual([]);
+    expect(session.trace.abstain).toEqual({
+      status: "abstained",
+      reason: "no-citations",
+      stage: "citation-gate",
+    });
   });
 
   test("abstains when synthesis cites unobserved sources", async () => {

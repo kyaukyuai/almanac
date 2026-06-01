@@ -20,6 +20,7 @@
  *   almanac path <id> [opts]               print the absolute almanac dir path
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac ask <id> <question> [opts]     synthesize a cited one-shot answer
+ *   almanac ask-replay <id> [opts]         replay saved or fixture answer runs
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac refresh due <id> [opts]        check read-only refresh due status
  *   almanac refresh run <id> [opts]        run a manual refresh over update
@@ -216,6 +217,18 @@ import {
   runAnswerSession,
   type AnswerSession,
 } from "./manage/answer-session.ts";
+import {
+  AskReplaySetupError,
+  exitCodeForAskReplay,
+  formatAskReplayHuman,
+  runAskReplayFromFixtureFile,
+  runAskReplayFromSavedRuns,
+} from "./manage/ask-replay.ts";
+import {
+  formatAnswerReadinessDoctor,
+  getAnswerReadiness,
+  type AnswerReadiness,
+} from "./manage/answer-readiness.ts";
 import {
   RefreshStatusError,
   formatRefreshDueHuman,
@@ -1930,6 +1943,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const benchmarkReport = await readBenchmarkReportIfPresent(dir);
   const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
   const refreshRunVisibility = await readRefreshRunVisibility(dir);
+  const answerReadiness = await getAnswerReadiness({ almanacDir: dir });
   const factsBySource = countFactsBySource(facts);
   const acceptedSources = sources?.sources ?? [];
   const highTrustZeroFactSources = acceptedSources
@@ -2073,6 +2087,20 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   } else if (refreshRunVisibility.readError !== null) {
     nextActions.push(`inspect saved runs: almanac runs ${id}${rootSuffix}`);
   }
+  if (answerReadiness.fixtures.count === 0) {
+    nextActions.push(
+      `create ask replay fixtures: ${join(dir, "tests", "ask.jsonl")}`,
+    );
+  }
+  if (answerReadiness.latestAnswer === null) {
+    nextActions.push(
+      `save answer artifact: almanac ask ${id} "<question>" --save${rootSuffix}`,
+    );
+  } else if (answerReadiness.qualityGate.status !== "pass") {
+    nextActions.push(
+      `inspect latest answer run: almanac runs ${id} ${answerReadiness.latestAnswer.answerId}${rootSuffix}`,
+    );
+  }
   nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
 
   const profile = {
@@ -2129,6 +2157,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
             },
     },
     refresh: refreshRunVisibility,
+    answer: answerReadiness,
     artifacts: {
       domainSpec: domainSpec === null ? null : domainSpecPath(dir),
       facts: factsJsonlPath(dir),
@@ -2202,6 +2231,16 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       }\n`,
     );
   }
+  process.stdout.write(`  answer mode    ${answerReadiness.status}\n`);
+  process.stdout.write(
+    `  ask fixtures   ${answerReadiness.fixtures.count} found\n`,
+  );
+  process.stdout.write(
+    `  latest answer  ${formatAnswerReadinessLatest(answerReadiness)}\n`,
+  );
+  process.stdout.write(
+    `  quality gate   ${formatAnswerReadinessQuality(answerReadiness)}\n`,
+  );
 
   if (domainSpec !== null) {
     process.stdout.write(`\ncapabilities:\n`);
@@ -2241,11 +2280,39 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       process.stdout.write(`  - ${issue}\n`);
     }
   }
+  const answerIssues = [
+    ...answerReadiness.issues.blocking,
+    ...answerReadiness.issues.validation,
+  ];
+  if (answerIssues.length > 0) {
+    process.stdout.write(`\nanswer readiness gaps:\n`);
+    for (const issue of answerIssues) {
+      process.stdout.write(`  - ${issue}\n`);
+    }
+  }
 
   process.stdout.write(`\nnext actions:\n`);
   for (const action of nextActions) {
     process.stdout.write(`  - ${action}\n`);
   }
+}
+
+function formatAnswerReadinessLatest(readiness: AnswerReadiness): string {
+  if (readiness.latestAnswer === null) return "none";
+  const latest = readiness.latestAnswer;
+  const reason =
+    latest.abstentionReason === undefined ? "" : ` (${latest.abstentionReason})`;
+  const label = latest.label === undefined ? "" : ` label=${latest.label}`;
+  return `${latest.status}${reason}, ${latest.startedAt}, ${latest.answerId}${label}`;
+}
+
+function formatAnswerReadinessQuality(readiness: AnswerReadiness): string {
+  if (readiness.qualityGate.status === "missing") return "missing";
+  const reasons =
+    readiness.qualityGate.reasons.length === 0
+      ? ""
+      : ` (${readiness.qualityGate.reasons.join("; ")})`;
+  return `${readiness.qualityGate.status}${reasons}`;
 }
 
 interface PathOptions {
@@ -2660,6 +2727,7 @@ async function cmdAsk(
               ? {}
               : { freshness: session.freshness }),
             usage: session.usage,
+            trace: session.trace,
             ...(session.error === undefined ? {} : { error: session.error }),
             ...metadata,
           })
@@ -2743,6 +2811,61 @@ function formatAnswerSessionHuman(session: AnswerSession): string {
 
 function askUsageError(message: string): never {
   process.stderr.write(`error: ask: ${message}\n`);
+  process.exit(2);
+}
+
+interface AskReplayOptions {
+  root: string;
+  fixture?: string;
+  fromRuns?: boolean;
+  json?: boolean;
+  label?: string;
+}
+
+async function cmdAskReplay(
+  id: string,
+  opts: AskReplayOptions,
+): Promise<void> {
+  if ((opts.fixture === undefined) === (opts.fromRuns !== true)) {
+    askReplayUsageError("specify exactly one of --fixture or --from-runs");
+  }
+  if (opts.label !== undefined && opts.fromRuns !== true) {
+    askReplayUsageError("--label requires --from-runs");
+  }
+
+  const almanacDir = almanacDirPath(opts.root, id);
+  try {
+    const report =
+      opts.fixture !== undefined
+        ? await runAskReplayFromFixtureFile({
+            almanacDir,
+            fixturePath: resolve(opts.fixture),
+          })
+        : await runAskReplayFromSavedRuns({
+            almanacDir,
+            ...(opts.label === undefined
+              ? {}
+              : { label: normalizeRunArtifactLabel(opts.label) }),
+          });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(report, null, 2) + "\n"
+        : formatAskReplayHuman(report),
+    );
+    process.exitCode = exitCodeForAskReplay(report);
+  } catch (e) {
+    if (e instanceof AskReplaySetupError) {
+      fail(`ask-replay: ${e.message}`);
+    }
+    if (e instanceof RunToolSetupError) {
+      fail(`ask-replay: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+function askReplayUsageError(message: string): never {
+  process.stderr.write(`error: ask-replay: ${message}\n`);
   process.exit(2);
 }
 
@@ -3245,6 +3368,12 @@ async function cmdDoctor(
           refreshRunVisibility.readError !== null
             ? `refresh artifacts unreadable: ${refreshRunVisibility.readError}`
             : formatRefreshRunVisibility(refreshRunVisibility.latest),
+        );
+        const answerReadiness = await getAnswerReadiness({ almanacDir });
+        add(
+          answerReadiness.status === "ready" ? "ok" : "warn",
+          "answer",
+          formatAnswerReadinessDoctor(answerReadiness),
         );
       } catch (e) {
         add("fail", "almanac-read", (e as Error).message);
@@ -4177,6 +4306,16 @@ program
   .option("--save", "Save an answer artifact under <almanac>/.runs/")
   .addOption(rootOption)
   .action(cmdAsk);
+
+program
+  .command("ask-replay <id>")
+  .description("replay saved or fixture answer runs without an LLM provider")
+  .option("--fixture <path>", "Read replay cases from JSONL fixture file")
+  .option("--from-runs", "Replay saved answer artifacts under <almanac>/.runs/")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--label <name>", "With --from-runs, replay only this answer label")
+  .addOption(rootOption)
+  .action(cmdAskReplay);
 
 program
   .command("runs <id> [runId]")

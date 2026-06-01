@@ -20,6 +20,7 @@ import {
   RefreshArtifactSchema,
   RunArtifactEnvelopeSchema,
   RunToolArtifactSchema,
+  type AnswerTrace,
   type Citation,
   type ToolResultFreshness,
 } from "../core/types.ts";
@@ -82,6 +83,7 @@ describe("answer artifacts", () => {
         outputTokens: 40,
         totalTokens: 140,
       },
+      trace: fixtureAnswerTrace(),
     });
 
     expect(saved.relPath).toBe(answerArtifactRelPath(answerId));
@@ -118,12 +120,17 @@ describe("answer artifacts", () => {
       throw new Error(`expected answer artifact, got ${readBack.artifact.kind}`);
     }
     expect(readBack.artifact.answer).toContain("atomic");
+    expect(readBack.artifact.trace?.planner.stopReason).toBe("planner-stop");
+    expect(readBack.artifact.trace?.citations.usedCount).toBe(1);
 
     const formatted = formatRunToolArtifactHuman(readBack.artifact);
     expect(formatted).toContain("answer:");
     expect(formatted).toContain("question:");
     expect(formatted).toContain("citations: 1");
     expect(formatted).toContain("label: rc-answer");
+    expect(formatted).toContain("trace: planner=2 stop=planner-stop");
+    expect(formatted).toContain("planner trace:");
+    expect(formatted).toContain("citation trace:");
   });
 
   test("validates answer status invariants independently", async () => {
@@ -349,5 +356,72 @@ function fixtureFreshness(): ToolResultFreshness {
     class: "static",
     maxAge: null,
     staleness: "fresh",
+  };
+}
+
+function fixtureAnswerTrace(): AnswerTrace {
+  const citation = fixtureCitation();
+  return {
+    schemaVersion: "0.1.0",
+    planner: {
+      promptVersion: "planner-v1",
+      model: "test-model",
+      calls: 2,
+      stopReason: "planner-stop",
+      maxToolCalls: 4,
+      maxDurationMs: 120_000,
+      steps: [
+        {
+          stepIndex: 0,
+          plannerCall: 1,
+          action: "call_tool",
+          outcome: "executed",
+          toolName: "query_facts",
+          input: { q: "transactions" },
+        },
+        {
+          stepIndex: 1,
+          plannerCall: 2,
+          action: "stop",
+          outcome: "stopped",
+          stopReason: "planner-stop",
+        },
+      ],
+    },
+    tools: {
+      observations: [
+        {
+          callIndex: 0,
+          toolName: "query_facts",
+          input: { q: "transactions" },
+          status: "ok",
+          durationMs: 25,
+          citationsCount: 1,
+          freshness: fixtureFreshness(),
+        },
+      ],
+    },
+    citations: {
+      observed: [
+        {
+          citationKey: `${citation.sourceId}\n${citation.url}`,
+          sourceId: citation.sourceId,
+          url: citation.url,
+          fetchedAt: citation.fetchedAt,
+          observedInCallIndexes: [0],
+          usedInAnswer: true,
+          stale: false,
+          freshness: fixtureFreshness(),
+        },
+      ],
+      usedCount: 1,
+      staleCount: 0,
+    },
+    synthesis: {
+      promptVersion: "synthesis-v1",
+      model: "test-model",
+      calls: 1,
+      status: "ok",
+    },
   };
 }

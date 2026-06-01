@@ -646,6 +646,70 @@ function formatAnswerArtifactHuman(artifact: AnswerArtifact): string {
       `freshness: ${artifact.freshness.class}/${artifact.freshness.staleness}`,
     );
   }
+  if (artifact.trace !== undefined) {
+    lines.push(
+      `trace: planner=${artifact.trace.planner.calls} stop=${artifact.trace.planner.stopReason} ` +
+        `tools=${artifact.trace.tools.observations.length} ` +
+        `citations=${artifact.trace.citations.usedCount}/${artifact.trace.citations.observed.length} ` +
+        `stale=${artifact.trace.citations.staleCount}`,
+    );
+    if (artifact.trace.quality !== undefined) {
+      const reasons =
+        artifact.trace.quality.reasons.length === 0
+          ? ""
+          : ` reasons=${artifact.trace.quality.reasons.join("; ")}`;
+      lines.push(
+        `quality trace: ${artifact.trace.quality.status} citationRate=${formatRate(artifact.trace.quality.citationRate)} ` +
+          `unsupported=${artifact.trace.quality.unsupportedClaimCount} stale=${artifact.trace.quality.staleCitationCount}${reasons}`,
+      );
+    }
+    lines.push("planner trace:");
+    for (const step of artifact.trace.planner.steps) {
+      const tool = step.toolName === undefined ? "" : ` tool=${step.toolName}`;
+      const stop =
+        step.stopReason === undefined ? "" : ` stop=${step.stopReason}`;
+      const error = step.error === undefined ? "" : ` error=${step.error.code}`;
+      lines.push(
+        `  - #${step.stepIndex} call=${step.plannerCall} ${step.action}${tool} outcome=${step.outcome}${stop}${error}`,
+      );
+    }
+    lines.push("tool trace:");
+    if (artifact.trace.tools.observations.length === 0) {
+      lines.push("  (none)");
+    } else {
+      for (const observation of artifact.trace.tools.observations) {
+        const freshness =
+          observation.freshness === undefined
+            ? ""
+            : ` freshness=${observation.freshness.class}/${observation.freshness.staleness}`;
+        const error =
+          observation.errorCode === undefined
+            ? ""
+            : ` error=${observation.errorCode}`;
+        lines.push(
+          `  - #${observation.callIndex} ${observation.toolName} ${observation.status} citations=${observation.citationsCount} duration=${observation.durationMs}ms${freshness}${error}`,
+        );
+      }
+    }
+    lines.push("citation trace:");
+    if (artifact.trace.citations.observed.length === 0) {
+      lines.push("  (none)");
+    } else {
+      for (const citation of artifact.trace.citations.observed) {
+        const used = citation.usedInAnswer ? "used" : "unused";
+        const stale = citation.stale ? " stale" : "";
+        const calls = citation.observedInCallIndexes.join(",");
+        lines.push(
+          `  - ${citation.sourceId} ${used}${stale} calls=${calls} ${truncateOneLine(citation.url, 96)}`,
+        );
+      }
+    }
+    if (artifact.trace.abstain !== undefined) {
+      lines.push(
+        `abstain trace: ${artifact.trace.abstain.stage}: ${artifact.trace.abstain.reason}`,
+      );
+    }
+  }
 
   if (artifact.status === "ok") {
     lines.push("answer:");
@@ -959,6 +1023,10 @@ function truncateOneLine(value: string, maxLength: number): string {
   const oneLine = value.replace(/\s+/g, " ").trim();
   if (oneLine.length <= maxLength) return oneLine;
   return `${oneLine.slice(0, Math.max(0, maxLength - 3))}...`;
+}
+
+function formatRate(value: number): string {
+  return `${Math.round(value * 100)}%`;
 }
 
 function generateRunToolRunId(invokedAt: string): string {
