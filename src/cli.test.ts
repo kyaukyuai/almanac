@@ -959,6 +959,63 @@ describe("almanac CLI product onboarding", () => {
     expect(refreshDetail.stdout).toContain(`refresh: ${refreshId}`);
     expect(refreshDetail.stdout).toContain("benchmark: passed");
 
+    const refreshPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "refresh",
+      "--prune",
+      "--keep-latest",
+      "0",
+      "--apply",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshPrune.status).toBe(0);
+    const parsedRefreshPrune = JSON.parse(refreshPrune.stdout) as {
+      applied: boolean;
+      deletedCount: number;
+      criteria: { kind?: string };
+      runs: Array<{ kind: string; runId: string }>;
+    };
+    expect(parsedRefreshPrune.applied).toBe(true);
+    expect(parsedRefreshPrune.deletedCount).toBe(1);
+    expect(parsedRefreshPrune.criteria.kind).toBe("refresh");
+    expect(parsedRefreshPrune.runs).toEqual([
+      expect.objectContaining({ kind: "refresh", runId: refreshId }),
+    ]);
+
+    const refreshRunsAfterPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "refresh",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshRunsAfterPrune.status).toBe(0);
+    expect(
+      (JSON.parse(refreshRunsAfterPrune.stdout) as { runs: unknown[] }).runs,
+    ).toEqual([]);
+
+    const toolRunsAfterRefreshPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "tool",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(toolRunsAfterRefreshPrune.status).toBe(0);
+    expect(
+      (JSON.parse(toolRunsAfterRefreshPrune.stdout) as {
+        runs: Array<{ runId: string }>;
+      }).runs.map((run) => run.runId).sort(),
+    ).toEqual([savedArtifact.runId, badInputArtifact.runId].sort());
+
     const invalidRunsUsage = runCli([
       "runs",
       "sqlite-demo",

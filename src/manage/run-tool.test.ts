@@ -374,6 +374,46 @@ describe("runTool", () => {
     expect((await listRunToolArtifacts({ almanacDir })).runs).toHaveLength(1);
   });
 
+  test("prunes refresh artifacts by kind without deleting tool artifacts", async () => {
+    const almanacDir = await buildRunToolFixture("run-prune-refresh-kind");
+    const execution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const savedTool = await saveRunToolArtifact({
+      almanacDir,
+      execution,
+      label: "tool-smoke",
+    });
+    const refreshArtifact = writeRefreshArtifact(almanacDir);
+    const refreshPath = join(almanacDir, refreshArtifact.artifactRelPath);
+
+    const applied = await pruneRunToolArtifacts({
+      almanacDir,
+      kind: "refresh",
+      keepLatest: 0,
+      apply: true,
+    });
+
+    expect(applied.applied).toBe(true);
+    expect(applied.criteria.kind).toBe("refresh");
+    expect(applied.deletedCount).toBe(1);
+    expect(applied.runs.map((run) => run.runId)).toEqual([
+      refreshArtifact.refreshId,
+    ]);
+    expect(existsSync(refreshPath)).toBe(false);
+    expect(existsSync(savedTool.path)).toBe(true);
+    expect(
+      (await listRunToolArtifacts({ almanacDir, kind: "tool" })).runs.map(
+        (run) => run.runId,
+      ),
+    ).toEqual([savedTool.artifact.runId]);
+    expect(
+      (await listRunToolArtifacts({ almanacDir, kind: "refresh" })).runs,
+    ).toEqual([]);
+  });
+
   test("prunes artifacts by age after label and status filters", async () => {
     const almanacDir = await buildRunToolFixture("run-prune-filtered");
     const okExecution = await runTool({

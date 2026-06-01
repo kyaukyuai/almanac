@@ -173,6 +173,25 @@ almanac runs sqlite-demo --prune --keep-latest 20 --dry-run --root "$tmp"
 almanac runs sqlite-demo --prune --older-than 30d --apply --root "$tmp"
 ```
 
+Scope retention by artifact kind when scheduled refresh history should be
+managed independently from saved tool invocations:
+
+```bash
+almanac runs sqlite-demo \
+  --kind refresh \
+  --prune \
+  --keep-latest 30 \
+  --dry-run \
+  --root "$tmp"
+```
+
+Portable exports exclude `.runs/` by default. Use `--include-runs` only when
+the receiver should get saved tool and refresh artifacts:
+
+```bash
+almanac export sqlite-demo --include-runs --root "$tmp"
+```
+
 ## Human golden benchmarks
 
 Generated Stage 11 fixtures are useful, but product acceptance needs a small
