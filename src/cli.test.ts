@@ -525,6 +525,53 @@ describe("almanac CLI product onboarding", () => {
       parsedRuns.runs.find((run) => run.runId === savedArtifact.runId)?.label,
     ).toBe("release-smoke");
 
+    const okRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--status",
+      "ok",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(okRuns.status).toBe(0);
+    expect(
+      (JSON.parse(okRuns.stdout) as { runs: Array<{ runId: string }> }).runs
+        .map((run) => run.runId),
+    ).toEqual([savedArtifact.runId]);
+
+    const labelRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--label",
+      "release-smoke",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(labelRuns.status).toBe(0);
+    expect(
+      (JSON.parse(labelRuns.stdout) as { runs: Array<{ runId: string }> }).runs
+        .map((run) => run.runId),
+    ).toEqual([savedArtifact.runId]);
+
+    const badInputRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--status",
+      "bad-input",
+      "--limit",
+      "1",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(badInputRuns.status).toBe(0);
+    expect(
+      (JSON.parse(badInputRuns.stdout) as { runs: Array<{ runId: string }> })
+        .runs.map((run) => run.runId),
+    ).toEqual([badInputArtifact.runId]);
+
     const latestRun = runCli([
       "runs",
       "sqlite-demo",
@@ -594,6 +641,20 @@ describe("almanac CLI product onboarding", () => {
     expect(invalidRunsUsage.status).toBe(2);
     expect(invalidRunsUsage.stderr).toContain(
       "--latest and --limit are mutually exclusive",
+    );
+
+    const invalidDetailFilter = runCli([
+      "runs",
+      "sqlite-demo",
+      savedArtifact.runId,
+      "--status",
+      "ok",
+      "--root",
+      root,
+    ]);
+    expect(invalidDetailFilter.status).toBe(2);
+    expect(invalidDetailFilter.stderr).toContain(
+      "[runId] cannot be combined with --latest, --limit, --status, or --label",
     );
 
     const metadataWithoutSave = runCli([

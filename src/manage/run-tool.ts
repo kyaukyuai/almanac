@@ -94,6 +94,10 @@ export interface SaveRunToolArtifactResult {
 export interface ListRunToolArtifactsOptions {
   /** Absolute path to the compiled almanac directory. */
   almanacDir: string;
+  /** Keep only artifacts with this status. */
+  status?: RunToolStatus;
+  /** Keep only artifacts with this exact label. */
+  label?: string;
   /** Maximum number of newest artifacts to return. */
   limit?: number;
 }
@@ -263,14 +267,15 @@ export async function listRunToolArtifacts(
       return readAndParseRunToolArtifact(path);
     }),
   );
-  artifacts.sort(compareRunToolArtifactsNewestFirst);
+  const filteredArtifacts = filterRunToolArtifacts(artifacts, options);
+  filteredArtifacts.sort(compareRunToolArtifactsNewestFirst);
 
-  const limit = options.limit ?? artifacts.length;
+  const limit = options.limit ?? filteredArtifacts.length;
   return {
     almanacId: manifest.almanacId,
     version: manifest.version,
     artifactsDir,
-    runs: artifacts.slice(0, limit).map(summarizeRunToolArtifact),
+    runs: filteredArtifacts.slice(0, limit).map(summarizeRunToolArtifact),
   };
 }
 
@@ -520,6 +525,21 @@ function summarizeRunToolArtifact(
     durationMs: artifact.durationMs,
     citationsCount: artifact.citationsCount,
   };
+}
+
+function filterRunToolArtifacts(
+  artifacts: RunToolArtifact[],
+  options: ListRunToolArtifactsOptions,
+): RunToolArtifact[] {
+  return artifacts.filter((artifact) => {
+    if (options.status !== undefined && artifact.status !== options.status) {
+      return false;
+    }
+    if (options.label !== undefined && artifact.label !== options.label) {
+      return false;
+    }
+    return true;
+  });
 }
 
 function runToolArtifactMetadata(

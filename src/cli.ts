@@ -197,6 +197,7 @@ import {
   readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
+  type RunToolStatus,
 } from "./manage/run-tool.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
@@ -2063,8 +2064,10 @@ function cmdPath(id: string, opts: PathOptions): void {
 interface RunsOptions {
   root: string;
   json?: boolean;
+  label?: string;
   latest?: boolean;
   limit?: string;
+  status?: RunToolStatus;
 }
 
 async function cmdRuns(
@@ -2076,9 +2079,14 @@ async function cmdRuns(
 
   try {
     if (runId !== undefined) {
-      if (opts.latest === true || opts.limit !== undefined) {
+      if (
+        opts.latest === true ||
+        opts.limit !== undefined ||
+        opts.status !== undefined ||
+        opts.label !== undefined
+      ) {
         runsUsageError(
-          "[runId] cannot be combined with --latest or --limit",
+          "[runId] cannot be combined with --latest, --limit, --status, or --label",
         );
       }
       const read = await readRunToolArtifact({ almanacDir, runId });
@@ -2095,8 +2103,11 @@ async function cmdRuns(
     }
     const limit =
       opts.latest === true ? 1 : parseRunsLimit(opts.limit ?? undefined);
+    const filters = runsFiltersFromOptions(opts);
     const list = await listRunToolArtifacts(
-      limit === undefined ? { almanacDir } : { almanacDir, limit },
+      limit === undefined
+        ? { almanacDir, ...filters }
+        : { almanacDir, limit, ...filters },
     );
     process.stdout.write(
       opts.json === true
@@ -2112,6 +2123,25 @@ async function cmdRuns(
     }
     throw e;
   }
+}
+
+function runsFiltersFromOptions(
+  opts: RunsOptions,
+): { status?: RunToolStatus; label?: string } {
+  return {
+    ...(opts.status === undefined ? {} : { status: opts.status }),
+    ...(opts.label === undefined
+      ? {}
+      : { label: normalizeRunsLabel(opts.label) }),
+  };
+}
+
+function normalizeRunsLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.length === 0 || normalized.length > 80) {
+    runsUsageError("--label must be between 1 and 80 characters");
+  }
+  return normalized;
 }
 
 function parseRunsLimit(raw: string | undefined): number | undefined {
@@ -3539,8 +3569,13 @@ program
   .command("runs <id> [runId]")
   .description("view saved local run artifacts")
   .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--label <name>", "Filter list by saved artifact label")
   .option("--latest", "Show only the newest run artifact")
   .option("--limit <n>", "Maximum number of newest run artifacts to list")
+  .addOption(
+    new Option("--status <status>", "Filter list by saved artifact status")
+      .choices(["ok", "tool-error", "bad-input", "tool-not-found"]),
+  )
   .addOption(rootOption)
   .action(cmdRuns);
 
