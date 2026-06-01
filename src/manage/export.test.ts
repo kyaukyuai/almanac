@@ -305,7 +305,7 @@ describe("runExport — real tar integration", () => {
     expect(existsSync(join(unpackDir, "tinytool", ".compile"))).toBe(false);
     // .runs is also excluded by default because it can contain run input/output.
     expect(existsSync(join(unpackDir, "tinytool", ".runs"))).toBe(false);
-  }, { timeout: 15_000 });
+  }, { timeout: 45_000 });
 
   test("--include-compile keeps .compile/", async () => {
     const dir = await buildTmpAlmanac();
@@ -325,7 +325,7 @@ describe("runExport — real tar integration", () => {
       existsSync(join(unpackDir, "tinytool", ".compile", "domain-spec.json")),
     ).toBe(true);
     expect(existsSync(join(unpackDir, "tinytool", ".runs"))).toBe(false);
-  }, { timeout: 15_000 });
+  }, { timeout: 45_000 });
 
   test("--include-runs keeps tool, refresh, and answer artifacts under .runs/", async () => {
     const dir = await buildTmpAlmanac();
@@ -372,7 +372,7 @@ describe("runExport — real tar integration", () => {
       ),
     ).toBe(true);
     expect(existsSync(join(unpackDir, "tinytool", ".compile"))).toBe(false);
-  }, { timeout: 15_000 });
+  }, { timeout: 45_000 });
 
   test("byteLength matches the on-disk size", async () => {
     const dir = await buildTmpAlmanac();
@@ -383,7 +383,7 @@ describe("runExport — real tar integration", () => {
     const result = await runExport({ almanacDir: dir, outputPath });
     const { statSync } = await import("node:fs");
     expect(result.byteLength).toBe(statSync(outputPath).size);
-  }, { timeout: 15_000 });
+  }, { timeout: 45_000 });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────

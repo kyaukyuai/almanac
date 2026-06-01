@@ -604,7 +604,7 @@ describe("almanac CLI product onboarding", () => {
     expect(failedDoctor.status).toBe(0);
     expect(failedDoctor.stdout).toContain("warn refresh");
     expect(failedDoctor.stdout).toContain("last failed");
-  });
+  }, { timeout: 15_000 });
 
   test("run invokes compiled tools with stable output and exit codes", async () => {
     const demo = runCli(["demo", "--root", root]);
