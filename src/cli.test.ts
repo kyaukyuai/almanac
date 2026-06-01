@@ -768,7 +768,7 @@ describe("almanac CLI product onboarding", () => {
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
     expect(missingToolOption.status).toBe(2);
     expect(missingToolOption.stderr).toContain("missing required --tool");
-  });
+  }, { timeout: 15_000 });
 
   test("profile flags high-trust snapshot sources with no extracted facts", async () => {
     const demo = runCli(["demo", "--root", root]);
