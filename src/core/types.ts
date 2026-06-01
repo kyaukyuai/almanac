@@ -3448,6 +3448,27 @@ export const RunToolArtifactRelPathSchema = z
   .max(120)
   .regex(/^\.runs\/run-[A-Za-z0-9-]+\.json$/);
 
+export const RefreshRunIdSchema = z
+  .string()
+  .max(84)
+  .regex(
+    /^refresh-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/,
+    "must be refresh-<ISO timestamp with - separators>-<8 hex chars>",
+  );
+
+export const RefreshArtifactRelPathSchema = z
+  .string()
+  .max(124)
+  .regex(/^\.runs\/refresh-[A-Za-z0-9-]+\.json$/);
+
+export const RunArtifactIdSchema = z.union([
+  RunToolRunIdSchema,
+  RefreshRunIdSchema,
+]);
+
+export const RunArtifactKindSchema = z.enum(["tool", "refresh"]);
+export type RunArtifactKind = z.infer<typeof RunArtifactKindSchema>;
+
 export const RunToolArtifactLabelSchema = z
   .string()
   .trim()
@@ -3462,6 +3483,7 @@ export const RunToolArtifactNoteSchema = z
 
 export const RunToolArtifactSchema = z.object({
   schemaVersion: z.literal("0.1.0"),
+  kind: z.literal("tool").default("tool"),
   artifactRelPath: RunToolArtifactRelPathSchema,
   runId: RunToolRunIdSchema,
   invokedAt: z.string().regex(ISO_8601),
@@ -3482,6 +3504,88 @@ export const RunToolArtifactSchema = z.object({
   availableTools: z.array(ToolNameSchema).optional(),
 });
 export type RunToolArtifact = z.infer<typeof RunToolArtifactSchema>;
+
+export const RefreshArtifactStatusSchema = z.enum([
+  "ok",
+  "failed",
+  "not-due",
+  "locked",
+]);
+export type RefreshArtifactStatus = z.infer<typeof RefreshArtifactStatusSchema>;
+
+export const RunArtifactStatusSchema = z.union([
+  RunToolStatusSchema,
+  RefreshArtifactStatusSchema,
+]);
+export type RunArtifactStatus = z.infer<typeof RunArtifactStatusSchema>;
+
+export const RefreshArtifactSchema = z
+  .object({
+    schemaVersion: z.literal("0.1.0"),
+    kind: z.literal("refresh"),
+    artifactRelPath: RefreshArtifactRelPathSchema,
+    refreshId: RefreshRunIdSchema,
+    startedAt: z.string().regex(ISO_8601),
+    finishedAt: z.string().regex(ISO_8601),
+    almanacId: z
+      .string()
+      .max(32)
+      .regex(CANONICAL_SLUG, "must be lowercase kebab-case"),
+    version: z.string().regex(SEMVER_RE, "must be semver"),
+    label: RunToolArtifactLabelSchema.optional(),
+    note: RunToolArtifactNoteSchema.optional(),
+    status: RefreshArtifactStatusSchema,
+    exitCode: RunToolExitCodeSchema,
+    requestedFromStage: StageIdSchema,
+    effectiveFromStage: StageIdSchema,
+    dueDecision: z
+      .object({
+        due: z.boolean(),
+        recommendedFromStage: StageIdSchema,
+        reasonCodes: z.array(z.string().min(1).max(80)).max(40),
+      })
+      .passthrough(),
+    stageSummary: z
+      .object({
+        succeeded: z.array(StageIdSchema),
+        skipped: z.array(StageIdSchema),
+        failed: z.array(StageIdSchema),
+      })
+      .optional(),
+    benchmark: z
+      .object({
+        status: z.enum(["missing", "passed", "failed"]),
+        total: z.number().int().nonnegative().optional(),
+        passed: z.number().int().nonnegative().optional(),
+        failed: z.number().int().nonnegative().optional(),
+        errored: z.number().int().nonnegative().optional(),
+        citationRate: z.number().min(0).max(1).optional(),
+      })
+      .optional(),
+    durationMs: z.number().int().nonnegative(),
+    error: z
+      .object({
+        code: z.string().min(1).max(80),
+        message: z.string().min(1).max(2000),
+      })
+      .optional(),
+  })
+  .superRefine((artifact, ctx) => {
+    if (Date.parse(artifact.finishedAt) < Date.parse(artifact.startedAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["finishedAt"],
+        message: "finishedAt must be >= startedAt",
+      });
+    }
+  });
+export type RefreshArtifact = z.infer<typeof RefreshArtifactSchema>;
+
+export const RunArtifactEnvelopeSchema = z.union([
+  RunToolArtifactSchema,
+  RefreshArtifactSchema,
+]);
+export type RunArtifactEnvelope = z.infer<typeof RunArtifactEnvelopeSchema>;
 
 // ── ResourceDescriptor — MCP resources/list, resources/read ──────────────────
 
