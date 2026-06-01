@@ -76,7 +76,13 @@ export async function queryFacts(input: any, ctx: any): Promise<any> {
     opts.freshnessClass = input.freshnessClass;
   }
 
-  const hits = await ctx.knowledge.searchFacts(q, opts);
+  let hits = await ctx.knowledge.searchFacts(q, opts);
+  if (hits.length === 0) {
+    for (const fallbackQ of fallbackQueries(q)) {
+      hits = await ctx.knowledge.searchFacts(fallbackQ, opts);
+      if (hits.length > 0) break;
+    }
+  }
 
   if (hits.length === 0) {
     return {
@@ -127,6 +133,30 @@ export async function queryFacts(input: any, ctx: any): Promise<any> {
       ? { class: "slow", maxAge: 2592000, staleness: "fresh" }
       : { class: "static", maxAge: null, staleness: "fresh" },
   };
+}
+
+function fallbackQueries(q: string): string[] {
+  const seen = new Set<string>();
+  const tokens: string[] = [];
+  for (const token of q.match(/[A-Za-z0-9_']+/g) ?? []) {
+    const key = token.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    tokens.push(token);
+  }
+  if (tokens.length <= 1) return [];
+
+  const out: string[] = [];
+  const original = q.trim().toLowerCase();
+  for (let size = Math.min(3, tokens.length - 1); size >= 1; size -= 1) {
+    for (let start = 0; start + size <= tokens.length; start += 1) {
+      const candidate = tokens.slice(start, start + size).join(" ");
+      if (candidate.toLowerCase() === original) continue;
+      out.push(candidate);
+      if (out.length >= 8) return out;
+    }
+  }
+  return out;
 }
 
 export default queryFacts;
