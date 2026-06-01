@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.5.0 shipped** · last updated 2026-06-01.
+Status: **v0.6.0 shipped** · last updated 2026-06-01.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -911,14 +911,38 @@ workflow:
 The v0.5 release gate passed on 2026-06-01 with `bun run typecheck`,
 `bun test`, a fresh offline demo, local `run --tool`, saved artifact viewer
 flows, wiki `artifacts.json` self-entry validation, and export
-include/exclude checks. LLM-backed question mode and refresh scheduling remain
-future work so the v0.5 runtime path stays deterministic and no-key friendly.
+include/exclude checks. LLM-backed question mode and hosted scheduling remained
+future work so the v0.5 runtime path stayed deterministic and no-key friendly.
 
-### v0.6+ (long-tail)
+### v0.6.0 — Refresh scheduling readiness
+
+v0.6.0 shipped the CLI-first refresh contract:
+
+- `almanac refresh due <id>` computes a deterministic read-only refresh
+  decision from source freshness, compile state, benchmark state, and latest
+  refresh artifacts.
+- `almanac refresh run <id>` executes a manual refresh over the existing update
+  pipeline, with explicit stage boundaries, per-almanac locking, and stable
+  JSON output for schedulers.
+- `--save`, `--label`, and `--note` persist validated refresh artifacts under
+  `.runs/` alongside tool invocation artifacts.
+- `almanac runs` lists, filters, reads, and prunes both tool and refresh
+  artifacts by `kind`.
+- `inspect`, `profile`, and `doctor` surface the latest refresh status and
+  failed/locked readiness issues without requiring manual JSON inspection.
+- `docs/refresh-scheduler.md` defines the cron, CI, and launchd contract,
+  including provider-key expectations, lock conflicts, failure artifacts,
+  retention, and export privacy.
+
+The v0.6 release gate passed on 2026-06-01 with `bun run typecheck`,
+`bun test`, a fresh offline demo, refresh due/run/save/history flows,
+refresh artifact detail and retention checks, lock conflict smoke, and export
+include/exclude checks for refresh artifacts.
+
+### v0.7+ (long-tail)
 
 - Optional LLM-backed question mode over compiled tools.
-- Refresh scheduling / daemon design and implementation
-  ([v0.6 plan](./v0.6-plan.md)).
+- Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
 - Composable almanacs (one almanac calling another via MCP)
@@ -930,8 +954,8 @@ future work so the v0.5 runtime path stays deterministic and no-key friendly.
 
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
-feature set, and the v0.5 local run workflow documented in §8 above. Active
-questions carrying into v0.6+:
+feature set, the v0.5 local run workflow, and the v0.6 refresh contract
+documented in §8 above. Active questions carrying into v0.7+:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local

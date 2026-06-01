@@ -11,6 +11,37 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.6.0] — 2026-06-01
+
+### Added
+
+- **Refresh due detection.** `almanac refresh due <id>` reports deterministic,
+  read-only refresh decisions from source freshness, compile state, benchmark
+  state, and latest refresh artifacts without requiring provider keys.
+- **Manual refresh runner.** `almanac refresh run <id>` wraps the existing
+  update pipeline with explicit `--from-stage`, per-almanac locking, stable
+  exit codes, and optional saved refresh artifacts via `--save`, `--label`,
+  and `--note`.
+- **Refresh artifact envelope.** Saved operational records under `.runs/` now
+  support both tool artifacts and refresh artifacts, with kind-aware listing,
+  detail reads, filtering, and retention cleanup.
+- **Refresh visibility.** `inspect`, `profile`, and `doctor` surface the latest
+  saved refresh status, from-stage, duration, exit code, benchmark result, and
+  failed/locked readiness issues.
+- **Scheduler contract documentation.** `docs/refresh-scheduler.md` documents
+  cron, CI, and launchd wiring, provider-key expectations, locking behavior,
+  failure artifacts, retention, and export privacy.
+
+### Changed
+
+- **Run artifact retention/export integration.** `almanac runs --kind refresh
+  --prune` can clean refresh artifacts without deleting saved tool invocations,
+  and `almanac export --include-runs` now deliberately carries both tool and
+  refresh audit artifacts while default exports still exclude `.runs/`.
+- **Release posture.** v0.6 keeps scheduling CLI-first and no-daemon: external
+  schedulers own cadence, while almanac owns deterministic due detection,
+  locked execution, benchmark-gated updates, and durable evidence.
+
 ## [0.5.0] — 2026-06-01
 
 ### Added
