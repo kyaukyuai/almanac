@@ -939,9 +939,24 @@ The v0.6 release gate passed on 2026-06-01 with `bun run typecheck`,
 refresh artifact detail and retention checks, lock conflict smoke, and export
 include/exclude checks for refresh artifacts.
 
-### v0.7+ (long-tail)
+### v0.7 — Planned cited answer mode
 
-- Optional LLM-backed question mode over compiled tools.
+v0.7 is planned as an optional one-shot answer orchestration layer over the
+compiled runtime:
+
+- `almanac ask <id> <question>` asks an LLM to select and call compiled tools
+  through `AlmanacRuntime.execTool`.
+- The model gets tool manifests and observed tool results, not arbitrary
+  filesystem or network access.
+- The final answer must cite citations returned by observed tool calls or
+  abstain.
+- Saved answer sessions, when explicitly requested, use `.runs/` beside tool
+  and refresh artifacts.
+
+See [`docs/v0.7-plan.md`](./v0.7-plan.md) for the implementation sequence.
+
+### v0.8+ (long-tail)
+
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
@@ -955,7 +970,7 @@ include/exclude checks for refresh artifacts.
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, and the v0.6 refresh contract
-documented in §8 above. Active questions carrying into v0.7+:
+documented in §8 above. Active questions carrying into v0.8+:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
