@@ -36,6 +36,9 @@ import { createMockProvider } from "../llm/mock.ts";
 import {
   ANSWER_PLANNER_PROMPT_STAGE_ID,
   ANSWER_PLANNER_PROMPT_VERSION,
+  ANSWER_SYNTHESIS_PROMPT_STAGE_ID,
+  ANSWER_SYNTHESIS_PROMPT_VERSION,
+  runAnswerSession,
   runAnswerToolPlanningSession,
 } from "./answer-session.ts";
 
@@ -272,6 +275,181 @@ describe("runAnswerToolPlanningSession", () => {
   });
 });
 
+describe("runAnswerSession synthesis gate", () => {
+  test("returns a grounded answer with observed citations and freshness", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-ok");
+    let plannerCalls = 0;
+    const citation = fixtureCitation();
+    const provider = createMockProvider({
+      responses: {
+        [plannerCallName()]: () => {
+          plannerCalls += 1;
+          return JSON.stringify(
+            plannerCalls === 1
+              ? {
+                  action: "call_tool",
+                  toolName: "query_facts",
+                  input: { q: "transactions" },
+                }
+              : { action: "stop", reason: "enough-evidence" },
+          );
+        },
+        [synthesisCallName()]: JSON.stringify({
+          status: "ok",
+          answer: "SQLite transactions are atomic.",
+          citations: [citation],
+        }),
+      },
+    });
+    const staleFreshness = {
+      class: "slow" as const,
+      maxAge: 86_400,
+      staleness: "stale" as const,
+    };
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => okToolResult({ citation, freshness: staleFreshness }),
+      }),
+    });
+
+    expect(session.status).toBe("ok");
+    expect(session.answer).toContain("atomic");
+    expect(session.citations).toEqual([citation]);
+    expect(session.freshness).toEqual(staleFreshness);
+    expect(session.synthesisCalls).toBe(1);
+    expect(session.promptVersions).toEqual({
+      planner: ANSWER_PLANNER_PROMPT_VERSION,
+      synthesis: ANSWER_SYNTHESIS_PROMPT_VERSION,
+    });
+    expect(
+      provider.callLog.find((entry) =>
+        entry.request.callName === synthesisCallName()
+      )?.request.messages[1]?.content,
+    ).toContain(citation.sourceId);
+  });
+
+  test("abstains when synthesis returns prose without citations", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-no-cites");
+    const provider = createSynthesisTestProvider({
+      synthesis: {
+        status: "ok",
+        answer: "SQLite transactions are atomic.",
+        citations: [],
+      },
+    });
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => okToolResult(),
+      }),
+    });
+
+    expect(session.status).toBe("abstained");
+    expect(session.abstentionReason).toBe("no-citations");
+    expect(session.answer).toBeUndefined();
+    expect(session.citations).toEqual([]);
+  });
+
+  test("abstains when synthesis cites unobserved sources", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-fabricated");
+    const provider = createSynthesisTestProvider({
+      synthesis: {
+        status: "ok",
+        answer: "SQLite transactions are atomic.",
+        citations: [
+          {
+            sourceId: "sqlite-docs",
+            url: "https://sqlite.org/fabricated.html",
+            fetchedAt: "2026-01-01T00:00:00.000Z",
+            excerpt: "Fabricated citation.",
+          },
+        ],
+      },
+    });
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => okToolResult(),
+      }),
+    });
+
+    expect(session.status).toBe("abstained");
+    expect(session.abstentionReason).toBe("unobserved-citation");
+    expect(session.citations).toEqual([]);
+  });
+
+  test("tool-only failures abstain before synthesis can produce uncited prose", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-errors-only");
+    const provider = createSynthesisTestProvider({
+      synthesis: {
+        status: "ok",
+        answer: "This should not be accepted.",
+        citations: [],
+      },
+    });
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => ({
+          ok: false,
+          error: {
+            code: "no-results",
+            message: "no facts found",
+            retryable: false,
+          },
+        }),
+      }),
+    });
+
+    expect(session.status).toBe("abstained");
+    expect(session.abstentionReason).toBe("tool-errors-only");
+    expect(session.synthesisCalls).toBe(0);
+    expect(
+      provider.callLog.some((entry) =>
+        entry.request.callName === synthesisCallName()
+      ),
+    ).toBe(false);
+  });
+
+  test("synthesis parse failures become stable model-error answers", async () => {
+    const almanacDir = await buildAnswerSessionFixture("answer-synth-model-error");
+    const provider = createSynthesisTestProvider({
+      synthesis: "not-json",
+    });
+
+    const session = await runAnswerSession({
+      almanacDir,
+      question: "How do SQLite transactions behave?",
+      provider,
+      runtime: fakeRuntime({
+        tools: [queryFactsManifest()],
+        execTool: async () => okToolResult(),
+      }),
+    });
+
+    expect(session.status).toBe("model-error");
+    expect(session.error?.code).toBe("model-error");
+    expect(session.synthesisCalls).toBe(1);
+  });
+});
+
 async function buildAnswerSessionFixture(
   almanacId: string,
   withCompiledTool = false,
@@ -371,24 +549,71 @@ function queryFactsManifest(): ToolManifest {
   };
 }
 
-function okToolResult(): ToolResult {
+function okToolResult(input: {
+  citation?: ReturnType<typeof fixtureCitation>;
+  freshness?: Extract<ToolResult, { ok: true }>["freshness"];
+} = {}): ToolResult {
+  return okToolResultWith(input);
+}
+
+function okToolResultWith(input: {
+  citation?: ReturnType<typeof fixtureCitation>;
+  freshness?: Extract<ToolResult, { ok: true }>["freshness"];
+} = {}): ToolResult {
+  const citation = input.citation ?? fixtureCitation();
   return {
     ok: true,
     data: { hits: [{ text: "Transactions are atomic." }] },
-    citations: [
-      {
-        sourceId: "sqlite-docs",
-        url: "https://sqlite.org/lang_transaction.html",
-        fetchedAt: "2026-01-01T00:00:00.000Z",
-        excerpt: "Transactions are atomic.",
-      },
-    ],
-    freshness: {
+    citations: [citation],
+    freshness: input.freshness ?? {
       class: "static",
       maxAge: null,
       staleness: "fresh",
     },
   };
+}
+
+function fixtureCitation() {
+  return {
+    sourceId: "sqlite-docs",
+    url: "https://sqlite.org/lang_transaction.html",
+    fetchedAt: "2026-01-01T00:00:00.000Z",
+    excerpt: "Transactions are atomic.",
+  };
+}
+
+function createSynthesisTestProvider(input: {
+  synthesis: unknown;
+}) {
+  let plannerCalls = 0;
+  return createMockProvider({
+    responses: {
+      [plannerCallName()]: () => {
+        plannerCalls += 1;
+        return JSON.stringify(
+          plannerCalls === 1
+            ? {
+                action: "call_tool",
+                toolName: "query_facts",
+                input: { q: "transactions" },
+              }
+            : { action: "stop", reason: "enough-evidence" },
+        );
+      },
+      [synthesisCallName()]:
+        typeof input.synthesis === "string"
+          ? input.synthesis
+          : JSON.stringify(input.synthesis),
+    },
+  });
+}
+
+function plannerCallName(): string {
+  return `${ANSWER_PLANNER_PROMPT_STAGE_ID}@${ANSWER_PLANNER_PROMPT_VERSION}`;
+}
+
+function synthesisCallName(): string {
+  return `${ANSWER_SYNTHESIS_PROMPT_STAGE_ID}@${ANSWER_SYNTHESIS_PROMPT_VERSION}`;
 }
 
 function fixtureFact(): FactRecord {
