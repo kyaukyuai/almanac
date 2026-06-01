@@ -85,6 +85,11 @@ refresh attempts without opening the JSON artifact by hand. See
 [`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md) for the cron, CI,
 and launchd contract.
 
+v0.7 planning focuses on an optional LLM-backed `almanac ask` mode: a one-shot
+answer orchestration boundary over compiled tools, with strict cited-answer or
+abstain behavior and optional saved answer artifacts under `.runs/`. See
+[`docs/v0.7-plan.md`](./docs/v0.7-plan.md).
+
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
 transport, and `almanac wiki` inspection exports. The release also includes the
@@ -269,6 +274,15 @@ sequence remains in
 - Scheduler contract docs for cron, CI, and launchd, plus export/retention
   hardening so refresh artifacts remain private unless `--include-runs` is
   explicitly requested.
+
+### v0.7 — planned
+
+- One-shot `almanac ask` answer orchestration over compiled tools.
+- LLM-backed tool selection with explicit call and duration budgets.
+- Final cite-or-abstain gate requiring citations returned by observed tool
+  results.
+- Optional saved answer artifacts under `.runs/`, with kind-aware listing,
+  retention, and explicit export inclusion.
 
 ## Changelog
 
