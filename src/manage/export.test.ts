@@ -1,8 +1,8 @@
 /**
  * Tests for `almanac export` — package a compiled almanac as tar.gz.
  *
- * Unit tests pin the spawn argv shape (with/without --include-compile,
- * default output filename). The integration test runs the real `tar`
+ * Unit tests pin the spawn argv shape (with/without --include-compile and
+ * --include-runs, default output filename). The integration test runs the real `tar`
  * binary against a tmp almanac dir and asserts the resulting archive
  * unpacks back to the expected file tree.
  */
@@ -84,7 +84,7 @@ function makeTmpAlmanac(): string {
 }
 
 describe("runExport — argv construction", () => {
-  test("default: tar -czf <out> -C <parent> --exclude=<base>/.compile <base>", async () => {
+  test("default: excludes .compile/ and .runs/", async () => {
     const root = mkdtempSync(join(tmpdir(), "almanac-export-argv-"));
     cleanup.push(root);
     const almanacDir = join(root, "myalmanac");
@@ -109,11 +109,12 @@ describe("runExport — argv construction", () => {
       "-C",
       root,
       "--exclude=myalmanac/.compile",
+      "--exclude=myalmanac/.runs",
       "myalmanac",
     ]);
   });
 
-  test("--include-compile: omits the exclude flag", async () => {
+  test("--include-compile: keeps .compile/ but still excludes .runs/", async () => {
     const root = mkdtempSync(join(tmpdir(), "almanac-export-inc-"));
     cleanup.push(root);
     const almanacDir = join(root, "myalmanac");
@@ -131,6 +132,69 @@ describe("runExport — argv construction", () => {
       almanacDir,
       outputPath,
       includeCompile: true,
+      spawner,
+    });
+    expect(capture.args).toEqual([
+      "tar",
+      "-czf",
+      outputPath,
+      "-C",
+      root,
+      "--exclude=myalmanac/.runs",
+      "myalmanac",
+    ]);
+  });
+
+  test("--include-runs: keeps .runs/ but still excludes .compile/", async () => {
+    const root = mkdtempSync(join(tmpdir(), "almanac-export-runs-"));
+    cleanup.push(root);
+    const almanacDir = join(root, "myalmanac");
+    await mkdir(almanacDir, { recursive: true });
+    const outputPath = join(root, "out.tar.gz");
+
+    const capture: { args?: readonly string[]; cwd?: string } = {};
+    const spawner = stubSpawner(
+      { exitCode: 0, stdout: "", stderr: "" },
+      capture,
+    );
+    writeFileSync(outputPath, "fake");
+
+    await runExport({
+      almanacDir,
+      outputPath,
+      includeRuns: true,
+      spawner,
+    });
+    expect(capture.args).toEqual([
+      "tar",
+      "-czf",
+      outputPath,
+      "-C",
+      root,
+      "--exclude=myalmanac/.compile",
+      "myalmanac",
+    ]);
+  });
+
+  test("--include-compile + --include-runs: omits both exclude flags", async () => {
+    const root = mkdtempSync(join(tmpdir(), "almanac-export-all-"));
+    cleanup.push(root);
+    const almanacDir = join(root, "myalmanac");
+    await mkdir(almanacDir, { recursive: true });
+    const outputPath = join(root, "out.tar.gz");
+
+    const capture: { args?: readonly string[]; cwd?: string } = {};
+    const spawner = stubSpawner(
+      { exitCode: 0, stdout: "", stderr: "" },
+      capture,
+    );
+    writeFileSync(outputPath, "fake");
+
+    await runExport({
+      almanacDir,
+      outputPath,
+      includeCompile: true,
+      includeRuns: true,
       spawner,
     });
     expect(capture.args).toEqual([
@@ -199,6 +263,12 @@ describe("runExport — real tar integration", () => {
     // Stage scratch we expect to be excluded by default:
     await mkdir(join(dir, ".compile"), { recursive: true });
     writeFileSync(join(dir, ".compile", "domain-spec.json"), `{"sensitive":"yes"}`);
+    // Saved run artifacts may contain user input/output, so they are opt-in.
+    await mkdir(join(dir, ".runs"), { recursive: true });
+    writeFileSync(
+      join(dir, ".runs", "run-2026-01-01T00-00-00-000Z-00000001.json"),
+      `{"input":{"q":"possibly sensitive"},"result":{"ok":true}}\n`,
+    );
     return dir;
   }
 
@@ -225,6 +295,8 @@ describe("runExport — real tar integration", () => {
     expect(existsSync(join(unpackDir, "tinytool", "extracted", "facts.jsonl"))).toBe(true);
     // .compile must be absent in the default export.
     expect(existsSync(join(unpackDir, "tinytool", ".compile"))).toBe(false);
+    // .runs is also excluded by default because it can contain run input/output.
+    expect(existsSync(join(unpackDir, "tinytool", ".runs"))).toBe(false);
   }, { timeout: 15_000 });
 
   test("--include-compile keeps .compile/", async () => {
@@ -244,6 +316,34 @@ describe("runExport — real tar integration", () => {
     expect(
       existsSync(join(unpackDir, "tinytool", ".compile", "domain-spec.json")),
     ).toBe(true);
+    expect(existsSync(join(unpackDir, "tinytool", ".runs"))).toBe(false);
+  }, { timeout: 15_000 });
+
+  test("--include-runs keeps .runs/", async () => {
+    const dir = await buildTmpAlmanac();
+    const outDir = mkdtempSync(join(tmpdir(), "almanac-export-runsout-"));
+    cleanup.push(outDir);
+    const outputPath = join(outDir, "tinytool-with-runs.tar.gz");
+
+    await runExport({
+      almanacDir: dir,
+      outputPath,
+      includeRuns: true,
+    });
+    const unpackDir = mkdtempSync(join(tmpdir(), "almanac-export-runsunpack-"));
+    cleanup.push(unpackDir);
+    await runTar(["-xzf", outputPath, "-C", unpackDir]);
+    expect(
+      existsSync(
+        join(
+          unpackDir,
+          "tinytool",
+          ".runs",
+          "run-2026-01-01T00-00-00-000Z-00000001.json",
+        ),
+      ),
+    ).toBe(true);
+    expect(existsSync(join(unpackDir, "tinytool", ".compile"))).toBe(false);
   }, { timeout: 15_000 });
 
   test("byteLength matches the on-disk size", async () => {

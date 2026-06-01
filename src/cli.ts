@@ -2898,6 +2898,7 @@ interface ExportOptions {
   root: string;
   output?: string;
   includeCompile?: boolean;
+  includeRuns?: boolean;
 }
 
 interface WikiOptions {
@@ -2926,7 +2927,7 @@ async function cmdExport(id: string, opts: ExportOptions): Promise<void> {
     `▶ export almanac "${manifest.almanacId}" v${manifest.version}\n` +
       `    from   ${almanacDir}\n` +
       `    to     ${outputPath}\n` +
-      `    extras ${opts.includeCompile === true ? "INCLUDE .compile/" : "exclude .compile/"}\n\n`,
+      `    extras ${formatExportExtras(opts)}\n\n`,
   );
 
   try {
@@ -2934,6 +2935,7 @@ async function cmdExport(id: string, opts: ExportOptions): Promise<void> {
       almanacDir,
       outputPath,
       ...(opts.includeCompile === true ? { includeCompile: true } : {}),
+      ...(opts.includeRuns === true ? { includeRuns: true } : {}),
       log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
     });
     process.stdout.write(
@@ -2950,6 +2952,13 @@ async function cmdExport(id: string, opts: ExportOptions): Promise<void> {
     }
     throw e;
   }
+}
+
+function formatExportExtras(opts: ExportOptions): string {
+  return [
+    opts.includeCompile === true ? "INCLUDE .compile/" : "exclude .compile/",
+    opts.includeRuns === true ? "INCLUDE .runs/" : "exclude .runs/",
+  ].join(", ");
 }
 
 function formatBytes(n: number): string {
@@ -3781,6 +3790,10 @@ program
   .option(
     "--include-compile",
     "Include the .compile/ directory (Stage 1–6 intermediates); default: exclude",
+  )
+  .option(
+    "--include-runs",
+    "Include saved .runs/ artifacts from almanac run --save; default: exclude",
   )
   .addOption(rootOption)
   .action(cmdExport);

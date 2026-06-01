@@ -22,9 +22,13 @@
  * the recipient doesn't need to run the almanac. Pass `includeCompile`
  * to keep them, e.g. for debugging or auditing a generated almanac.
  *
+ * It also EXCLUDES `.runs/` by default because saved run artifacts can
+ * contain user-supplied tool input and tool outputs. Pass `includeRuns`
+ * to intentionally package the audit trail.
+ *
  * Implementation uses the system `tar` binary via `Bun.spawn`. BSD tar
  * (macOS) and GNU tar (Linux) both support the same surface:
- *   tar -czf <out> -C <parent-of-almanac> --exclude=<base>/.compile <base>
+ *   tar -czf <out> -C <parent-of-almanac> --exclude=<base>/.compile --exclude=<base>/.runs <base>
  *
  * The unpacker just does `tar -xzf <archive>` in any directory; the
  * archive's top-level entry is `<almanac-id>/`, so the result lands
@@ -53,6 +57,11 @@ export interface RunExportInput {
    * compiled almanac and bloat the archive.
    */
   includeCompile?: boolean;
+  /**
+   * When true, include saved `almanac run --save` artifacts from `.runs/`.
+   * Default false because those artifacts may contain tool input and output.
+   */
+  includeRuns?: boolean;
   /** Override the system `tar` binary path. Defaults to plain `tar`. */
   tarBinary?: string;
   /** Spawner; defaults to Bun.spawn. Tests inject stubs here. */
@@ -120,6 +129,7 @@ export async function runExport(input: RunExportInput): Promise<ExportResult> {
   //   tar -czf <out>
   //       -C <parent-of-almanac>
   //       [--exclude=<base>/.compile]
+  //       [--exclude=<base>/.runs]
   //       <base>
   const parent = dirname(input.almanacDir);
   const base = basename(input.almanacDir);
@@ -133,6 +143,9 @@ export async function runExport(input: RunExportInput): Promise<ExportResult> {
   if (input.includeCompile !== true) {
     argv.push(`--exclude=${base}/.compile`);
   }
+  if (input.includeRuns !== true) {
+    argv.push(`--exclude=${base}/.runs`);
+  }
   argv.push(base);
 
   log({
@@ -140,6 +153,7 @@ export async function runExport(input: RunExportInput): Promise<ExportResult> {
     almanacDir: input.almanacDir,
     outputPath: input.outputPath,
     includeCompile: input.includeCompile === true,
+    includeRuns: input.includeRuns === true,
   });
 
   const result = await spawner.spawn(argv, { cwd: parent });
