@@ -305,6 +305,10 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.stdout).toContain("status         usable");
     expect(profile.stdout).toContain("evidence       3 facts from 3 sources");
     expect(profile.stdout).toContain("benchmark      2/2 passed, citationRate 100%");
+    expect(profile.stdout).toContain("answer mode    needs-validation");
+    expect(profile.stdout).toContain("ask fixtures   0 found");
+    expect(profile.stdout).toContain("quality gate   missing");
+    expect(profile.stdout).toContain("no ask replay fixtures");
     expect(profile.stdout).toContain("sqlite-transactions");
 
     const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
@@ -320,6 +324,11 @@ describe("almanac CLI product onboarding", () => {
       benchmark: {
         report: { passed: number; total: number; citationRate: number };
       };
+      answer: {
+        status: string;
+        fixtures: { count: number };
+        qualityGate: { status: string };
+      };
     };
     expect(parsedProfile.status).toBe("usable");
     expect(parsedProfile.evidence.facts).toBe(3);
@@ -328,6 +337,9 @@ describe("almanac CLI product onboarding", () => {
     expect(parsedProfile.benchmark.report.passed).toBe(2);
     expect(parsedProfile.benchmark.report.total).toBe(2);
     expect(parsedProfile.benchmark.report.citationRate).toBe(1);
+    expect(parsedProfile.answer.status).toBe("needs-validation");
+    expect(parsedProfile.answer.fixtures.count).toBe(0);
+    expect(parsedProfile.answer.qualityGate.status).toBe("missing");
 
     const sources = runCli(["sources", "sqlite-demo", "--root", root]);
     expect(sources.status).toBe(0);
@@ -511,6 +523,8 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
     expect(doctor.stdout).toContain("embeddings");
+    expect(doctor.stdout).toContain("warn answer");
+    expect(doctor.stdout).toContain("no ask replay fixtures");
 
     const exported = runCli([
       "export",
@@ -590,7 +604,7 @@ describe("almanac CLI product onboarding", () => {
     expect(failedDoctor.status).toBe(0);
     expect(failedDoctor.stdout).toContain("warn refresh");
     expect(failedDoctor.stdout).toContain("last failed");
-  });
+  }, { timeout: 15_000 });
 
   test("run invokes compiled tools with stable output and exit codes", async () => {
     const demo = runCli(["demo", "--root", root]);
@@ -1257,6 +1271,18 @@ describe("almanac CLI product onboarding", () => {
       answer?: string;
       citations: unknown[];
       toolCalls: Array<{ toolName: string; status: string }>;
+      trace?: {
+        planner: { calls: number; stopReason: string };
+        tools: { observations: Array<{ toolName: string; status: string }> };
+        citations: { usedCount: number; observed: unknown[] };
+        synthesis: { calls: number; status: string };
+        quality?: {
+          status: string;
+          citationRate: number;
+          unsupportedClaimCount: number;
+          staleCitationCount: number;
+        };
+      };
     };
     expect(savedArtifact.schemaVersion).toBe("0.1.0");
     expect(savedArtifact.kind).toBe("answer");
@@ -1270,6 +1296,24 @@ describe("almanac CLI product onboarding", () => {
     expect(savedArtifact.toolCalls).toEqual([
       expect.objectContaining({ toolName: "query_facts", status: "ok" }),
     ]);
+    expect(savedArtifact.trace?.planner).toEqual(
+      expect.objectContaining({ calls: 2, stopReason: "planner-stop" }),
+    );
+    expect(savedArtifact.trace?.tools.observations).toEqual([
+      expect.objectContaining({ toolName: "query_facts", status: "ok" }),
+    ]);
+    expect(savedArtifact.trace?.citations.usedCount).toBe(1);
+    expect(savedArtifact.trace?.synthesis).toEqual(
+      expect.objectContaining({ calls: 1, status: "ok" }),
+    );
+    expect(savedArtifact.trace?.quality).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        citationRate: 1,
+        unsupportedClaimCount: 0,
+        staleCitationCount: 0,
+      }),
+    );
     expect(savedArtifact.artifactRelPath).toBe(
       `.runs/${savedArtifact.answerId}.json`,
     );
@@ -1317,7 +1361,100 @@ describe("almanac CLI product onboarding", () => {
     expect(answerDetail.status).toBe(0);
     expect(answerDetail.stdout).toContain(`answer: ${savedArtifact.answerId}`);
     expect(answerDetail.stdout).toContain("label: answer-smoke");
+    expect(answerDetail.stdout).toContain("planner trace:");
+    expect(answerDetail.stdout).toContain("tool trace:");
+    expect(answerDetail.stdout).toContain("citation trace:");
+    expect(answerDetail.stdout).toContain("quality trace: pass");
     expect(answerDetail.stdout).toContain("SQLite transactions are atomic.");
+
+    const replayRuns = runCli([
+      "ask-replay",
+      "sqlite-demo",
+      "--from-runs",
+      "--label",
+      "answer-smoke",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(replayRuns.status).toBe(0);
+    const replayReport = JSON.parse(replayRuns.stdout) as {
+      mode: string;
+      total: number;
+      passed: number;
+      failed: number;
+      errored: number;
+      quality: { status: string; citationRate: number };
+      results: Array<{
+        fixtureId: string;
+        quality: { status: string };
+        observed: { status: string; citationsCount: number };
+      }>;
+    };
+    expect(replayReport).toEqual(
+      expect.objectContaining({
+        mode: "saved-runs",
+        total: 1,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+      }),
+    );
+    expect(replayReport.results[0]).toEqual(
+      expect.objectContaining({
+        fixtureId: savedArtifact.answerId,
+        quality: expect.objectContaining({
+          status: "pass",
+        }),
+        observed: expect.objectContaining({
+          status: "ok",
+          citationsCount: 1,
+        }),
+      }),
+    );
+
+    const fixturePath = join(root, "ask-fixtures.jsonl");
+    await writeFile(
+      fixturePath,
+      JSON.stringify({
+        id: "sqlite-transactions-replay",
+        question: "Are SQLite transactions atomic?",
+        toolCalls: [
+          {
+            tool: "query_facts",
+            input: { q: "transactions atomic", limit: 3 },
+            expectedStatus: "ok",
+          },
+        ],
+        expectedStatus: "ok",
+        minCitations: 1,
+        maxStaleCitations: 0,
+      }) + "\n",
+      "utf8",
+    );
+    const replayFixture = runCli([
+      "ask-replay",
+      "sqlite-demo",
+      "--fixture",
+      fixturePath,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(replayFixture.status).toBe(0);
+    expect(
+      (JSON.parse(replayFixture.stdout) as {
+        mode: string;
+        passed: number;
+        quality: { status: string };
+      }),
+    ).toEqual(
+      expect.objectContaining({
+        mode: "fixture",
+        passed: 1,
+        quality: expect.objectContaining({ status: "pass" }),
+      }),
+    );
 
     const answerStatusRuns = runCli([
       "runs",

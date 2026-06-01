@@ -243,6 +243,37 @@ almanac ask sqlite-demo "Are SQLite transactions atomic?" \
 almanac runs sqlite-demo --kind answer --json --root "$tmp"
 ```
 
+Replay saved answers or hand-authored fixture rows without provider keys:
+
+```bash
+almanac ask-replay sqlite-demo \
+  --from-runs \
+  --label rc-answer \
+  --json \
+  --root "$tmp"
+
+cat > "$tmp/ask-fixtures.jsonl" <<'JSONL'
+{"id":"sqlite-transactions-ok","question":"Are SQLite transactions atomic?","toolCalls":[{"tool":"query_facts","input":{"q":"transactions atomic"},"expectedStatus":"ok"}],"expectedStatus":"ok","minCitations":1,"maxStaleCitations":0}
+JSONL
+
+almanac ask-replay sqlite-demo \
+  --fixture "$tmp/ask-fixtures.jsonl" \
+  --json \
+  --root "$tmp"
+```
+
+Replay reports include an ask-mode quality gate. The gate records citation
+rate, unsupported claim count, stale citation count, and abstention
+expected/actual matching separately from benchmark fixtures. Fixture rows can
+set `unsupportedClaims`, `minCitations`, `maxStaleCitations`, and
+`expectedAbstentionReason` to make replay failures explicit.
+
+`profile` and `doctor` also expose answer readiness without calling a provider:
+ask fixture coverage, latest saved answer status, latest answer quality verdict,
+and stale citation warnings. Missing ask fixtures or missing saved answer
+quality gates are warnings so an otherwise compiled almanac can remain usable
+while answer mode still needs validation.
+
 The output exit code is part of the contract: grounded `ok` answers exit `0`,
 abstentions and model/tool failures exit `1`, and usage or tool-input errors
 exit `2`. Scripts should inspect the JSON `status` when they need to

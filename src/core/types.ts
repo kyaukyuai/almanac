@@ -3607,10 +3607,18 @@ export const RefreshArtifactSchema = z
   });
 export type RefreshArtifact = z.infer<typeof RefreshArtifactSchema>;
 
+export const AnswerToolCallStatusSchema = z.enum([
+  "ok",
+  "tool-error",
+  "tool-not-found",
+  "bad-tool-input",
+]);
+export type AnswerToolCallStatus = z.infer<typeof AnswerToolCallStatusSchema>;
+
 export const AnswerToolCallSummarySchema = z.object({
   toolName: ToolNameSchema,
   input: z.record(z.unknown()).nullable(),
-  status: z.enum(["ok", "tool-error", "tool-not-found", "bad-tool-input"]),
+  status: AnswerToolCallStatusSchema,
   durationMs: z.number().int().nonnegative(),
   citationsCount: z.number().int().nonnegative(),
   error: ToolErrorSchema.optional(),
@@ -3618,6 +3626,114 @@ export const AnswerToolCallSummarySchema = z.object({
 export type AnswerToolCallSummary = z.infer<
   typeof AnswerToolCallSummarySchema
 >;
+
+export const AnswerTracePlannerStepSchema = z.object({
+  stepIndex: z.number().int().nonnegative(),
+  plannerCall: z.number().int().nonnegative(),
+  action: z.enum(["call_tool", "stop", "error"]),
+  outcome: z.enum([
+    "executed",
+    "failed",
+    "stopped",
+    "budget-exhausted",
+    "model-error",
+  ]),
+  toolName: ToolNameSchema.optional(),
+  input: z.record(z.unknown()).nullable().optional(),
+  stopReason: z.string().min(1).max(500).optional(),
+  error: ToolErrorSchema.optional(),
+});
+export type AnswerTracePlannerStep = z.infer<
+  typeof AnswerTracePlannerStepSchema
+>;
+
+export const AnswerTraceToolObservationSchema = z.object({
+  callIndex: z.number().int().nonnegative(),
+  toolName: ToolNameSchema,
+  input: z.record(z.unknown()).nullable(),
+  status: AnswerToolCallStatusSchema,
+  durationMs: z.number().int().nonnegative(),
+  citationsCount: z.number().int().nonnegative(),
+  freshness: ToolResultFreshnessSchema.optional(),
+  errorCode: z.string().min(1).max(80).optional(),
+});
+export type AnswerTraceToolObservation = z.infer<
+  typeof AnswerTraceToolObservationSchema
+>;
+
+export const AnswerTraceCitationLedgerEntrySchema = z.object({
+  citationKey: z.string().min(1).max(2048),
+  sourceId: z
+    .string()
+    .max(64)
+    .regex(SOURCE_ID, "must match SourcesFile source id format"),
+  url: z.string().url(),
+  fetchedAt: z.string().regex(ISO_8601),
+  sourceTimestamp: z.string().regex(ISO_8601).optional(),
+  observedInCallIndexes: z
+    .array(z.number().int().nonnegative())
+    .min(1)
+    .max(20),
+  usedInAnswer: z.boolean(),
+  stale: z.boolean(),
+  freshness: ToolResultFreshnessSchema.optional(),
+});
+export type AnswerTraceCitationLedgerEntry = z.infer<
+  typeof AnswerTraceCitationLedgerEntrySchema
+>;
+
+export const AnswerTraceQualitySchema = z.object({
+  status: z.enum(["pass", "fail"]),
+  citationRate: z.number().min(0).max(1),
+  unsupportedClaimCount: z.number().int().nonnegative(),
+  staleCitationCount: z.number().int().nonnegative(),
+  abstention: z.object({
+    expected: z.boolean(),
+    actual: z.boolean(),
+    matches: z.boolean(),
+    expectedReason: z.string().min(1).max(2000).optional(),
+    actualReason: z.string().min(1).max(2000).optional(),
+  }),
+  reasons: z.array(z.string().min(1).max(500)).max(20),
+});
+export type AnswerTraceQuality = z.infer<typeof AnswerTraceQualitySchema>;
+
+export const AnswerTraceSchema = z.object({
+  schemaVersion: z.literal("0.1.0"),
+  planner: z.object({
+    promptVersion: z.string().min(1).max(80),
+    model: z.string().min(1).max(120),
+    calls: z.number().int().nonnegative(),
+    stopReason: z
+      .enum(["planner-stop", "max-tool-calls", "max-duration", "model-error"]),
+    maxToolCalls: z.number().int().positive(),
+    maxDurationMs: z.number().int().positive(),
+    steps: z.array(AnswerTracePlannerStepSchema).max(40),
+  }),
+  tools: z.object({
+    observations: z.array(AnswerTraceToolObservationSchema).max(20),
+  }),
+  citations: z.object({
+    observed: z.array(AnswerTraceCitationLedgerEntrySchema).max(100),
+    usedCount: z.number().int().nonnegative(),
+    staleCount: z.number().int().nonnegative(),
+  }),
+  synthesis: z.object({
+    promptVersion: z.string().min(1).max(80),
+    model: z.string().min(1).max(120),
+    calls: z.number().int().nonnegative(),
+    status: AnswerArtifactStatusSchema,
+  }),
+  abstain: z
+    .object({
+      status: AnswerArtifactStatusSchema,
+      reason: z.string().min(1).max(2000),
+      stage: z.enum(["planner", "tool", "evidence", "synthesis", "citation-gate"]),
+    })
+    .optional(),
+  quality: AnswerTraceQualitySchema.optional(),
+});
+export type AnswerTrace = z.infer<typeof AnswerTraceSchema>;
 
 export const AnswerArtifactSchema = z
   .object({
@@ -3658,6 +3774,7 @@ export const AnswerArtifactSchema = z
       })
       .passthrough()
       .optional(),
+    trace: AnswerTraceSchema.optional(),
     durationMs: z.number().int().nonnegative(),
     error: ToolErrorSchema.optional(),
   })

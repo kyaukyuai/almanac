@@ -24,6 +24,7 @@ import {
 import {
   CitationSchema,
   ToolNameSchema,
+  type AnswerTrace,
   type AnswerArtifactStatus,
   type AnswerToolCallSummary,
   type Citation,
@@ -40,6 +41,7 @@ import {
   type LlmProvider,
   type LlmUsage,
 } from "../llm/provider.ts";
+import { evaluateAnswerQualityGate } from "./answer-quality.ts";
 
 export const ANSWER_PLANNER_PROMPT_STAGE_ID = "answer-planner";
 export const ANSWER_PLANNER_PROMPT_VERSION = "planner-v1";
@@ -128,6 +130,8 @@ export interface AnswerToolPlanningSession {
   stopReason: AnswerPlanningStopReason;
   toolCalls: AnswerToolCallObservation[];
   plannerCalls: number;
+  maxToolCalls: number;
+  maxDurationMs: number;
   model: string;
   durationMs: number;
   usage: {
@@ -160,6 +164,7 @@ export interface AnswerSession {
     planner: typeof ANSWER_PLANNER_PROMPT_VERSION;
     synthesis: typeof ANSWER_SYNTHESIS_PROMPT_VERSION;
   };
+  trace: AnswerTrace;
   durationMs: number;
   usage: {
     inputTokens: number;
@@ -193,6 +198,7 @@ export async function runAnswerSession(
       planning,
       status: "model-error",
       synthesisCalls: 0,
+      synthesisModel,
       durationMs: elapsedMs(now, startedAt),
       error: planning.error ?? {
         code: "model-error",
@@ -206,6 +212,7 @@ export async function runAnswerSession(
       planning,
       status: "budget-exhausted",
       synthesisCalls: 0,
+      synthesisModel,
       durationMs: elapsedMs(now, startedAt),
       error: {
         code: "budget-exhausted",
@@ -221,6 +228,7 @@ export async function runAnswerSession(
       planning,
       status: "abstained",
       synthesisCalls: 0,
+      synthesisModel,
       durationMs: elapsedMs(now, startedAt),
       abstentionReason: abstentionReasonForNoEvidence(planning.toolCalls),
     });
@@ -242,6 +250,7 @@ export async function runAnswerSession(
       planning,
       status: "model-error",
       synthesisCalls: 1,
+      synthesisModel,
       durationMs: elapsedMs(now, startedAt),
       usage: planning.usage,
       error: modelError(cause),
@@ -254,6 +263,7 @@ export async function runAnswerSession(
     planning,
     status: gated.status,
     synthesisCalls: 1,
+    synthesisModel,
     durationMs: elapsedMs(now, startedAt),
     usage,
     answer: gated.answer,
@@ -301,6 +311,8 @@ export async function runAnswerToolPlanningSession(
           startedAt,
           now,
           usage,
+          maxToolCalls,
+          maxDurationMs,
         });
       }
 
@@ -330,6 +342,8 @@ export async function runAnswerToolPlanningSession(
             startedAt,
             now,
             usage,
+            maxToolCalls,
+            maxDurationMs,
           });
         }
         return sessionResult({
@@ -343,6 +357,8 @@ export async function runAnswerToolPlanningSession(
           startedAt,
           now,
           usage,
+          maxToolCalls,
+          maxDurationMs,
           error: modelError(cause),
         });
       }
@@ -359,6 +375,8 @@ export async function runAnswerToolPlanningSession(
           startedAt,
           now,
           usage,
+          maxToolCalls,
+          maxDurationMs,
         });
       }
 
@@ -374,6 +392,8 @@ export async function runAnswerToolPlanningSession(
           startedAt,
           now,
           usage,
+          maxToolCalls,
+          maxDurationMs,
         });
       }
 
@@ -398,6 +418,8 @@ export async function runAnswerToolPlanningSession(
       startedAt,
       now,
       usage,
+      maxToolCalls,
+      maxDurationMs,
     });
   } finally {
     if (ownsRuntime) {
@@ -676,6 +698,8 @@ function sessionResult(input: {
   startedAt: number;
   now: () => number;
   usage: AnswerToolPlanningSession["usage"];
+  maxToolCalls: number;
+  maxDurationMs: number;
   error?: ToolError;
 }): AnswerToolPlanningSession {
   return {
@@ -686,6 +710,8 @@ function sessionResult(input: {
     stopReason: input.stopReason,
     toolCalls: input.toolCalls,
     plannerCalls: input.plannerCalls,
+    maxToolCalls: input.maxToolCalls,
+    maxDurationMs: input.maxDurationMs,
     model: input.model,
     durationMs: elapsedMs(input.now, input.startedAt),
     usage: input.usage,
@@ -836,6 +862,7 @@ function answerSessionFromPlanning(input: {
   planning: AnswerToolPlanningSession;
   status: AnswerArtifactStatus;
   synthesisCalls: number;
+  synthesisModel: string;
   durationMs?: number;
   usage?: AnswerSession["usage"];
   answer?: string;
@@ -863,10 +890,204 @@ function answerSessionFromPlanning(input: {
       planner: ANSWER_PLANNER_PROMPT_VERSION,
       synthesis: ANSWER_SYNTHESIS_PROMPT_VERSION,
     },
+    trace: buildAnswerTrace(input),
     durationMs: input.durationMs ?? input.planning.durationMs,
     usage: input.usage ?? input.planning.usage,
     ...(input.error === undefined ? {} : { error: input.error }),
   };
+}
+
+function buildAnswerTrace(input: {
+  planning: AnswerToolPlanningSession;
+  status: AnswerArtifactStatus;
+  synthesisCalls: number;
+  synthesisModel: string;
+  abstentionReason?: string;
+  citations?: Citation[];
+  error?: ToolError;
+}): AnswerTrace {
+  const usedCitationKeys = new Set(
+    (input.citations ?? []).map((citation) => citationKey(citation)),
+  );
+  const observedCitations = buildCitationTraceLedger(
+    input.planning.toolCalls,
+    usedCitationKeys,
+  );
+  const staleCitationCount = observedCitations.filter(
+    (citation) => citation.stale,
+  ).length;
+  return {
+    schemaVersion: "0.1.0",
+    planner: {
+      promptVersion: ANSWER_PLANNER_PROMPT_VERSION,
+      model: input.planning.model,
+      calls: input.planning.plannerCalls,
+      stopReason: input.planning.stopReason,
+      maxToolCalls: input.planning.maxToolCalls,
+      maxDurationMs: input.planning.maxDurationMs,
+      steps: buildPlannerTraceSteps(input.planning),
+    },
+    tools: {
+      observations: input.planning.toolCalls.map((call) => ({
+        callIndex: call.callIndex,
+        toolName: call.toolName,
+        input: call.input,
+        status: call.status,
+        durationMs: call.durationMs,
+        citationsCount: call.citationsCount,
+        ...(call.freshness === undefined ? {} : { freshness: call.freshness }),
+        ...(call.error === undefined ? {} : { errorCode: call.error.code }),
+      })),
+    },
+    citations: {
+      observed: observedCitations,
+      usedCount: usedCitationKeys.size,
+      staleCount: staleCitationCount,
+    },
+    synthesis: {
+      promptVersion: ANSWER_SYNTHESIS_PROMPT_VERSION,
+      model: input.synthesisModel,
+      calls: input.synthesisCalls,
+      status: input.status,
+    },
+    ...traceAbstain(input),
+    quality: evaluateAnswerQualityGate({
+      expectedStatus: input.status,
+      observedStatus: input.status,
+      citationsCount: usedCitationKeys.size,
+      staleCitationCount,
+      ...(input.abstentionReason === undefined
+        ? {}
+        : {
+            expectedAbstentionReason: input.abstentionReason,
+            observedAbstentionReason: input.abstentionReason,
+          }),
+    }),
+  };
+}
+
+function buildPlannerTraceSteps(
+  planning: AnswerToolPlanningSession,
+): AnswerTrace["planner"]["steps"] {
+  const steps: AnswerTrace["planner"]["steps"] = planning.toolCalls.map(
+    (call, index) => ({
+      stepIndex: index,
+      plannerCall: index + 1,
+      action: "call_tool",
+      outcome: call.status === "ok" ? "executed" : "failed",
+      toolName: call.toolName,
+      input: call.input,
+      ...(call.error === undefined ? {} : { error: call.error }),
+    }),
+  );
+
+  const stopOutcome =
+    planning.stopReason === "model-error"
+      ? "model-error"
+      : planning.stopReason === "max-duration" ||
+          planning.stopReason === "max-tool-calls"
+      ? "budget-exhausted"
+      : "stopped";
+  steps.push({
+    stepIndex: steps.length,
+    plannerCall: planning.plannerCalls,
+    action: planning.stopReason === "model-error" ? "error" : "stop",
+    outcome: stopOutcome,
+    stopReason: planning.stopReason,
+    ...(planning.error === undefined ? {} : { error: planning.error }),
+  });
+  return steps;
+}
+
+function buildCitationTraceLedger(
+  observations: AnswerToolCallObservation[],
+  usedCitationKeys: Set<string>,
+): AnswerTrace["citations"]["observed"] {
+  const byKey = new Map<string, AnswerTrace["citations"]["observed"][number]>();
+  for (const observation of observations) {
+    for (const citation of observation.citations ?? []) {
+      const key = citationKey(citation);
+      const stale = observation.freshness?.staleness === "stale";
+      const existing = byKey.get(key);
+      if (existing === undefined) {
+        byKey.set(key, {
+          citationKey: key,
+          sourceId: citation.sourceId,
+          url: citation.url,
+          fetchedAt: citation.fetchedAt,
+          ...(citation.sourceTimestamp === undefined
+            ? {}
+            : { sourceTimestamp: citation.sourceTimestamp }),
+          observedInCallIndexes: [observation.callIndex],
+          usedInAnswer: usedCitationKeys.has(key),
+          stale,
+          ...(observation.freshness === undefined
+            ? {}
+            : { freshness: observation.freshness }),
+        });
+        continue;
+      }
+      if (!existing.observedInCallIndexes.includes(observation.callIndex)) {
+        existing.observedInCallIndexes.push(observation.callIndex);
+      }
+      existing.usedInAnswer = existing.usedInAnswer || usedCitationKeys.has(key);
+      existing.stale = existing.stale || stale;
+      if (existing.freshness === undefined && observation.freshness !== undefined) {
+        existing.freshness = observation.freshness;
+      }
+    }
+  }
+  return Array.from(byKey.values()).sort((a, b) =>
+    `${a.sourceId}\n${a.url}`.localeCompare(`${b.sourceId}\n${b.url}`)
+  );
+}
+
+function traceAbstain(input: {
+  planning: AnswerToolPlanningSession;
+  status: AnswerArtifactStatus;
+  synthesisCalls: number;
+  abstentionReason?: string;
+  error?: ToolError;
+}): Pick<AnswerTrace, "abstain"> | Record<string, never> {
+  if (input.status === "ok") return {};
+  const reason =
+    input.abstentionReason ?? input.error?.code ?? input.planning.stopReason;
+  return {
+    abstain: {
+      status: input.status,
+      reason,
+      stage: traceAbstainStage({
+        status: input.status,
+        reason,
+        synthesisCalls: input.synthesisCalls,
+        planningStatus: input.planning.status,
+      }),
+    },
+  };
+}
+
+function traceAbstainStage(input: {
+  status: AnswerArtifactStatus;
+  reason: string;
+  synthesisCalls: number;
+  planningStatus: AnswerPlanningStatus;
+}): NonNullable<AnswerTrace["abstain"]>["stage"] {
+  if (input.status === "budget-exhausted") return "planner";
+  if (input.status === "model-error") {
+    return input.synthesisCalls > 0 ? "synthesis" : "planner";
+  }
+  if (input.status === "abstained") {
+    if (input.reason === "model-abstained") return "synthesis";
+    if (
+      input.reason === "unobserved-citation" ||
+      input.reason === "missing-answer" ||
+      (input.reason === "no-citations" && input.synthesisCalls > 0)
+    ) {
+      return "citation-gate";
+    }
+    return "evidence";
+  }
+  return input.planningStatus === "model-error" ? "planner" : "tool";
 }
 
 function abstentionReasonForNoEvidence(

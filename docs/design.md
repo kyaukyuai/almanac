@@ -971,7 +971,18 @@ The v0.7 release gate passed on 2026-06-01 with `bun run typecheck`,
 grounded and abstention `ask` checks, saved answer artifact visibility through
 `runs --kind answer`, and export inclusion/exclusion coverage for `.runs/`.
 
-### v0.8+ (long-tail)
+### v0.8 — Answer quality and diagnostics
+
+v0.8 is planned as the answer-mode hardening release. It should add structured
+planner/tool/citation/abstain traces to answer artifacts, deterministic ask
+replay from saved runs or fixture JSONL, ask-mode quality gates, and
+doctor/profile answer readiness signals.
+
+See [`docs/v0.8-plan.md`](./v0.8-plan.md) for the planned sequence and the
+gbrain-derived lessons that are intentionally scoped to diagnostics, replay,
+and readiness rather than broad personal-memory runtime features.
+
+### v0.9+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
@@ -986,7 +997,7 @@ grounded and abstention `ask` checks, saved answer artifact visibility through
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, and the v0.6 refresh contract
-documented in §8 above. Active questions carrying into v0.8+:
+documented in §8 above. Active questions carrying into future releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local

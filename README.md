@@ -94,6 +94,11 @@ orchestration boundary over compiled tools, with strict cited-answer or
 abstain behavior and optional saved answer artifacts under `.runs/`. See
 [`docs/v0.7-plan.md`](./docs/v0.7-plan.md).
 
+v0.8 is planned as answer quality and diagnostics: structured answer traces,
+deterministic ask replay fixtures, answer-mode quality gates over replayed
+answers, and doctor/profile readiness for answer sessions. See
+[`docs/v0.8-plan.md`](./docs/v0.8-plan.md).
+
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
 transport, and `almanac wiki` inspection exports. The release also includes the
@@ -164,6 +169,9 @@ structurally closed.
   `AlmanacRuntime.execTool`; synthesis must cite observed tool citations or
   abstain. Requires `ANTHROPIC_API_KEY` for real runs, supports `--json`,
   `--model`, and explicit `--save` answer artifacts.
+- **`almanac ask-replay <id>`** — replay saved answer artifacts or JSONL answer
+  fixtures without an LLM provider. Use `--from-runs` with an optional
+  `--label`, or `--fixture <path>` for deterministic CI checks.
 - **`almanac runs <id>`** — list, inspect, filter, and prune saved
   `.runs/run-*.json` tool artifacts, `.runs/refresh-*.json` refresh artifacts,
   and `.runs/answer-*.json` answer artifacts. Use `--kind tool`,
@@ -295,6 +303,16 @@ sequence remains in
   retention, and explicit export inclusion.
 - Release smoke covers grounded answers, abstention, saved answer artifacts,
   `runs --kind answer`, answer retention, and export inclusion/exclusion.
+
+### v0.8 — planned
+
+- Structured planner/tool/citation/abstain traces for saved answer artifacts.
+- Improved `almanac runs <id> <answer-id>` detail output for answer debugging.
+- Deterministic ask replay from saved answer runs or fixture JSONL.
+- Ask-mode quality gates for citation rate, unsupported claims, stale citation
+  handling, and expected abstention behavior in live traces and replay reports.
+- `doctor` and `profile` answer readiness signals for fixture coverage, latest
+  saved answer status, and latest quality gate verdict.
 
 ## Changelog
 

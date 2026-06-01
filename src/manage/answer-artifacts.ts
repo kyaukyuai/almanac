@@ -45,6 +45,7 @@ export interface SaveAnswerArtifactOptions {
   citations?: Citation[];
   freshness?: ToolResultFreshness;
   usage?: AnswerArtifact["usage"];
+  trace?: AnswerArtifact["trace"];
   error?: ToolError;
 }
 
@@ -99,6 +100,7 @@ export async function saveAnswerArtifact(
     citations: options.citations ?? [],
     ...(options.freshness === undefined ? {} : { freshness: options.freshness }),
     ...(options.usage === undefined ? {} : { usage: options.usage }),
+    ...(options.trace === undefined ? {} : { trace: options.trace }),
     durationMs: Date.parse(options.finishedAt) - Date.parse(options.startedAt),
     ...(options.error === undefined ? {} : { error: options.error }),
   });
