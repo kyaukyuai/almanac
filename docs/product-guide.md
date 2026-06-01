@@ -132,6 +132,11 @@ almanac refresh run sqlite-demo \
   --root "$tmp"
 ```
 
+For recurring cron, GitHub Actions, or launchd usage, see
+[`refresh-scheduler.md`](./refresh-scheduler.md). That contract documents exit
+codes, provider key requirements, lock conflicts, saved refresh artifacts,
+retention, and export behavior.
+
 ## Run artifacts
 
 Use `almanac run --save` when a local tool invocation should leave an audit
