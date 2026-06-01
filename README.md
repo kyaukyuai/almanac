@@ -37,6 +37,10 @@ End-user conversational use still happens through the host LLM (Claude Code,
 Cursor, Claude Desktop, …) after `register`. The `almanac` CLI also includes a
 deterministic `run --tool` path so users and CI can validate compiled tools
 locally without standing up an MCP client.
+For release gates and local evaluation, `almanac ask` provides an optional
+one-shot answer path over the same compiled tools. Unlike `run --tool`, it is
+LLM-backed and requires `ANTHROPIC_API_KEY` unless `ALMANAC_LLM=mock` is used
+for smoke tests.
 
 An almanac has **no persona**. It is a domain-specialized retrieval-and-tools
 layer that returns sourced, freshness-aware answers. Every fact carries a
@@ -62,7 +66,7 @@ See [`docs/design.md`](./docs/design.md) for the full technical specification.
 
 ## Status
 
-**v0.6.0 (main).** The 12-stage compile pipeline (bootstrap → domain analysis
+**v0.7.0 release candidate (main).** The 12-stage compile pipeline (bootstrap → domain analysis
 → source discovery → fact extraction → tool design + implementation →
 knowledge index → contract files → SKILL.md → benchmark) runs end-to-end
 against both mocked and real Anthropic LLMs. The runtime (`almanac serve`) is
@@ -85,8 +89,8 @@ refresh attempts without opening the JSON artifact by hand. See
 [`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md) for the cron, CI,
 and launchd contract.
 
-v0.7 planning focuses on an optional LLM-backed `almanac ask` mode: a one-shot
-answer orchestration boundary over compiled tools, with strict cited-answer or
+v0.7 adds an optional LLM-backed `almanac ask` mode: a one-shot answer
+orchestration boundary over compiled tools, with strict cited-answer or
 abstain behavior and optional saved answer artifacts under `.runs/`. See
 [`docs/v0.7-plan.md`](./docs/v0.7-plan.md).
 
@@ -155,10 +159,16 @@ structurally closed.
   JSON input, human or JSON output, and citation visibility. Use
   `--list-tools` to inspect enabled tools and `--save` to persist an audit
   artifact.
+- **`almanac ask <id> <question>`** — run a one-shot LLM-backed answer session
+  over enabled compiled tools. The planner can only invoke
+  `AlmanacRuntime.execTool`; synthesis must cite observed tool citations or
+  abstain. Requires `ANTHROPIC_API_KEY` for real runs, supports `--json`,
+  `--model`, and explicit `--save` answer artifacts.
 - **`almanac runs <id>`** — list, inspect, filter, and prune saved
-  `.runs/run-*.json` tool artifacts and `.runs/refresh-*.json` refresh
-  artifacts. Use `--kind tool` or `--kind refresh` to narrow history. Cleanup
-  is dry-run by default and requires `--apply` to delete files.
+  `.runs/run-*.json` tool artifacts, `.runs/refresh-*.json` refresh artifacts,
+  and `.runs/answer-*.json` answer artifacts. Use `--kind tool`,
+  `--kind refresh`, or `--kind answer` to narrow history. Cleanup is dry-run by
+  default and requires `--apply` to delete files.
 - **`almanac refresh due <id>`** — read-only refresh planning for CI/cron:
   reports expired sources, failed/pending stages, missing benchmark reports,
   and the recommended `--from-stage` without writing files or requiring
@@ -275,7 +285,7 @@ sequence remains in
   hardening so refresh artifacts remain private unless `--include-runs` is
   explicitly requested.
 
-### v0.7 — planned
+### v0.7 — release candidate
 
 - One-shot `almanac ask` answer orchestration over compiled tools.
 - LLM-backed tool selection with explicit call and duration budgets.
@@ -283,6 +293,8 @@ sequence remains in
   results.
 - Optional saved answer artifacts under `.runs/`, with kind-aware listing,
   retention, and explicit export inclusion.
+- Release smoke covers grounded answers, abstention, saved answer artifacts,
+  `runs --kind answer`, answer retention, and export inclusion/exclusion.
 
 ## Changelog
 

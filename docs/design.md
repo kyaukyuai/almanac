@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.6.0 shipped** · last updated 2026-06-01.
+Status: **v0.7.0 release candidate** · last updated 2026-06-01.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -18,10 +18,12 @@ from a single domain name. The compiled almanac is consumed by host LLMs
 - **Claude Code Skill** (`adapters/skill/SKILL.md`) — secondary, registered
   alongside the MCP server
 
-The `almanac` CLI itself is for **build, management, and deterministic local
-tool checks**: `new`, `update`, `list`, `inspect`, `run`, `runs`, `serve`,
-`register`. It does not include an LLM question orchestrator. End-user
-conversational use of an almanac happens through the host LLM.
+The `almanac` CLI itself is for **build, management, deterministic local tool
+checks, and release-gate answer checks**: `new`, `update`, `list`, `inspect`,
+`run`, `ask`, `runs`, `serve`, `register`. End-user conversational use of an
+almanac still happens primarily through the host LLM, but v0.7 adds `ask` as an
+explicit one-shot local answer orchestration boundary for verification and
+automation.
 
 ### What an almanac is *not*
 
@@ -131,8 +133,10 @@ health check) is implemented as a tool.
 ├── tests/
 │   ├── positive.jsonl
 │   └── negative.jsonl
-├── .runs/                  # optional saved `almanac run --save` audit records
-│   └── run-<timestamp>-<id>.json
+├── .runs/                  # optional saved operational audit records
+│   ├── run-<timestamp>-<id>.json
+│   ├── refresh-<timestamp>-<id>.json
+│   └── answer-<timestamp>-<id>.json
 └── .compile/
     ├── compile-state.json  # stage status, hashes, prompt versions
     ├── domain-spec.json    # Stage 1 output
@@ -148,9 +152,10 @@ can be regenerated from the SoT layer without loss.
 
 ## 3. CLI surface
 
-The CLI is for **build, management, and deterministic local runtime
-validation**. End-user conversational use still happens through MCP and the
-host LLM.
+The CLI is for **build, management, deterministic local runtime validation, and
+release-gate answer validation**. End-user conversational use still happens
+through MCP and the host LLM; `ask` is a local one-shot verification path, not
+a resident chat surface.
 
 | Command                                            | Purpose                                       | v0.1 |
 |----------------------------------------------------|-----------------------------------------------|------|
@@ -159,6 +164,7 @@ host LLM.
 | `almanac list`                                     | list compiled almanacs                        | ✅   |
 | `almanac inspect <domain>`                         | DOMAIN.md, tool list, freshness, bench score  | ✅   |
 | `almanac run <domain> --tool <name>`                | invoke one compiled tool locally              | v0.5 |
+| `almanac ask <domain> <question>`                   | one-shot cited answer over compiled tools     | v0.7 |
 | `almanac runs <domain> [runId]`                     | view/prune saved run audit artifacts          | v0.5 |
 | `almanac serve <domain> [--transport=stdio\|http]` | start MCP server for one almanac              | ✅   |
 | `almanac register <domain> --client=<name>`        | write MCP config + place SKILL.md             | ✅   |
@@ -939,10 +945,10 @@ The v0.6 release gate passed on 2026-06-01 with `bun run typecheck`,
 refresh artifact detail and retention checks, lock conflict smoke, and export
 include/exclude checks for refresh artifacts.
 
-### v0.7 — Planned cited answer mode
+### v0.7.0 — Cited answer mode
 
-v0.7 is planned as an optional one-shot answer orchestration layer over the
-compiled runtime:
+v0.7 adds an optional one-shot answer orchestration layer over the compiled
+runtime:
 
 - `almanac ask <id> <question>` asks an LLM to select and call compiled tools
   through `AlmanacRuntime.execTool`.
@@ -951,7 +957,12 @@ compiled runtime:
 - The final answer must cite citations returned by observed tool calls or
   abstain.
 - Saved answer sessions, when explicitly requested, use `.runs/` beside tool
-  and refresh artifacts.
+  and refresh artifacts. They are visible through `almanac runs --kind answer`,
+  can be pruned independently, and are excluded from exports unless
+  `--include-runs` is set.
+- `almanac run --tool` remains deterministic and no-key friendly. `almanac ask`
+  is intentionally LLM-backed and requires `ANTHROPIC_API_KEY` for real
+  provider runs, with `ALMANAC_LLM=mock` available for local smoke tests.
 
 See [`docs/v0.7-plan.md`](./v0.7-plan.md) for the implementation sequence.
 

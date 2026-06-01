@@ -206,6 +206,75 @@ the receiver should get saved tool, refresh, and answer artifacts:
 almanac export sqlite-demo --include-runs --root "$tmp"
 ```
 
+## Answer mode
+
+`almanac ask` is the v0.7 local answer gate. It is intentionally different
+from `almanac run --tool`:
+
+- `run --tool` is deterministic and no-key friendly. It invokes exactly one
+  compiled tool through `AlmanacRuntime.execTool`.
+- `ask` is LLM-backed. It asks the provider to plan bounded tool calls over the
+  compiled tool manifests, executes only those tools through the runtime, then
+  synthesizes a final cited answer or abstains.
+- Real `ask` runs require `ANTHROPIC_API_KEY`. Local smoke tests can use
+  `ALMANAC_LLM=mock` with `ALMANAC_MOCK_RESPONSES`.
+
+Grounded answer:
+
+```bash
+almanac ask sqlite-demo "Are SQLite transactions atomic?" --json --root "$tmp"
+```
+
+Abstention/no-source case:
+
+```bash
+almanac ask sqlite-demo "What is the capital of France?" --json --root "$tmp" || true
+```
+
+Persist an answer artifact explicitly:
+
+```bash
+almanac ask sqlite-demo "Are SQLite transactions atomic?" \
+  --save \
+  --label rc-answer \
+  --json \
+  --root "$tmp"
+
+almanac runs sqlite-demo --kind answer --json --root "$tmp"
+```
+
+The output exit code is part of the contract: grounded `ok` answers exit `0`,
+abstentions and model/tool failures exit `1`, and usage or tool-input errors
+exit `2`. Scripts should inspect the JSON `status` when they need to
+distinguish `abstained`, `tool-error`, `budget-exhausted`, and `model-error`.
+
+Minimal v0.7 release smoke:
+
+```bash
+tmp=$(mktemp -d)
+almanac demo --root "$tmp"
+
+almanac run sqlite-demo \
+  --tool query_facts \
+  --input '{"q":"transactions atomic"}' \
+  --json \
+  --root "$tmp"
+
+almanac ask sqlite-demo "Are SQLite transactions atomic?" --json --root "$tmp"
+almanac ask sqlite-demo "What is the capital of France?" --json --root "$tmp" || true
+
+almanac ask sqlite-demo "Are SQLite transactions atomic?" \
+  --save \
+  --label rc-answer \
+  --json \
+  --root "$tmp"
+
+almanac runs sqlite-demo --kind answer --json --root "$tmp"
+almanac runs sqlite-demo --kind answer --prune --keep-latest 1 --dry-run --json --root "$tmp"
+almanac export sqlite-demo --root "$tmp"
+almanac export sqlite-demo --include-runs --root "$tmp"
+```
+
 ## Human golden benchmarks
 
 Generated Stage 11 fixtures are useful, but product acceptance needs a small
