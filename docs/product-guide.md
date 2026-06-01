@@ -106,6 +106,32 @@ stage failures or pending stages, benchmark report status, and a
 `recommendedFromStage` value suitable for a later `almanac update` or refresh
 runner.
 
+Run a manual refresh when the due check says work is needed, or when an
+operator wants to force a specific stage boundary:
+
+```bash
+almanac refresh run sqlite-demo --root "$tmp"
+almanac refresh run sqlite-demo --from-stage 12-benchmark-run --root "$tmp"
+```
+
+`refresh run` acquires a per-almanac lock before mutating compile state. A lock
+conflict returns a stable `locked` result with nonzero exit code. JSON output is
+intended for CI/cron:
+
+```bash
+almanac refresh run sqlite-demo --from-stage 12-benchmark-run --json --root "$tmp"
+```
+
+Persist a refresh audit artifact explicitly:
+
+```bash
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --save \
+  --label rc-smoke \
+  --root "$tmp"
+```
+
 ## Run artifacts
 
 Use `almanac run --save` when a local tool invocation should leave an audit
