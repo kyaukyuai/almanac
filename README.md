@@ -81,7 +81,9 @@ deterministic refresh decisions without writes, `refresh run` executes a manual
 locked refresh over the update pipeline, and `.runs/` now has a typed envelope
 for both tool artifacts and refresh artifacts. `inspect`, `profile`, and
 `doctor` surface the latest saved refresh run so operators can see failed or
-locked refresh attempts without opening the JSON artifact by hand.
+locked refresh attempts without opening the JSON artifact by hand. See
+[`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md) for the cron, CI,
+and launchd contract.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -159,6 +161,8 @@ structurally closed.
 - **`almanac refresh run <id>`** — execute the refresh recommendation or an
   explicit `--from-stage`, with per-almanac lock protection. Use `--save` with
   `--label`/`--note` to persist a `.runs/refresh-*.json` audit artifact.
+  Scheduler integration guidance lives in
+  [`docs/refresh-scheduler.md`](./docs/refresh-scheduler.md).
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact
   health, source coverage, benchmark status, and latest saved refresh run
   status.
