@@ -325,6 +325,19 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
     expect(doctor.stdout).toContain("embeddings");
+
+    const exported = runCli([
+      "export",
+      "sqlite-demo",
+      "--include-runs",
+      "--output",
+      join(root, "sqlite-demo.tar.gz"),
+      "--root",
+      root,
+    ]);
+    expect(exported.status).toBe(0);
+    expect(exported.stderr).toBe("");
+    expect(exported.stdout).toContain("INCLUDE .runs/");
   });
 
   test("run invokes compiled tools with stable output and exit codes", async () => {

@@ -131,7 +131,10 @@ structurally closed.
   health, source coverage, and benchmark status.
 - **`almanac export <id>`** — package a compiled almanac as a
   portable `.tar.gz` archive (≈190 KiB for a 231-fact almanac).
-  Unpack anywhere; `almanac serve` works immediately.
+  Unpack anywhere; `almanac serve` works immediately. Stage scratch
+  `.compile/` and saved run audit records `.runs/` are excluded by default;
+  use `--include-compile` or `--include-runs` when intentionally handing off
+  those artifacts.
 - **`almanac wiki <id>`** — write a Markdown inspection bundle
   (`README.md`, `sources.md`, `facts.md`, `tools.md`, `benchmark.md`)
   for review, handoff, and debugging.
