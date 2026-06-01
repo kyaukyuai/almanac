@@ -657,6 +657,97 @@ describe("almanac CLI product onboarding", () => {
       "[runId] cannot be combined with --latest, --limit, --status, or --label",
     );
 
+    const pruneDryRun = runCli([
+      "runs",
+      "sqlite-demo",
+      "--prune",
+      "--status",
+      "bad-input",
+      "--keep-latest",
+      "0",
+      "--dry-run",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(pruneDryRun.status).toBe(0);
+    const dryRunParsed = JSON.parse(pruneDryRun.stdout) as {
+      applied: boolean;
+      deletedCount: number;
+      runs: Array<{ runId: string }>;
+    };
+    expect(dryRunParsed.applied).toBe(false);
+    expect(dryRunParsed.deletedCount).toBe(0);
+    expect(dryRunParsed.runs.map((run) => run.runId)).toEqual([
+      badInputArtifact.runId,
+    ]);
+
+    const pruneApply = runCli([
+      "runs",
+      "sqlite-demo",
+      "--prune",
+      "--status",
+      "bad-input",
+      "--keep-latest",
+      "0",
+      "--apply",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(pruneApply.status).toBe(0);
+    const applyParsed = JSON.parse(pruneApply.stdout) as {
+      applied: boolean;
+      deletedCount: number;
+      runs: Array<{ runId: string }>;
+    };
+    expect(applyParsed.applied).toBe(true);
+    expect(applyParsed.deletedCount).toBe(1);
+    expect(applyParsed.runs.map((run) => run.runId)).toEqual([
+      badInputArtifact.runId,
+    ]);
+
+    const prunedRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--status",
+      "bad-input",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(prunedRuns.status).toBe(0);
+    expect(
+      (JSON.parse(prunedRuns.stdout) as { runs: unknown[] }).runs,
+    ).toEqual([]);
+
+    const invalidPruneMode = runCli([
+      "runs",
+      "sqlite-demo",
+      "--prune",
+      "--keep-latest",
+      "1",
+      "--dry-run",
+      "--apply",
+      "--root",
+      root,
+    ]);
+    expect(invalidPruneMode.status).toBe(2);
+    expect(invalidPruneMode.stderr).toContain(
+      "--apply and --dry-run are mutually exclusive",
+    );
+
+    const pruneOptionWithoutPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--keep-latest",
+      "1",
+      "--root",
+      root,
+    ]);
+    expect(pruneOptionWithoutPrune.status).toBe(2);
+    expect(pruneOptionWithoutPrune.stderr).toContain("require --prune");
+
     const metadataWithoutSave = runCli([
       "run",
       "sqlite-demo",

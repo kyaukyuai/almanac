@@ -32,10 +32,12 @@ import {
 import {
   RunToolSetupError,
   exitCodeForRunTool,
+  formatPruneRunToolArtifactsHuman,
   formatRunToolArtifactHuman,
   formatRunToolArtifactListHuman,
   formatRunToolHuman,
   listRunToolArtifacts,
+  pruneRunToolArtifacts,
   readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
@@ -241,6 +243,130 @@ describe("runTool", () => {
     expect(formattedArtifact).toContain("label: release-smoke");
     expect(formattedArtifact).toContain("note:");
     expect(formattedArtifact).toContain("data:");
+  });
+
+  test("prunes saved artifacts only when apply is enabled", async () => {
+    const almanacDir = await buildRunToolFixture("run-prune");
+    const execution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const newest = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...execution,
+        runId: "run-2026-01-03T00-00-00-000Z-00000003",
+        invokedAt: "2026-01-03T00:00:00.000Z",
+      },
+    });
+    const middle = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...execution,
+        runId: "run-2026-01-02T00-00-00-000Z-00000002",
+        invokedAt: "2026-01-02T00:00:00.000Z",
+      },
+    });
+    const oldest = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...execution,
+        runId: "run-2026-01-01T00-00-00-000Z-00000001",
+        invokedAt: "2026-01-01T00:00:00.000Z",
+      },
+      label: "debug",
+    });
+
+    const dryRun = await pruneRunToolArtifacts({
+      almanacDir,
+      keepLatest: 1,
+      apply: false,
+    });
+    expect(dryRun.applied).toBe(false);
+    expect(dryRun.deletedCount).toBe(0);
+    expect(dryRun.runs.map((run) => run.runId)).toEqual([
+      middle.artifact.runId,
+      oldest.artifact.runId,
+    ]);
+    expect(formatPruneRunToolArtifactsHuman(dryRun)).toContain(
+      "dry-run: no files deleted",
+    );
+    expect(existsSync(newest.path)).toBe(true);
+    expect(existsSync(middle.path)).toBe(true);
+    expect(existsSync(oldest.path)).toBe(true);
+
+    const applied = await pruneRunToolArtifacts({
+      almanacDir,
+      keepLatest: 1,
+      apply: true,
+    });
+    expect(applied.applied).toBe(true);
+    expect(applied.deletedCount).toBe(2);
+    expect(existsSync(newest.path)).toBe(true);
+    expect(existsSync(middle.path)).toBe(false);
+    expect(existsSync(oldest.path)).toBe(false);
+    expect((await listRunToolArtifacts({ almanacDir })).runs).toHaveLength(1);
+  });
+
+  test("prunes artifacts by age after label and status filters", async () => {
+    const almanacDir = await buildRunToolFixture("run-prune-filtered");
+    const okExecution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const missingExecution = await runTool({
+      almanacDir,
+      toolName: "missing_tool",
+      input: {},
+    });
+    const oldOk = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...okExecution,
+        runId: "run-2026-01-01T00-00-00-000Z-00000001",
+        invokedAt: "2026-01-01T00:00:00.000Z",
+      },
+      label: "debug",
+    });
+    const recentOk = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...okExecution,
+        runId: "run-2026-01-10T00-00-00-000Z-00000010",
+        invokedAt: "2026-01-10T00:00:00.000Z",
+      },
+      label: "debug",
+    });
+    const oldToolNotFound = await saveRunToolArtifact({
+      almanacDir,
+      execution: {
+        ...missingExecution,
+        runId: "run-2026-01-01T00-00-00-000Z-00000002",
+        invokedAt: "2026-01-01T00:00:00.000Z",
+      },
+      label: "debug",
+    });
+
+    const applied = await pruneRunToolArtifacts({
+      almanacDir,
+      label: "debug",
+      status: "ok",
+      olderThanMs: 24 * 60 * 60 * 1000,
+      now: new Date("2026-01-11T00:00:00.000Z"),
+      apply: true,
+    });
+
+    expect(applied.runs.map((run) => run.runId)).toEqual([
+      oldOk.artifact.runId,
+    ]);
+    expect(applied.criteria.cutoffInvokedBefore).toBe(
+      "2026-01-10T00:00:00.000Z",
+    );
+    expect(existsSync(oldOk.path)).toBe(false);
+    expect(existsSync(recentOk.path)).toBe(true);
+    expect(existsSync(oldToolNotFound.path)).toBe(true);
   });
 
   test("returns an empty artifact list when no runs were saved", async () => {

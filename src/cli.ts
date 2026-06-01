@@ -188,12 +188,14 @@ import {
 import {
   RunToolSetupError,
   exitCodeForRunTool,
+  formatPruneRunToolArtifactsHuman,
   formatRunToolArtifactHuman,
   formatRunToolArtifactListHuman,
   formatRunToolHuman,
   formatRunToolListHuman,
   listRunToolArtifacts,
   listRunTools,
+  pruneRunToolArtifacts,
   readRunToolArtifact,
   runTool,
   saveRunToolArtifact,
@@ -2063,10 +2065,15 @@ function cmdPath(id: string, opts: PathOptions): void {
 
 interface RunsOptions {
   root: string;
+  apply?: boolean;
+  dryRun?: boolean;
+  keepLatest?: string;
   json?: boolean;
   label?: string;
   latest?: boolean;
   limit?: string;
+  olderThan?: string;
+  prune?: boolean;
   status?: RunToolStatus;
 }
 
@@ -2089,6 +2096,9 @@ async function cmdRuns(
           "[runId] cannot be combined with --latest, --limit, --status, or --label",
         );
       }
+      if (hasRunsPruneOptions(opts)) {
+        runsUsageError("[runId] cannot be combined with pruning options");
+      }
       const read = await readRunToolArtifact({ almanacDir, runId });
       process.stdout.write(
         opts.json === true
@@ -2098,6 +2108,47 @@ async function cmdRuns(
       return;
     }
 
+    if (opts.prune === true) {
+      if (opts.latest === true || opts.limit !== undefined) {
+        runsUsageError("--prune cannot be combined with --latest or --limit");
+      }
+      if (opts.apply === true && opts.dryRun === true) {
+        runsUsageError("--apply and --dry-run are mutually exclusive");
+      }
+      if (opts.keepLatest === undefined && opts.olderThan === undefined) {
+        runsUsageError(
+          "--prune requires --keep-latest or --older-than retention criteria",
+        );
+      }
+      const keepLatest =
+        opts.keepLatest === undefined
+          ? undefined
+          : parseRunsKeepLatest(opts.keepLatest);
+      const olderThan =
+        opts.olderThan === undefined
+          ? undefined
+          : parseRunsOlderThan(opts.olderThan);
+      const filters = runsFiltersFromOptions(opts);
+      const pruned = await pruneRunToolArtifacts({
+        almanacDir,
+        ...filters,
+        ...(keepLatest === undefined ? {} : { keepLatest }),
+        ...(olderThan === undefined ? {} : { olderThanMs: olderThan.ms }),
+        apply: opts.apply === true,
+      });
+      process.stdout.write(
+        opts.json === true
+          ? JSON.stringify(pruned, null, 2) + "\n"
+          : formatPruneRunToolArtifactsHuman(pruned),
+      );
+      return;
+    }
+
+    if (hasRunsPruneOptions(opts)) {
+      runsUsageError(
+        "--keep-latest, --older-than, --dry-run, and --apply require --prune",
+      );
+    }
     if (opts.latest === true && opts.limit !== undefined) {
       runsUsageError("--latest and --limit are mutually exclusive");
     }
@@ -2125,6 +2176,16 @@ async function cmdRuns(
   }
 }
 
+function hasRunsPruneOptions(opts: RunsOptions): boolean {
+  return (
+    opts.prune === true ||
+    opts.keepLatest !== undefined ||
+    opts.olderThan !== undefined ||
+    opts.dryRun === true ||
+    opts.apply === true
+  );
+}
+
 function runsFiltersFromOptions(
   opts: RunsOptions,
 ): { status?: RunToolStatus; label?: string } {
@@ -2142,6 +2203,38 @@ function normalizeRunsLabel(label: string): string {
     runsUsageError("--label must be between 1 and 80 characters");
   }
   return normalized;
+}
+
+function parseRunsKeepLatest(raw: string): number {
+  const keepLatest = Number.parseInt(raw, 10);
+  if (
+    !Number.isInteger(keepLatest) ||
+    keepLatest < 0 ||
+    `${keepLatest}` !== raw.trim()
+  ) {
+    runsUsageError(`--keep-latest must be a non-negative integer (got "${raw}")`);
+  }
+  return keepLatest;
+}
+
+function parseRunsOlderThan(raw: string): { ms: number } {
+  const match = /^([1-9]\d*)(m|h|d|w)$/.exec(raw.trim());
+  if (match === null) {
+    runsUsageError(
+      `--older-than must be a duration like 30d, 12h, 90m, or 4w (got "${raw}")`,
+    );
+  }
+  const amount = Number.parseInt(match[1]!, 10);
+  const unit = match[2]!;
+  const unitMs =
+    unit === "m"
+      ? 60 * 1000
+      : unit === "h"
+        ? 60 * 60 * 1000
+        : unit === "d"
+          ? 24 * 60 * 60 * 1000
+          : 7 * 24 * 60 * 60 * 1000;
+  return { ms: amount * unitMs };
 }
 
 function parseRunsLimit(raw: string | undefined): number | undefined {
@@ -3568,10 +3661,18 @@ program
 program
   .command("runs <id> [runId]")
   .description("view saved local run artifacts")
+  .option("--apply", "Apply --prune and delete selected artifacts")
+  .option("--dry-run", "Preview --prune without deleting artifacts")
   .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--keep-latest <n>", "With --prune, keep this many newest artifacts")
   .option("--label <name>", "Filter list by saved artifact label")
   .option("--latest", "Show only the newest run artifact")
   .option("--limit <n>", "Maximum number of newest run artifacts to list")
+  .option(
+    "--older-than <duration>",
+    "With --prune, delete artifacts older than 30d/12h/90m/4w",
+  )
+  .option("--prune", "Select saved run artifacts for retention cleanup")
   .addOption(
     new Option("--status <status>", "Filter list by saved artifact status")
       .choices(["ok", "tool-error", "bad-input", "tool-not-found"]),

@@ -8,7 +8,7 @@
 
 import { randomBytes } from "node:crypto";
 import { existsSync } from "node:fs";
-import { mkdir, readFile, readdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, unlink, writeFile } from "node:fs/promises";
 import { isAbsolute, join } from "node:path";
 
 import type {
@@ -102,6 +102,23 @@ export interface ListRunToolArtifactsOptions {
   limit?: number;
 }
 
+export interface PruneRunToolArtifactsOptions {
+  /** Absolute path to the compiled almanac directory. */
+  almanacDir: string;
+  /** Keep only artifacts with this status before applying retention criteria. */
+  status?: RunToolStatus;
+  /** Keep only artifacts with this exact label before applying retention criteria. */
+  label?: string;
+  /** Preserve this many newest matching artifacts. */
+  keepLatest?: number;
+  /** Delete matching artifacts older than this age, in milliseconds. */
+  olderThanMs?: number;
+  /** Clock override, mainly for tests. */
+  now?: Date;
+  /** Delete files when true; otherwise only report candidates. */
+  apply?: boolean;
+}
+
 export interface RunToolArtifactSummary {
   artifactRelPath: string;
   runId: string;
@@ -118,6 +135,22 @@ export interface RunToolArtifactList {
   almanacId: string;
   version: string;
   artifactsDir: string;
+  runs: RunToolArtifactSummary[];
+}
+
+export interface PruneRunToolArtifactsResult {
+  almanacId: string;
+  version: string;
+  artifactsDir: string;
+  applied: boolean;
+  criteria: {
+    status?: RunToolStatus;
+    label?: string;
+    keepLatest?: number;
+    olderThanMs?: number;
+    cutoffInvokedBefore?: string;
+  };
+  deletedCount: number;
   runs: RunToolArtifactSummary[];
 }
 
@@ -258,14 +291,8 @@ export async function listRunToolArtifacts(
   options: ListRunToolArtifactsOptions,
 ): Promise<RunToolArtifactList> {
   const manifest = await readRunToolManifest(options.almanacDir);
-  const artifactsDir = runToolArtifactsDirPath(options.almanacDir);
-  const files = await readRunToolArtifactFiles(artifactsDir);
-  const artifacts = await Promise.all(
-    files.map(async (fileName) => {
-      const relPath = `.runs/${fileName}`;
-      const path = join(options.almanacDir, relPath);
-      return readAndParseRunToolArtifact(path);
-    }),
+  const { artifactsDir, artifacts } = await loadRunToolArtifacts(
+    options.almanacDir,
   );
   const filteredArtifacts = filterRunToolArtifacts(artifacts, options);
   filteredArtifacts.sort(compareRunToolArtifactsNewestFirst);
@@ -276,6 +303,66 @@ export async function listRunToolArtifacts(
     version: manifest.version,
     artifactsDir,
     runs: filteredArtifacts.slice(0, limit).map(summarizeRunToolArtifact),
+  };
+}
+
+export async function pruneRunToolArtifacts(
+  options: PruneRunToolArtifactsOptions,
+): Promise<PruneRunToolArtifactsResult> {
+  const manifest = await readRunToolManifest(options.almanacDir);
+  const { artifactsDir, artifacts } = await loadRunToolArtifacts(
+    options.almanacDir,
+  );
+  const filteredArtifacts = filterRunToolArtifacts(artifacts, options);
+  filteredArtifacts.sort(compareRunToolArtifactsNewestFirst);
+
+  const now = options.now ?? new Date();
+  const cutoff =
+    options.olderThanMs === undefined
+      ? undefined
+      : new Date(now.getTime() - options.olderThanMs);
+  const candidates = filteredArtifacts.filter((artifact, index) => {
+    if (
+      options.keepLatest !== undefined &&
+      index < options.keepLatest
+    ) {
+      return false;
+    }
+    if (
+      cutoff !== undefined &&
+      new Date(artifact.invokedAt).getTime() >= cutoff.getTime()
+    ) {
+      return false;
+    }
+    return true;
+  });
+
+  if (options.apply === true) {
+    for (const artifact of candidates) {
+      await unlink(join(options.almanacDir, artifact.artifactRelPath));
+    }
+  }
+
+  return {
+    almanacId: manifest.almanacId,
+    version: manifest.version,
+    artifactsDir,
+    applied: options.apply === true,
+    criteria: {
+      ...(options.status === undefined ? {} : { status: options.status }),
+      ...(options.label === undefined ? {} : { label: options.label }),
+      ...(options.keepLatest === undefined
+        ? {}
+        : { keepLatest: options.keepLatest }),
+      ...(options.olderThanMs === undefined
+        ? {}
+        : { olderThanMs: options.olderThanMs }),
+      ...(cutoff === undefined
+        ? {}
+        : { cutoffInvokedBefore: cutoff.toISOString() }),
+    },
+    deletedCount: options.apply === true ? candidates.length : 0,
+    runs: candidates.map(summarizeRunToolArtifact),
   };
 }
 
@@ -395,6 +482,36 @@ export function formatRunToolArtifactListHuman(
   return lines.join("\n") + "\n";
 }
 
+export function formatPruneRunToolArtifactsHuman(
+  result: PruneRunToolArtifactsResult,
+): string {
+  const lines = [
+    `runs prune: ${result.almanacId} (${result.version})`,
+    `mode: ${result.applied ? "apply" : "dry-run"}`,
+    `candidates: ${result.runs.length}`,
+  ];
+  const criteria = formatPruneCriteria(result.criteria);
+  if (criteria.length > 0) {
+    lines.push(`criteria: ${criteria.join(", ")}`);
+  }
+  if (result.runs.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const run of result.runs) {
+      const label = run.label === undefined ? "" : `  label=${run.label}`;
+      lines.push(
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
+      );
+    }
+  }
+  lines.push(
+    result.applied
+      ? `deleted: ${result.deletedCount}`
+      : "dry-run: no files deleted; rerun with --apply to delete",
+  );
+  return lines.join("\n") + "\n";
+}
+
 export function formatRunToolArtifactHuman(artifact: RunToolArtifact): string {
   const lines = [
     `run: ${artifact.runId}`,
@@ -449,6 +566,21 @@ async function readRunToolManifest(almanacDir: string) {
     );
   }
   return readManifest(almanacDir);
+}
+
+async function loadRunToolArtifacts(
+  almanacDir: string,
+): Promise<{ artifactsDir: string; artifacts: RunToolArtifact[] }> {
+  const artifactsDir = runToolArtifactsDirPath(almanacDir);
+  const files = await readRunToolArtifactFiles(artifactsDir);
+  const artifacts = await Promise.all(
+    files.map(async (fileName) => {
+      const relPath = `.runs/${fileName}`;
+      const path = join(almanacDir, relPath);
+      return readAndParseRunToolArtifact(path);
+    }),
+  );
+  return { artifactsDir, artifacts };
 }
 
 async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]> {
@@ -549,6 +681,39 @@ function runToolArtifactMetadata(
     ...(options.label === undefined ? {} : { label: options.label }),
     ...(options.note === undefined ? {} : { note: options.note }),
   };
+}
+
+function formatPruneCriteria(
+  criteria: PruneRunToolArtifactsResult["criteria"],
+): string[] {
+  return [
+    ...(criteria.status === undefined ? [] : [`status=${criteria.status}`]),
+    ...(criteria.label === undefined ? [] : [`label=${criteria.label}`]),
+    ...(criteria.keepLatest === undefined
+      ? []
+      : [`keep-latest=${criteria.keepLatest}`]),
+    ...(criteria.olderThanMs === undefined
+      ? []
+      : [`older-than=${formatDurationMs(criteria.olderThanMs)}`]),
+    ...(criteria.cutoffInvokedBefore === undefined
+      ? []
+      : [`cutoff=${criteria.cutoffInvokedBefore}`]),
+  ];
+}
+
+function formatDurationMs(ms: number): string {
+  const units = [
+    ["w", 7 * 24 * 60 * 60 * 1000],
+    ["d", 24 * 60 * 60 * 1000],
+    ["h", 60 * 60 * 1000],
+    ["m", 60 * 1000],
+  ] as const;
+  for (const [suffix, unitMs] of units) {
+    if (ms > 0 && ms % unitMs === 0) {
+      return `${ms / unitMs}${suffix}`;
+    }
+  }
+  return `${ms}ms`;
 }
 
 function compareRunToolArtifactsNewestFirst(
