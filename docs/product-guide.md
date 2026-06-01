@@ -140,7 +140,8 @@ retention, and export behavior.
 ## Run artifacts
 
 Use `almanac run --save` when a local tool invocation should leave an audit
-record:
+record. Use `almanac ask --save` when a cited answer session should be retained
+for review:
 
 ```bash
 almanac run sqlite-demo \
@@ -149,16 +150,22 @@ almanac run sqlite-demo \
   --label release-smoke \
   --save \
   --root "$tmp"
+
+almanac ask sqlite-demo "Are SQLite transactions atomic?" \
+  --label answer-smoke \
+  --save \
+  --root "$tmp"
 ```
 
 Saved artifacts live under `.runs/`. Tool artifacts use `run-*.json`; refresh
-artifacts use `refresh-*.json`. `almanac runs` reads both envelopes and can
-filter by artifact kind:
+artifacts use `refresh-*.json`; answer artifacts use `answer-*.json`.
+`almanac runs` reads all three envelopes and can filter by artifact kind:
 
 ```bash
 almanac runs sqlite-demo --root "$tmp"
 almanac runs sqlite-demo --kind tool --root "$tmp"
 almanac runs sqlite-demo --kind refresh --root "$tmp"
+almanac runs sqlite-demo --kind answer --root "$tmp"
 ```
 
 `inspect`, `profile`, and `doctor` also surface the latest saved refresh run.
@@ -173,8 +180,8 @@ almanac runs sqlite-demo --prune --keep-latest 20 --dry-run --root "$tmp"
 almanac runs sqlite-demo --prune --older-than 30d --apply --root "$tmp"
 ```
 
-Scope retention by artifact kind when scheduled refresh history should be
-managed independently from saved tool invocations:
+Scope retention by artifact kind when scheduled refresh history or saved answer
+sessions should be managed independently from saved tool invocations:
 
 ```bash
 almanac runs sqlite-demo \
@@ -183,10 +190,17 @@ almanac runs sqlite-demo \
   --keep-latest 30 \
   --dry-run \
   --root "$tmp"
+
+almanac runs sqlite-demo \
+  --kind answer \
+  --prune \
+  --keep-latest 20 \
+  --dry-run \
+  --root "$tmp"
 ```
 
 Portable exports exclude `.runs/` by default. Use `--include-runs` only when
-the receiver should get saved tool and refresh artifacts:
+the receiver should get saved tool, refresh, and answer artifacts:
 
 ```bash
 almanac export sqlite-demo --include-runs --root "$tmp"

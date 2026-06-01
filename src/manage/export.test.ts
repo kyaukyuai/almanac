@@ -273,6 +273,10 @@ describe("runExport — real tar integration", () => {
       join(dir, ".runs", "refresh-2026-01-02T00-00-00-000Z-00000002.json"),
       `{"kind":"refresh","status":"ok","benchmark":{"status":"passed"}}\n`,
     );
+    writeFileSync(
+      join(dir, ".runs", "answer-2026-01-03T00-00-00-000Z-00000003.json"),
+      `{"kind":"answer","status":"ok","question":"possibly sensitive","answer":"possibly sensitive"}\n`,
+    );
     return dir;
   }
 
@@ -323,7 +327,7 @@ describe("runExport — real tar integration", () => {
     expect(existsSync(join(unpackDir, "tinytool", ".runs"))).toBe(false);
   }, { timeout: 15_000 });
 
-  test("--include-runs keeps tool and refresh artifacts under .runs/", async () => {
+  test("--include-runs keeps tool, refresh, and answer artifacts under .runs/", async () => {
     const dir = await buildTmpAlmanac();
     const outDir = mkdtempSync(join(tmpdir(), "almanac-export-runsout-"));
     cleanup.push(outDir);
@@ -354,6 +358,16 @@ describe("runExport — real tar integration", () => {
           "tinytool",
           ".runs",
           "refresh-2026-01-02T00-00-00-000Z-00000002.json",
+        ),
+      ),
+    ).toBe(true);
+    expect(
+      existsSync(
+        join(
+          unpackDir,
+          "tinytool",
+          ".runs",
+          "answer-2026-01-03T00-00-00-000Z-00000003.json",
         ),
       ),
     ).toBe(true);

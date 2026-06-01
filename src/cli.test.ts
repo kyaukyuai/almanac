@@ -1319,6 +1319,149 @@ describe("almanac CLI product onboarding", () => {
     expect(answerDetail.stdout).toContain("label: answer-smoke");
     expect(answerDetail.stdout).toContain("SQLite transactions are atomic.");
 
+    const answerStatusRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "answer",
+      "--status",
+      "ok",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(answerStatusRuns.status).toBe(0);
+    expect(
+      (JSON.parse(answerStatusRuns.stdout) as {
+        runs: Array<{ runId: string }>;
+      }).runs.map((run) => run.runId),
+    ).toEqual([savedArtifact.answerId]);
+
+    const savedToolJson = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"journal mode","limit":3}',
+      "--save",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(savedToolJson.status).toBe(0);
+    const savedTool = JSON.parse(savedToolJson.stdout) as {
+      runId: string;
+      artifactRelPath: string;
+    };
+
+    const refreshId = "refresh-2026-01-06T00-00-00-000Z-00000006";
+    const refreshArtifact = RefreshArtifactSchema.parse({
+      schemaVersion: "0.1.0",
+      kind: "refresh",
+      artifactRelPath: `.runs/${refreshId}.json`,
+      refreshId,
+      startedAt: "2026-01-06T00:00:00.000Z",
+      finishedAt: "2026-01-06T00:00:04.000Z",
+      almanacId: "sqlite-demo",
+      version: "0.1.0",
+      status: "ok",
+      exitCode: 0,
+      requestedFromStage: "12-benchmark-run",
+      effectiveFromStage: "12-benchmark-run",
+      dueDecision: {
+        due: true,
+        recommendedFromStage: "12-benchmark-run",
+        reasonCodes: ["manual-smoke"],
+      },
+      benchmark: {
+        status: "passed",
+        total: 2,
+        passed: 2,
+        failed: 0,
+        errored: 0,
+        citationRate: 1,
+      },
+      durationMs: 4000,
+    });
+    await writeFile(
+      join(almanacDirPath(root, "sqlite-demo"), refreshArtifact.artifactRelPath),
+      JSON.stringify(refreshArtifact, null, 2) + "\n",
+      "utf8",
+    );
+
+    const answerPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "answer",
+      "--prune",
+      "--keep-latest",
+      "0",
+      "--apply",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(answerPrune.status).toBe(0);
+    const parsedAnswerPrune = JSON.parse(answerPrune.stdout) as {
+      applied: boolean;
+      deletedCount: number;
+      criteria: { kind?: string };
+      runs: Array<{ kind: string; runId: string }>;
+    };
+    expect(parsedAnswerPrune.applied).toBe(true);
+    expect(parsedAnswerPrune.deletedCount).toBe(1);
+    expect(parsedAnswerPrune.criteria.kind).toBe("answer");
+    expect(parsedAnswerPrune.runs).toEqual([
+      expect.objectContaining({
+        kind: "answer",
+        runId: savedArtifact.answerId,
+      }),
+    ]);
+
+    const remainingRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(remainingRuns.status).toBe(0);
+    expect(
+      (JSON.parse(remainingRuns.stdout) as {
+        runs: Array<{ kind: string; runId: string }>;
+      }).runs.map((run) => ({ kind: run.kind, runId: run.runId })).sort((a, b) =>
+        a.runId.localeCompare(b.runId)
+      ),
+    ).toEqual(
+      [
+        { kind: "tool", runId: savedTool.runId },
+        { kind: "refresh", runId: refreshId },
+      ].sort((a, b) => a.runId.localeCompare(b.runId)),
+    );
+    expect(
+      (await readdir(join(almanacDirPath(root, "sqlite-demo"), ".runs")))
+        .sort(),
+    ).toEqual(
+      [savedTool.artifactRelPath.split("/").pop()!, `${refreshId}.json`]
+        .sort(),
+    );
+
+    const answerRunsAfterPrune = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "answer",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(answerRunsAfterPrune.status).toBe(0);
+    expect(
+      (JSON.parse(answerRunsAfterPrune.stdout) as { runs: unknown[] }).runs,
+    ).toEqual([]);
+
     const metadataWithoutSave = runCli([
       "ask",
       "sqlite-demo",
