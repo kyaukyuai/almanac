@@ -90,6 +90,22 @@ enough to trust:
 - rationale
 - rejected candidate reasons when available
 
+## Refresh due checks
+
+Use `refresh due` before wiring an almanac into cron or CI. The command is
+read-only: it does not mutate compile state, fetch sources, run LLM stages, or
+require provider credentials.
+
+```bash
+almanac refresh due sqlite-demo --root "$tmp"
+almanac refresh due sqlite-demo --root "$tmp" --json
+```
+
+The JSON output includes `due`, stable reason codes, source expiry summaries,
+stage failures or pending stages, benchmark report status, and a
+`recommendedFromStage` value suitable for a later `almanac update` or refresh
+runner.
+
 ## Human golden benchmarks
 
 Generated Stage 11 fixtures are useful, but product acceptance needs a small

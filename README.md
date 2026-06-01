@@ -144,6 +144,10 @@ structurally closed.
 - **`almanac runs <id>`** — list, inspect, filter, and prune saved
   `.runs/run-*.json` artifacts. Cleanup is dry-run by default and requires
   `--apply` to delete files.
+- **`almanac refresh due <id>`** — read-only refresh planning for CI/cron:
+  reports expired sources, failed/pending stages, missing benchmark reports,
+  and the recommended `--from-stage` without writing files or requiring
+  provider keys.
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact
   health, source coverage, and benchmark status.
 - **`almanac export <id>`** — package a compiled almanac as a

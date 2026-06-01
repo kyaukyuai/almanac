@@ -20,6 +20,7 @@
  *   almanac path <id> [opts]               print the absolute almanac dir path
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
+ *   almanac refresh due <id> [opts]        check read-only refresh due status
  *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
@@ -201,6 +202,11 @@ import {
   saveRunToolArtifact,
   type RunToolStatus,
 } from "./manage/run-tool.ts";
+import {
+  RefreshStatusError,
+  formatRefreshDueHuman,
+  getRefreshDueStatus,
+} from "./manage/refresh-status.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 function readForgerVersion(): string {
@@ -2397,6 +2403,31 @@ function runUsageError(message: string): never {
   process.exit(2);
 }
 
+interface RefreshDueOptions {
+  root: string;
+  json?: boolean;
+}
+
+async function cmdRefreshDue(
+  id: string,
+  opts: RefreshDueOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  try {
+    const status = await getRefreshDueStatus({ almanacDir });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(status, null, 2) + "\n"
+        : formatRefreshDueHuman(status),
+    );
+  } catch (e) {
+    if (e instanceof RefreshStatusError) {
+      fail(`refresh due: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
 interface SourcesOptions {
   root: string;
   json?: boolean;
@@ -3688,6 +3719,17 @@ program
   )
   .addOption(rootOption)
   .action(cmdRuns);
+
+const refreshCommand = program
+  .command("refresh")
+  .description("inspect and run refresh workflows");
+
+refreshCommand
+  .command("due <id>")
+  .description("check whether an almanac is due for refresh without writing files")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdRefreshDue);
 
 program
   .command("sources <id>")
