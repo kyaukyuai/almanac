@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.4.2 shipped** · last updated 2026-05-30.
+Status: **v0.5.0 shipped** · last updated 2026-06-01.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -18,9 +18,10 @@ from a single domain name. The compiled almanac is consumed by host LLMs
 - **Claude Code Skill** (`adapters/skill/SKILL.md`) — secondary, registered
   alongside the MCP server
 
-The `almanac` CLI itself is for **build and management only**: `new`, `update`,
-`list`, `inspect`, `serve`, `register`. It does not include an LLM
-orchestrator. End-user "use" of an almanac happens through the host LLM.
+The `almanac` CLI itself is for **build, management, and deterministic local
+tool checks**: `new`, `update`, `list`, `inspect`, `run`, `runs`, `serve`,
+`register`. It does not include an LLM question orchestrator. End-user
+conversational use of an almanac happens through the host LLM.
 
 ### What an almanac is *not*
 
@@ -130,6 +131,8 @@ health check) is implemented as a tool.
 ├── tests/
 │   ├── positive.jsonl
 │   └── negative.jsonl
+├── .runs/                  # optional saved `almanac run --save` audit records
+│   └── run-<timestamp>-<id>.json
 └── .compile/
     ├── compile-state.json  # stage status, hashes, prompt versions
     ├── domain-spec.json    # Stage 1 output
@@ -145,7 +148,9 @@ can be regenerated from the SoT layer without loss.
 
 ## 3. CLI surface
 
-The CLI is for **build and management**. End-user use happens through MCP.
+The CLI is for **build, management, and deterministic local runtime
+validation**. End-user conversational use still happens through MCP and the
+host LLM.
 
 | Command                                            | Purpose                                       | v0.1 |
 |----------------------------------------------------|-----------------------------------------------|------|
@@ -153,6 +158,8 @@ The CLI is for **build and management**. End-user use happens through MCP.
 | `almanac update <domain>`                          | TTL-based refresh of sources / facts          | ✅   |
 | `almanac list`                                     | list compiled almanacs                        | ✅   |
 | `almanac inspect <domain>`                         | DOMAIN.md, tool list, freshness, bench score  | ✅   |
+| `almanac run <domain> --tool <name>`                | invoke one compiled tool locally              | v0.5 |
+| `almanac runs <domain> [runId]`                     | view/prune saved run audit artifacts          | v0.5 |
 | `almanac serve <domain> [--transport=stdio\|http]` | start MCP server for one almanac              | ✅   |
 | `almanac register <domain> --client=<name>`        | write MCP config + place SKILL.md             | ✅   |
 | `almanac feed <domain> <source>`                   | add a single source incrementally             | v0.2 |
@@ -850,10 +857,10 @@ v0.4.0 shipped as PRs #6 through #13. The release adds:
 - **Wiki inspection export.** `almanac wiki <id>` writes a Markdown
   bundle for source, fact, tool, benchmark, and artifact review.
 
-Auto-refresh scheduling remains a v0.5+ design candidate. See
+Auto-refresh scheduling remains a v0.6+ design candidate. See
 [`v0.4-plan.md`](./v0.4-plan.md) for the archived implementation
 sequence and release gates, and [`v0.5-plan.md`](./v0.5-plan.md) for the
-proposed run-first operations sequence.
+shipped run-first operations sequence.
 
 ### v0.4.1 — Enterprise AI smoke hardening
 
@@ -883,10 +890,33 @@ also lists `artifacts.json` itself. The manifest is rendered with a stable
 self-entry byte length that matches the file written to disk, which makes the
 export bundle internally complete for downstream review and packaging tools.
 
-### v0.5+ (long-tail)
+### v0.5.0 — Run-first local operations
 
-- `almanac run` — local runtime invocation and optional question mode. See
-  [`v0.5-plan.md`](./v0.5-plan.md) for the proposed implementation sequence.
+v0.5.0 shipped the deterministic local runtime path and saved run artifact
+workflow:
+
+- `almanac run <id> --tool <name>` invokes one compiled tool through the same
+  `AlmanacRuntime.execTool` contract used by MCP.
+- `--input`, `--input-file`, `--json`, and `--list-tools` make local runs
+  scriptable for demos and CI.
+- `--save`, `--label`, and `--note` write validated `.runs/run-*.json` audit
+  records with input, output status, result envelope, citation count, and
+  duration metadata.
+- `almanac runs <id>` lists, filters, reads, and prunes saved run artifacts.
+  Retention cleanup is dry-run by default and deletes only with `--apply`.
+- `almanac export` excludes `.runs/` by default and includes it only with
+  `--include-runs`; `.compile/` inclusion remains independent.
+
+The v0.5 release gate passed on 2026-06-01 with `bun run typecheck`,
+`bun test`, a fresh offline demo, local `run --tool`, saved artifact viewer
+flows, wiki `artifacts.json` self-entry validation, and export
+include/exclude checks. LLM-backed question mode and refresh scheduling remain
+future work so the v0.5 runtime path stays deterministic and no-key friendly.
+
+### v0.6+ (long-tail)
+
+- Optional LLM-backed question mode over compiled tools.
+- Refresh scheduling / daemon design and implementation.
 - Slack adapter
 - Almanac marketplace
 - Composable almanacs (one almanac calling another via MCP)
@@ -897,8 +927,9 @@ export bundle internally complete for downstream review and packaging tools.
 ## 9. Open questions / next steps
 
 The original v0.1 deliverables listed here have all shipped, as
-have the v0.3-era structural fixes and v0.4 feature set documented
-in §8 above. Active questions carrying into v0.5+:
+have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
+feature set, and the v0.5 local run workflow documented in §8 above. Active
+questions carrying into v0.6+:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
