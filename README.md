@@ -230,7 +230,9 @@ Question-mode orchestration and refresh scheduling remain future work; v0.5
 keeps the local run path deterministic and LLM-free. See
 [`docs/design.md §8`](./docs/design.md) for the worked release summary and
 [`docs/v0.5-plan.md`](./docs/v0.5-plan.md) for the shipped implementation
-sequence. The archived v0.4 implementation sequence remains in
+sequence. Refresh scheduling is planned in
+[`docs/v0.6-plan.md`](./docs/v0.6-plan.md). The archived v0.4 implementation
+sequence remains in
 [`docs/v0.4-plan.md`](./docs/v0.4-plan.md).
 
 ## Changelog
