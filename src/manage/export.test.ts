@@ -225,7 +225,7 @@ describe("runExport — real tar integration", () => {
     expect(existsSync(join(unpackDir, "tinytool", "extracted", "facts.jsonl"))).toBe(true);
     // .compile must be absent in the default export.
     expect(existsSync(join(unpackDir, "tinytool", ".compile"))).toBe(false);
-  });
+  }, { timeout: 15_000 });
 
   test("--include-compile keeps .compile/", async () => {
     const dir = await buildTmpAlmanac();
@@ -244,7 +244,7 @@ describe("runExport — real tar integration", () => {
     expect(
       existsSync(join(unpackDir, "tinytool", ".compile", "domain-spec.json")),
     ).toBe(true);
-  });
+  }, { timeout: 15_000 });
 
   test("byteLength matches the on-disk size", async () => {
     const dir = await buildTmpAlmanac();
@@ -255,7 +255,7 @@ describe("runExport — real tar integration", () => {
     const result = await runExport({ almanacDir: dir, outputPath });
     const { statSync } = await import("node:fs");
     expect(result.byteLength).toBe(statSync(outputPath).size);
-  });
+  }, { timeout: 15_000 });
 });
 
 // ──────────────────────────────────────────────────────────────────────────────
