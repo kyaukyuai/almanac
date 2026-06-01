@@ -77,8 +77,9 @@ export` keeps `.runs/` out of portable bundles by default and includes it only
 with `--include-runs`.
 
 v0.6 development starts the refresh automation line: `refresh due` reports
-deterministic refresh decisions without writes, and `.runs/` now has a typed
-envelope for both tool artifacts and refresh artifacts.
+deterministic refresh decisions without writes, `refresh run` executes a manual
+locked refresh over the update pipeline, and `.runs/` now has a typed envelope
+for both tool artifacts and refresh artifacts.
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -153,6 +154,9 @@ structurally closed.
   reports expired sources, failed/pending stages, missing benchmark reports,
   and the recommended `--from-stage` without writing files or requiring
   provider keys.
+- **`almanac refresh run <id>`** — execute the refresh recommendation or an
+  explicit `--from-stage`, with per-almanac lock protection. Use `--save` with
+  `--label`/`--note` to persist a `.runs/refresh-*.json` audit artifact.
 - **`almanac doctor [id]`** — check local runtime, environment keys, artifact
   health, source coverage, and benchmark status.
 - **`almanac export <id>`** — package a compiled almanac as a

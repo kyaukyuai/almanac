@@ -21,6 +21,7 @@
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac refresh due <id> [opts]        check read-only refresh due status
+ *   almanac refresh run <id> [opts]        run a manual refresh over update
  *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
@@ -208,6 +209,11 @@ import {
   formatRefreshDueHuman,
   getRefreshDueStatus,
 } from "./manage/refresh-status.ts";
+import {
+  RefreshRunError,
+  formatRefreshRunHuman,
+  runRefresh,
+} from "./manage/refresh-run.ts";
 import type { IngestionMode, SourceKind } from "./core/types.ts";
 
 function readForgerVersion(): string {
@@ -2432,6 +2438,123 @@ async function cmdRefreshDue(
   }
 }
 
+interface RefreshRunCliOptions {
+  root: string;
+  fromStage?: string;
+  json?: boolean;
+  label?: string;
+  note?: string;
+  save?: boolean;
+}
+
+async function cmdRefreshRun(
+  id: string,
+  opts: RefreshRunCliOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  const fromStage = parseRefreshRunFromStage(opts.fromStage);
+  if (
+    opts.save !== true &&
+    (opts.label !== undefined || opts.note !== undefined)
+  ) {
+    refreshRunUsageError("--label and --note require --save");
+  }
+  const metadata =
+    opts.save === true ? refreshRunArtifactMetadataFromOptions(opts) : {};
+  const { runners, providerAvailable } = buildRunners();
+  if (opts.json !== true) {
+    process.stdout.write(
+      `▶ refresh run "${id}"\n` +
+        `    fromStage     ${fromStage ?? "(auto)"}\n` +
+        `    save          ${opts.save === true ? "yes" : "no"}\n`,
+    );
+    if (!providerAvailable) {
+      process.stdout.write(
+        "  ! ANTHROPIC_API_KEY not set; LLM-driven stages (01, 02a, 02b, 05, 06, 11) will be skipped " +
+          "and Stage 7 will implement only the four default tools (custom tools disabled).\n",
+      );
+    }
+  }
+
+  try {
+    const result = await runRefresh({
+      almanacDir,
+      ...(fromStage === null ? {} : { fromStage }),
+      runners,
+      forgerVersion: FORGER_VERSION,
+      persistManifest: (manifest) =>
+        writeManifestWithActualCounts(almanacDir, manifest),
+      log:
+        opts.json === true
+          ? undefined
+          : (event) => process.stdout.write(`  · ${JSON.stringify(event)}\n`),
+      save: opts.save === true,
+      ...metadata,
+    });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(result, null, 2) + "\n"
+        : formatRefreshRunHuman(result),
+    );
+    process.exitCode = result.exitCode;
+  } catch (e) {
+    if (e instanceof RefreshRunError || e instanceof RefreshStatusError) {
+      fail(`refresh run: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+function parseRefreshRunFromStage(raw: string | undefined): StageId | null {
+  if (raw === undefined) return null;
+  if (!STAGE_IDS.includes(raw as StageId)) {
+    refreshRunUsageError(
+      `--from-stage: unknown stage id "${raw}". valid: ${STAGE_IDS.join(", ")}`,
+    );
+  }
+  const stageId = raw as StageId;
+  if (stageId === "00-bootstrap") {
+    refreshRunUsageError(
+      "--from-stage=00-bootstrap is not supported for refresh runs",
+    );
+  }
+  return stageId;
+}
+
+function refreshRunArtifactMetadataFromOptions(
+  opts: RefreshRunCliOptions,
+): { label?: string; note?: string } {
+  return {
+    ...(opts.label === undefined
+      ? {}
+      : { label: normalizeRefreshRunArtifactLabel(opts.label) }),
+    ...(opts.note === undefined
+      ? {}
+      : { note: normalizeRefreshRunArtifactNote(opts.note) }),
+  };
+}
+
+function normalizeRefreshRunArtifactLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.length === 0 || normalized.length > 80) {
+    refreshRunUsageError("--label must be between 1 and 80 characters");
+  }
+  return normalized;
+}
+
+function normalizeRefreshRunArtifactNote(note: string): string {
+  const normalized = note.trim();
+  if (normalized.length === 0 || normalized.length > 1000) {
+    refreshRunUsageError("--note must be between 1 and 1000 characters");
+  }
+  return normalized;
+}
+
+function refreshRunUsageError(message: string): never {
+  process.stderr.write(`error: refresh run: ${message}\n`);
+  process.exit(2);
+}
+
 interface SourcesOptions {
   root: string;
   json?: boolean;
@@ -3748,6 +3871,22 @@ refreshCommand
   .option("--json", "Emit JSON instead of a human-readable summary")
   .addOption(rootOption)
   .action(cmdRefreshDue);
+
+refreshCommand
+  .command("run <id>")
+  .description("run a manual refresh using the update pipeline")
+  .addOption(
+    new Option(
+      "--from-stage <id>",
+      "Earliest stage to reset; omitted uses refresh due recommendation",
+    ),
+  )
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--label <name>", "Human label for --save refresh artifacts")
+  .option("--note <text>", "Human note for --save refresh artifacts")
+  .option("--save", "Save a refresh artifact under <almanac>/.runs/")
+  .addOption(rootOption)
+  .action(cmdRefreshRun);
 
 program
   .command("sources <id>")

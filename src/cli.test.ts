@@ -335,6 +335,92 @@ describe("almanac CLI product onboarding", () => {
     );
     expect(parsedRefreshDue.benchmark.status).toBe("passed");
 
+    const refreshRun = runCli(
+      [
+        "refresh",
+        "run",
+        "sqlite-demo",
+        "--from-stage",
+        "12-benchmark-run",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+    expect(refreshRun.status).toBe(0);
+    expect(refreshRun.stderr).toBe("");
+    const parsedRefreshRun = JSON.parse(refreshRun.stdout) as {
+      status: string;
+      exitCode: number;
+      requestedFromStage: string | null;
+      effectiveFromStage: string;
+      benchmark: { status: string };
+      savedArtifact?: { relPath: string };
+    };
+    expect(parsedRefreshRun.status).toBe("ok");
+    expect(parsedRefreshRun.exitCode).toBe(0);
+    expect(parsedRefreshRun.requestedFromStage).toBe("12-benchmark-run");
+    expect(parsedRefreshRun.effectiveFromStage).toBe("12-benchmark-run");
+    expect(parsedRefreshRun.benchmark.status).toBe("passed");
+    expect(parsedRefreshRun.savedArtifact).toBeUndefined();
+
+    const savedRefreshRun = runCli(
+      [
+        "refresh",
+        "run",
+        "sqlite-demo",
+        "--from-stage",
+        "12-benchmark-run",
+        "--save",
+        "--label",
+        "rc-smoke",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+    expect(savedRefreshRun.status).toBe(0);
+    expect(savedRefreshRun.stderr).toBe("");
+    const parsedSavedRefreshRun = JSON.parse(savedRefreshRun.stdout) as {
+      status: string;
+      savedArtifact?: { relPath: string };
+    };
+    expect(parsedSavedRefreshRun.status).toBe("ok");
+    expect(parsedSavedRefreshRun.savedArtifact?.relPath).toMatch(
+      /^\.runs\/refresh-/,
+    );
+
+    const refreshRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "refresh",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshRuns.status).toBe(0);
+    expect(refreshRuns.stderr).toBe("");
+    expect(
+      (JSON.parse(refreshRuns.stdout) as {
+        runs: Array<{ kind: string; label?: string; fromStage?: string }>;
+      }).runs,
+    ).toContainEqual(
+      expect.objectContaining({
+        kind: "refresh",
+        label: "rc-smoke",
+        fromStage: "12-benchmark-run",
+      }),
+    );
+
     const init = runCli(["benchmark", "sqlite-demo", "--root", root, "--init", "--force"]);
     expect(init.status).toBe(0);
     expect(init.stderr).toBe("");
