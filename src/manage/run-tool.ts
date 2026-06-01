@@ -20,10 +20,12 @@ import {
   ToolNotFoundError,
 } from "../core/runtime.ts";
 import {
+  AnswerArtifactSchema,
   RefreshArtifactSchema,
   RunArtifactIdSchema,
   RunToolArtifactSchema,
   ToolResultSchema,
+  type AnswerArtifact,
   type RefreshArtifact,
   type RunArtifactEnvelope,
   type RunArtifactKind,
@@ -38,6 +40,7 @@ import {
 import { readManifest } from "../compile/storage.ts";
 
 export type {
+  AnswerArtifactStatus,
   RefreshArtifactStatus,
   RunArtifactKind,
   RunArtifactStatus,
@@ -148,6 +151,9 @@ export interface RunToolArtifactSummary {
   citationsCount?: number;
   fromStage?: StageId;
   benchmarkStatus?: "missing" | "passed" | "failed";
+  question?: string;
+  answer?: string;
+  abstentionReason?: string;
 }
 
 export interface RunToolArtifactList {
@@ -496,7 +502,15 @@ export function formatRunToolArtifactListHuman(
 
   for (const run of list.runs) {
     const label = run.label === undefined ? "" : `  label=${run.label}`;
-    if (run.kind === "refresh") {
+    if (run.kind === "answer") {
+      const question =
+        run.question === undefined
+          ? ""
+          : ` question=${truncateOneLine(run.question, 72)}`;
+      lines.push(
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  answer  exit=${run.exitCode} citations=${run.citationsCount ?? 0} duration=${run.durationMs}ms${label}${question}`,
+      );
+    } else if (run.kind === "refresh") {
       const benchmark =
         run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
       lines.push(
@@ -528,7 +542,15 @@ export function formatPruneRunToolArtifactsHuman(
   } else {
     for (const run of result.runs) {
       const label = run.label === undefined ? "" : `  label=${run.label}`;
-      if (run.kind === "refresh") {
+      if (run.kind === "answer") {
+        const question =
+          run.question === undefined
+            ? ""
+            : ` question=${truncateOneLine(run.question, 72)}`;
+        lines.push(
+          `  - ${run.invokedAt}  ${run.runId}  ${run.status}  answer  exit=${run.exitCode} citations=${run.citationsCount ?? 0} duration=${run.durationMs}ms${label}${question}`,
+        );
+      } else if (run.kind === "refresh") {
         const benchmark =
           run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
         lines.push(
@@ -552,6 +574,9 @@ export function formatPruneRunToolArtifactsHuman(
 export function formatRunToolArtifactHuman(artifact: RunArtifactEnvelope): string {
   if (artifact.kind === "refresh") {
     return formatRefreshArtifactHuman(artifact);
+  }
+  if (artifact.kind === "answer") {
+    return formatAnswerArtifactHuman(artifact);
   }
   const lines = [
     `run: ${artifact.runId}`,
@@ -589,6 +614,47 @@ export function formatRunToolArtifactHuman(artifact: RunArtifactEnvelope): strin
     }
   }
 
+  return lines.join("\n") + "\n";
+}
+
+function formatAnswerArtifactHuman(artifact: AnswerArtifact): string {
+  const lines = [
+    `answer: ${artifact.answerId}`,
+    `status: ${artifact.status}`,
+    `exit: ${artifact.exitCode}`,
+    `almanac: ${artifact.almanacId} (${artifact.version})`,
+    `started: ${artifact.startedAt}`,
+    `finished: ${artifact.finishedAt}`,
+    `duration: ${artifact.durationMs}ms`,
+    `question: ${artifact.question}`,
+    `tools: ${artifact.toolCalls.map((call) => call.toolName).join(", ") || "(none)"}`,
+    `citations: ${artifact.citations.length}`,
+    `artifact: ${artifact.artifactRelPath}`,
+  ];
+  if (artifact.label !== undefined) {
+    lines.push(`label: ${artifact.label}`);
+  }
+  if (artifact.note !== undefined) {
+    lines.push("note:");
+    lines.push(artifact.note);
+  }
+  if (artifact.model !== undefined) {
+    lines.push(`model: ${artifact.model}`);
+  }
+  if (artifact.freshness !== undefined) {
+    lines.push(
+      `freshness: ${artifact.freshness.class}/${artifact.freshness.staleness}`,
+    );
+  }
+
+  if (artifact.status === "ok") {
+    lines.push("answer:");
+    lines.push(artifact.answer ?? "");
+  } else if (artifact.status === "abstained") {
+    lines.push(`abstention: ${artifact.abstentionReason ?? "(none)"}`);
+  } else if (artifact.error !== undefined) {
+    lines.push(`error: ${artifact.error.code}: ${artifact.error.message}`);
+  }
   return lines.join("\n") + "\n";
 }
 
@@ -663,7 +729,7 @@ async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]>
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => /^(run|refresh)-[A-Za-z0-9-]+\.json$/.test(name));
+      .filter((name) => /^(run|refresh|answer)-[A-Za-z0-9-]+\.json$/.test(name));
   } catch (e) {
     if (errorCode(e) === "ENOENT") {
       return [];
@@ -693,6 +759,9 @@ async function readAndParseRunToolArtifact(
     if (isRefreshArtifactLike(parsed)) {
       return RefreshArtifactSchema.parse(parsed);
     }
+    if (isAnswerArtifactLike(parsed)) {
+      return AnswerArtifactSchema.parse(parsed);
+    }
     return RunToolArtifactSchema.parse(parsed);
   } catch (e) {
     throw new RunToolSetupError(
@@ -719,19 +788,28 @@ function isRefreshArtifactLike(value: unknown): boolean {
   );
 }
 
+function isAnswerArtifactLike(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === "answer"
+  );
+}
+
 function parseRunToolRunId(runId: string): string {
   const parsed = RunArtifactIdSchema.safeParse(runId);
   if (!parsed.success) {
     throw new RunToolSetupError(
       "bad-run-id",
-      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx or refresh-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
+      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, refresh-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, or answer-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
     );
   }
   return parsed.data;
 }
 
 function runArtifactRelPath(runId: string): string {
-  return runId.startsWith("refresh-")
+  return runId.startsWith("refresh-") || runId.startsWith("answer-")
     ? `.runs/${runId}.json`
     : runToolArtifactRelPath(runId);
 }
@@ -753,6 +831,24 @@ function summarizeRunToolArtifact(
       ...(artifact.benchmark === undefined
         ? {}
         : { benchmarkStatus: artifact.benchmark.status }),
+    };
+  }
+  if (artifact.kind === "answer") {
+    return {
+      kind: "answer",
+      artifactRelPath: artifact.artifactRelPath,
+      runId: artifact.answerId,
+      invokedAt: artifact.startedAt,
+      ...(artifact.label === undefined ? {} : { label: artifact.label }),
+      status: artifact.status,
+      exitCode: artifact.exitCode,
+      durationMs: artifact.durationMs,
+      citationsCount: artifact.citations.length,
+      question: artifact.question,
+      ...(artifact.answer === undefined ? {} : { answer: artifact.answer }),
+      ...(artifact.abstentionReason === undefined
+        ? {}
+        : { abstentionReason: artifact.abstentionReason }),
     };
   }
   return {
@@ -847,11 +943,22 @@ function compareRunToolArtifactsNewestFirst(
 }
 
 function artifactTimestamp(artifact: RunArtifactEnvelope): string {
-  return artifact.kind === "refresh" ? artifact.startedAt : artifact.invokedAt;
+  if (artifact.kind === "refresh" || artifact.kind === "answer") {
+    return artifact.startedAt;
+  }
+  return artifact.invokedAt;
 }
 
 function artifactId(artifact: RunArtifactEnvelope): string {
-  return artifact.kind === "refresh" ? artifact.refreshId : artifact.runId;
+  if (artifact.kind === "refresh") return artifact.refreshId;
+  if (artifact.kind === "answer") return artifact.answerId;
+  return artifact.runId;
+}
+
+function truncateOneLine(value: string, maxLength: number): string {
+  const oneLine = value.replace(/\s+/g, " ").trim();
+  if (oneLine.length <= maxLength) return oneLine;
+  return `${oneLine.slice(0, Math.max(0, maxLength - 3))}...`;
 }
 
 function generateRunToolRunId(invokedAt: string): string {
