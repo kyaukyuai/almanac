@@ -313,6 +313,28 @@ describe("almanac CLI product onboarding", () => {
     expect(benchmark.stdout).toContain("total         2");
     expect(benchmark.stdout).toContain("passed        2");
 
+    const refreshDue = runCli(
+      ["refresh", "due", "sqlite-demo", "--root", root, "--json"],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+    expect(refreshDue.status).toBe(0);
+    expect(refreshDue.stderr).toBe("");
+    const parsedRefreshDue = JSON.parse(refreshDue.stdout) as {
+      due: boolean;
+      recommendedFromStage: string;
+      reasons: Array<{ code: string }>;
+      benchmark: { status: string };
+    };
+    expect(parsedRefreshDue.due).toBe(true);
+    expect(parsedRefreshDue.recommendedFromStage).toBe("04-source-fetch");
+    expect(parsedRefreshDue.reasons).toContainEqual(
+      expect.objectContaining({ code: "source-fetch-manifest-missing" }),
+    );
+    expect(parsedRefreshDue.benchmark.status).toBe("passed");
+
     const init = runCli(["benchmark", "sqlite-demo", "--root", root, "--init", "--force"]);
     expect(init.status).toBe(0);
     expect(init.stderr).toBe("");
