@@ -5,7 +5,7 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -58,6 +58,34 @@ function runCli(
     status: result.status,
     stdout: result.stdout,
     stderr: result.stderr,
+  };
+}
+
+function mockAskProviderEnv(): Record<string, string | undefined> {
+  return {
+    ALMANAC_LLM: "mock",
+    ANTHROPIC_API_KEY: undefined,
+    ALMANAC_MOCK_RESPONSES: JSON.stringify({
+      "answer-planner@planner-v1": [
+        JSON.stringify({
+          action: "call_tool",
+          toolName: "query_facts",
+          input: { q: "transactions atomic", limit: 3 },
+        }),
+        JSON.stringify({ action: "stop", reason: "enough-evidence" }),
+      ],
+      "answer-synthesis@synthesis-v1": JSON.stringify({
+        status: "ok",
+        answer: "SQLite transactions are atomic.",
+        citations: [
+          {
+            sourceId: "sqlite-transactions",
+            url: "https://www.sqlite.org/lang_transaction.html",
+            fetchedAt: "2026-01-01T00:00:00.000Z",
+          },
+        ],
+      }),
+    }),
   };
 }
 
@@ -1155,6 +1183,155 @@ describe("almanac CLI product onboarding", () => {
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
     expect(missingToolOption.status).toBe(2);
     expect(missingToolOption.stderr).toContain("missing required --tool");
+  }, { timeout: 15_000 });
+
+  test("ask synthesizes cited answers and can save answer artifacts", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const missingProvider = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Are SQLite transactions atomic?",
+        "--save",
+        "--root",
+        root,
+      ],
+      {
+        ALMANAC_LLM: undefined,
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+    expect(missingProvider.status).toBe(1);
+    expect(missingProvider.stderr).toContain("ask: ANTHROPIC_API_KEY is not set");
+    expect(await readdir(join(almanacDirPath(root, "sqlite-demo"), ".runs")))
+      .toEqual([]);
+
+    const mockEnv = mockAskProviderEnv();
+    const human = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Are SQLite transactions atomic?",
+        "--root",
+        root,
+      ],
+      mockEnv,
+    );
+    expect(human.status).toBe(0);
+    expect(human.stderr).toBe("");
+    expect(human.stdout).toContain("status: ok");
+    expect(human.stdout).toContain("citations: 1");
+    expect(human.stdout).toContain("SQLite transactions are atomic.");
+    expect(human.stdout).toContain("sqlite-transactions");
+
+    const savedJson = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Are SQLite transactions atomic?",
+        "--save",
+        "--label",
+        "answer-smoke",
+        "--note",
+        "Validate saved ask artifacts.",
+        "--json",
+        "--root",
+        root,
+      ],
+      mockAskProviderEnv(),
+    );
+    expect(savedJson.status).toBe(0);
+    expect(savedJson.stderr).toBe("");
+    const savedArtifact = JSON.parse(savedJson.stdout) as {
+      schemaVersion: string;
+      kind: string;
+      artifactRelPath: string;
+      answerId: string;
+      status: string;
+      exitCode: number;
+      label?: string;
+      note?: string;
+      question: string;
+      answer?: string;
+      citations: unknown[];
+      toolCalls: Array<{ toolName: string; status: string }>;
+    };
+    expect(savedArtifact.schemaVersion).toBe("0.1.0");
+    expect(savedArtifact.kind).toBe("answer");
+    expect(savedArtifact.status).toBe("ok");
+    expect(savedArtifact.exitCode).toBe(0);
+    expect(savedArtifact.label).toBe("answer-smoke");
+    expect(savedArtifact.note).toBe("Validate saved ask artifacts.");
+    expect(savedArtifact.question).toBe("Are SQLite transactions atomic?");
+    expect(savedArtifact.answer).toContain("atomic");
+    expect(savedArtifact.citations).toHaveLength(1);
+    expect(savedArtifact.toolCalls).toEqual([
+      expect.objectContaining({ toolName: "query_facts", status: "ok" }),
+    ]);
+    expect(savedArtifact.artifactRelPath).toBe(
+      `.runs/${savedArtifact.answerId}.json`,
+    );
+    expect(
+      JSON.parse(
+        await readFile(
+          join(
+            almanacDirPath(root, "sqlite-demo"),
+            savedArtifact.artifactRelPath,
+          ),
+          "utf8",
+        ),
+      ),
+    ).toEqual(savedArtifact);
+
+    const answerRuns = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "answer",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(answerRuns.status).toBe(0);
+    expect(
+      (JSON.parse(answerRuns.stdout) as {
+        runs: Array<{ kind: string; runId: string; label?: string }>;
+      }).runs,
+    ).toEqual([
+      expect.objectContaining({
+        kind: "answer",
+        runId: savedArtifact.answerId,
+        label: "answer-smoke",
+      }),
+    ]);
+
+    const answerDetail = runCli([
+      "runs",
+      "sqlite-demo",
+      savedArtifact.answerId,
+      "--root",
+      root,
+    ]);
+    expect(answerDetail.status).toBe(0);
+    expect(answerDetail.stdout).toContain(`answer: ${savedArtifact.answerId}`);
+    expect(answerDetail.stdout).toContain("label: answer-smoke");
+    expect(answerDetail.stdout).toContain("SQLite transactions are atomic.");
+
+    const metadataWithoutSave = runCli([
+      "ask",
+      "sqlite-demo",
+      "Are SQLite transactions atomic?",
+      "--label",
+      "unsaved",
+      "--root",
+      root,
+    ]);
+    expect(metadataWithoutSave.status).toBe(2);
+    expect(metadataWithoutSave.stderr).toContain(
+      "--label and --note require --save",
+    );
   }, { timeout: 15_000 });
 
   test("profile flags high-trust snapshot sources with no extracted facts", async () => {

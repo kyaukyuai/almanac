@@ -19,6 +19,7 @@
  *   almanac doctor [id] [opts]             diagnose environment + artifacts
  *   almanac path <id> [opts]               print the absolute almanac dir path
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
+ *   almanac ask <id> <question> [opts]     synthesize a cited one-shot answer
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac refresh due <id> [opts]        check read-only refresh due status
  *   almanac refresh run <id> [opts]        run a manual refresh over update
@@ -167,7 +168,7 @@ import {
   type ToolDesignResult,
 } from "./core/types.ts";
 import { createAnthropicProvider } from "./llm/anthropic.ts";
-import { createMockProvider } from "./llm/mock.ts";
+import { createMockProvider, type MockProviderOptions } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
 import {
   describeEmbeddingProviderConfig,
@@ -203,8 +204,18 @@ import {
   saveRunToolArtifact,
   type RunArtifactKind,
   type RunArtifactStatus,
+  type RunToolExitCode,
   type RunToolArtifactSummary,
 } from "./manage/run-tool.ts";
+import {
+  AnswerArtifactSetupError,
+  saveAnswerArtifact,
+} from "./manage/answer-artifacts.ts";
+import {
+  AnswerSessionSetupError,
+  runAnswerSession,
+  type AnswerSession,
+} from "./manage/answer-session.ts";
 import {
   RefreshStatusError,
   formatRefreshDueHuman,
@@ -393,13 +404,14 @@ function optionalPositiveIntegerEnv(name: string): number | undefined {
  * is set; `null` otherwise (callers skip LLM stages instead of crashing).
  *
  * `ALMANAC_LLM=mock` forces the in-process MockProvider — useful for smoke
- * tests that want the runner exercised without spending tokens. The mock
- * returns the empty string, so Stage 1 will fail JSON parsing — which is
- * exactly the visible signal we want when no real responses are wired in.
+ * tests that want the runner exercised without spending tokens. By default the
+ * mock returns the empty string, so LLM JSON parsing fails visibly. Tests can
+ * set `ALMANAC_MOCK_RESPONSES` to a JSON object keyed by callName; values are
+ * response strings or arrays of response strings consumed in order.
  */
 function resolveProvider(): LlmProvider | null {
   if (process.env["ALMANAC_LLM"] === "mock") {
-    return createMockProvider({ defaultResponse: "" });
+    return createMockProvider(mockProviderOptionsFromEnv());
   }
   if (process.env["ANTHROPIC_API_KEY"]) {
     return createAnthropicProvider({
@@ -407,6 +419,48 @@ function resolveProvider(): LlmProvider | null {
     });
   }
   return null;
+}
+
+function mockProviderOptionsFromEnv(): MockProviderOptions {
+  const responsesRaw = process.env["ALMANAC_MOCK_RESPONSES"];
+  const defaultResponse = process.env["ALMANAC_MOCK_DEFAULT_RESPONSE"] ?? "";
+  if (responsesRaw === undefined || responsesRaw.trim() === "") {
+    return { defaultResponse };
+  }
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(responsesRaw) as unknown;
+  } catch (e) {
+    fail(`ALMANAC_MOCK_RESPONSES must be valid JSON: ${(e as Error).message}`);
+  }
+  if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) {
+    fail("ALMANAC_MOCK_RESPONSES must be a JSON object keyed by callName");
+  }
+
+  const responses: NonNullable<MockProviderOptions["responses"]> = {};
+  for (const [callName, value] of Object.entries(
+    parsed as Record<string, unknown>,
+  )) {
+    if (typeof value === "string") {
+      responses[callName] = value;
+      continue;
+    }
+    if (Array.isArray(value) && value.every((item) => typeof item === "string")) {
+      let index = 0;
+      const sequence = value;
+      responses[callName] = () => {
+        const response = sequence[Math.min(index, sequence.length - 1)] ?? "";
+        index += 1;
+        return response;
+      };
+      continue;
+    }
+    fail(
+      `ALMANAC_MOCK_RESPONSES.${callName} must be a string or an array of strings`,
+    );
+  }
+  return { responses, defaultResponse };
 }
 
 async function writeJsonFile(path: string, value: unknown): Promise<void> {
@@ -2479,7 +2533,7 @@ async function cmdRun(id: string, opts: RunOptions): Promise<void> {
 }
 
 function runArtifactMetadataFromOptions(
-  opts: RunOptions,
+  opts: { label?: string; note?: string },
 ): { label?: string; note?: string } {
   return {
     ...(opts.label === undefined
@@ -2536,6 +2590,159 @@ function parseRunJson(raw: string, label: string): unknown {
 
 function runUsageError(message: string): never {
   process.stderr.write(`error: run: ${message}\n`);
+  process.exit(2);
+}
+
+interface AskOptions {
+  root: string;
+  json?: boolean;
+  label?: string;
+  model?: string;
+  note?: string;
+  save?: boolean;
+}
+
+async function cmdAsk(
+  id: string,
+  question: string,
+  opts: AskOptions,
+): Promise<void> {
+  const normalizedQuestion = question.trim();
+  if (normalizedQuestion.length === 0) {
+    askUsageError("question must not be empty");
+  }
+  if (
+    opts.save !== true &&
+    (opts.label !== undefined || opts.note !== undefined)
+  ) {
+    askUsageError("--label and --note require --save");
+  }
+
+  const provider = resolveProvider();
+  if (provider === null) {
+    fail(
+      "ask: ANTHROPIC_API_KEY is not set, but answer synthesis needs an LLM. " +
+        "Export ANTHROPIC_API_KEY (or set ALMANAC_LLM=mock for local smoke tests).",
+    );
+  }
+
+  const almanacDir = almanacDirPath(opts.root, id);
+  const startedAt = new Date().toISOString();
+  try {
+    const session = await runAnswerSession({
+      almanacDir,
+      question: normalizedQuestion,
+      provider,
+      ...(opts.model === undefined ? {} : { model: opts.model }),
+    });
+    const finishedAt = new Date().toISOString();
+    const exitCode = exitCodeForAnswerSession(session);
+    const metadata =
+      opts.save === true ? runArtifactMetadataFromOptions(opts) : {};
+    const saved =
+      opts.save === true
+        ? await saveAnswerArtifact({
+            almanacDir,
+            question: session.question,
+            status: session.status,
+            exitCode,
+            startedAt,
+            finishedAt,
+            model: session.model,
+            promptVersions: session.promptVersions,
+            ...(session.answer === undefined ? {} : { answer: session.answer }),
+            ...(session.abstentionReason === undefined
+              ? {}
+              : { abstentionReason: session.abstentionReason }),
+            toolCalls: answerToolCallSummaries(session),
+            citations: session.citations,
+            ...(session.freshness === undefined
+              ? {}
+              : { freshness: session.freshness }),
+            usage: session.usage,
+            ...(session.error === undefined ? {} : { error: session.error }),
+            ...metadata,
+          })
+        : null;
+
+    if (opts.json === true) {
+      process.stdout.write(
+        JSON.stringify(saved ? saved.artifact : session, null, 2) + "\n",
+      );
+    } else {
+      process.stdout.write(formatAnswerSessionHuman(session));
+      if (saved) {
+        process.stdout.write(`artifact: ${saved.path}\n`);
+      }
+    }
+    process.exitCode = exitCode;
+  } catch (e) {
+    if (e instanceof AnswerSessionSetupError) {
+      fail(`ask: ${e.message}`);
+    }
+    if (e instanceof AnswerArtifactSetupError) {
+      fail(`ask: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+function exitCodeForAnswerSession(session: AnswerSession): RunToolExitCode {
+  if (session.status === "ok") return 0;
+  if (
+    session.status === "bad-tool-input" ||
+    session.status === "tool-not-found"
+  ) {
+    return 2;
+  }
+  return 1;
+}
+
+function answerToolCallSummaries(session: AnswerSession) {
+  return session.toolCalls.map((call) => ({
+    toolName: call.toolName,
+    input: call.input,
+    status: call.status,
+    durationMs: call.durationMs,
+    citationsCount: call.citationsCount,
+    ...(call.error === undefined ? {} : { error: call.error }),
+  }));
+}
+
+function formatAnswerSessionHuman(session: AnswerSession): string {
+  const lines = [
+    `answer: ${session.almanacId}`,
+    `status: ${session.status}`,
+    `almanac: ${session.almanacId} (${session.version})`,
+    `question: ${session.question}`,
+    `tools: ${session.toolCalls.map((call) => call.toolName).join(", ") || "(none)"}`,
+    `citations: ${session.citations.length}`,
+    `duration: ${session.durationMs}ms`,
+  ];
+  if (session.freshness !== undefined) {
+    lines.push(
+      `freshness: ${session.freshness.class}/${session.freshness.staleness}`,
+    );
+  }
+  if (session.status === "ok") {
+    lines.push("answer:");
+    lines.push(session.answer ?? "");
+  } else if (session.status === "abstained") {
+    lines.push(`abstention: ${session.abstentionReason ?? "(none)"}`);
+  } else if (session.error !== undefined) {
+    lines.push(`error: ${session.error.code}: ${session.error.message}`);
+  }
+  if (session.citations.length > 0) {
+    lines.push("sources:");
+    for (const citation of session.citations) {
+      lines.push(`  - ${citation.sourceId}: ${citation.url}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function askUsageError(message: string): never {
+  process.stderr.write(`error: ask: ${message}\n`);
   process.exit(2);
 }
 
@@ -3961,6 +4168,17 @@ program
   .action(cmdRun);
 
 program
+  .command("ask <id> <question>")
+  .description("synthesize a cited one-shot answer from a compiled almanac")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--label <name>", "Short label for --save answer artifacts")
+  .option("--model <name>", "Override the answer planner/synthesis model")
+  .option("--note <text>", "Human note for --save answer artifacts")
+  .option("--save", "Save an answer artifact under <almanac>/.runs/")
+  .addOption(rootOption)
+  .action(cmdAsk);
+
+program
   .command("runs <id> [runId]")
   .description("view saved local run artifacts")
   .option("--apply", "Apply --prune and delete selected artifacts")
@@ -3971,6 +4189,7 @@ program
     new Option("--kind <kind>", "Filter list by saved artifact kind").choices([
       "tool",
       "refresh",
+      "answer",
     ]),
   )
   .option("--label <name>", "Filter list by saved artifact label")
@@ -3991,6 +4210,10 @@ program
         "failed",
         "not-due",
         "locked",
+        "abstained",
+        "bad-tool-input",
+        "budget-exhausted",
+        "model-error",
       ]),
   )
   .addOption(rootOption)
