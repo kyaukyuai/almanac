@@ -35,7 +35,7 @@ import {
 
 const AskReplayFixtureToolCallSchema = z.object({
   tool: ToolNameSchema,
-  input: z.record(z.unknown()).optional(),
+  input: z.record(z.unknown()).nullable().optional(),
   expectedStatus: AnswerToolCallStatusSchema.optional(),
 });
 
@@ -200,6 +200,7 @@ interface ReplayCase {
 
 export function parseAskReplayFixtureJsonl(raw: string): AskReplayFixture[] {
   const fixtures: AskReplayFixture[] = [];
+  const seenIds = new Set<string>();
   const lines = raw.split(/\r?\n/);
   for (let index = 0; index < lines.length; index += 1) {
     const line = lines[index]!.trim();
@@ -220,6 +221,13 @@ export function parseAskReplayFixtureJsonl(raw: string): AskReplayFixture[] {
         `invalid fixture JSONL line ${index + 1}: ${fixture.error.message}`,
       );
     }
+    if (seenIds.has(fixture.data.id)) {
+      throw new AskReplaySetupError(
+        "fixture-invalid",
+        `duplicate fixture id on JSONL line ${index + 1}: ${fixture.data.id}`,
+      );
+    }
+    seenIds.add(fixture.data.id);
     fixtures.push(fixture.data);
   }
   return fixtures;
@@ -520,7 +528,7 @@ function replayCaseFromFixture(
     source: { kind: "fixture", line: index + 1 },
     toolCalls: fixture.toolCalls.map((call) => ({
       toolName: call.tool,
-      input: call.input ?? {},
+      input: call.input === undefined ? {} : call.input,
       ...(call.expectedStatus === undefined
         ? {}
         : { expectedStatus: call.expectedStatus }),
