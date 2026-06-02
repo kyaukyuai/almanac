@@ -127,6 +127,7 @@ export interface AskReplayResultEntry {
       callIndex: number;
       toolName: string;
       status?: AnswerToolCallStatus;
+      citationsCount?: number;
     }>;
   };
   observed: {
@@ -183,6 +184,7 @@ interface ReplayCase {
     toolName: string;
     input: Record<string, unknown> | null;
     expectedStatus?: AnswerToolCallStatus;
+    expectedCitationsCount?: number;
   }>;
   expectedStatus: AnswerArtifactStatus;
   minCitations?: number;
@@ -190,6 +192,10 @@ interface ReplayCase {
   unsupportedClaims?: string[];
   maxUnsupportedClaims?: number;
   expectedAbstentionReason?: string;
+  finalStatus?: AnswerArtifactStatus;
+  finalAbstentionReason?: string;
+  finalCitationsCount?: number;
+  finalStaleCitationCount?: number;
 }
 
 export function parseAskReplayFixtureJsonl(raw: string): AskReplayFixture[] {
@@ -369,6 +375,14 @@ async function runAskReplayCase(
         `tool #${index} ${expected.toolName} expected ${expected.expectedStatus}, observed ${observed?.status ?? "(missing)"}`,
       );
     }
+    if (
+      expected.expectedCitationsCount !== undefined &&
+      observed?.citationsCount !== expected.expectedCitationsCount
+    ) {
+      reasons.push(
+        `tool #${index} ${expected.toolName} expected ${expected.expectedCitationsCount} citations, observed ${observed?.citationsCount ?? "(missing)"}`,
+      );
+    }
   }
 
   return buildReplayResult({
@@ -407,11 +421,20 @@ function buildReplayResult(input: {
   status: AskReplayResultEntry["status"];
   reasons: string[];
 }): AskReplayResultEntry {
-  const observedStatus = inferObservedAnswerStatus(input.observations);
-  const citationStats = citationStatsFromObservations(input.observations);
+  const observedStatus =
+    input.replayCase.finalStatus ?? inferObservedAnswerStatus(input.observations);
+  const toolCitationStats = citationStatsFromObservations(input.observations);
+  const citationStats = {
+    citationsCount:
+      input.replayCase.finalCitationsCount ?? toolCitationStats.citationsCount,
+    staleCitationCount:
+      input.replayCase.finalStaleCitationCount ??
+      toolCitationStats.staleCitationCount,
+  };
   const observedAbstentionReason =
     observedStatus === "abstained"
-      ? inferObservedAbstentionReason(input.observations)
+      ? (input.replayCase.finalAbstentionReason ??
+        inferObservedAbstentionReason(input.observations))
       : undefined;
   const quality = evaluateAnswerQualityGate({
     expectedStatus: input.replayCase.expectedStatus,
@@ -467,6 +490,9 @@ function buildReplayResult(input: {
         ...(call.expectedStatus === undefined
           ? {}
           : { status: call.expectedStatus }),
+        ...(call.expectedCitationsCount === undefined
+          ? {}
+          : { citationsCount: call.expectedCitationsCount }),
       })),
     },
     observed: {
@@ -566,6 +592,7 @@ function replayCaseFromAnswerArtifact(artifact: AnswerArtifact): ReplayCase {
       toolName: call.toolName,
       input: call.input,
       expectedStatus: call.status,
+      expectedCitationsCount: call.citationsCount,
     })),
     expectedStatus: artifact.status,
     ...(artifact.status === "ok"
@@ -574,6 +601,12 @@ function replayCaseFromAnswerArtifact(artifact: AnswerArtifact): ReplayCase {
     ...(artifact.abstentionReason === undefined
       ? {}
       : { expectedAbstentionReason: artifact.abstentionReason }),
+    finalStatus: artifact.status,
+    ...(artifact.abstentionReason === undefined
+      ? {}
+      : { finalAbstentionReason: artifact.abstentionReason }),
+    finalCitationsCount: artifact.citations.length,
+    finalStaleCitationCount: artifact.trace?.citations.staleCount ?? 0,
   };
 }
 
