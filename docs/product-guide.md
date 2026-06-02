@@ -285,6 +285,33 @@ the receiver should get saved tool, refresh, and answer artifacts:
 almanac export sqlite-demo --include-runs --root "$tmp"
 ```
 
+## Demo handoff
+
+Use `export` when the receiver needs a runnable almanac directory. The default
+archive includes the compiled artifact, knowledge index, sources, facts, tools,
+contract files, and adapters; it excludes `.compile/` and `.runs/` by default.
+
+```bash
+almanac export sqlite-demo --root "$tmp"
+tar -tzf almanac-sqlite-demo-0.1.0.tar.gz | head
+```
+
+Use `--include-runs` only when saved operational artifacts are part of the
+handoff. Saved runs may include tool inputs, tool outputs, answer text, labels,
+and notes.
+
+Use `wiki` when the receiver needs a human-readable review bundle instead of a
+runnable archive:
+
+```bash
+almanac wiki sqlite-demo --root "$tmp"
+open almanac-sqlite-demo-0.1.0-wiki/README.md
+```
+
+The wiki bundle writes `README.md`, `sources.md`, `facts.md`, `tools.md`,
+`benchmark.md`, and `artifacts.json`. `artifacts.json` includes its own
+manifest entry so reviewers can verify the exact file list and byte sizes.
+
 ## Answer mode
 
 `almanac ask` is the local answer gate. It is intentionally different

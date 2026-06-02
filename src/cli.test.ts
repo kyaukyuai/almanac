@@ -687,6 +687,21 @@ describe("almanac CLI product onboarding", () => {
       ]),
     );
 
+    const defaultExportPath = join(root, "sqlite-demo-default.tar.gz");
+    const defaultExport = runCli([
+      "export",
+      "sqlite-demo",
+      "--output",
+      defaultExportPath,
+      "--root",
+      root,
+    ]);
+    expect(defaultExport.status).toBe(0);
+    expect(defaultExport.stderr).toBe("");
+    expect(defaultExport.stdout).toContain("exclude .runs/");
+    expect(defaultExport.stdout).toContain("exclude .compile/");
+    expect((await stat(defaultExportPath)).size).toBeGreaterThan(0);
+
     const exported = runCli([
       "export",
       "sqlite-demo",
@@ -699,6 +714,45 @@ describe("almanac CLI product onboarding", () => {
     expect(exported.status).toBe(0);
     expect(exported.stderr).toBe("");
     expect(exported.stdout).toContain("INCLUDE .runs/");
+
+    const wikiDir = join(root, "sqlite-demo-wiki");
+    const wiki = runCli([
+      "wiki",
+      "sqlite-demo",
+      "--output",
+      wikiDir,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(wiki.status).toBe(0);
+    expect(wiki.stderr).toBe("");
+    const wikiJson = JSON.parse(wiki.stdout) as {
+      outputDir: string;
+      files: Array<{ name: string; path: string; byteLength: number }>;
+    };
+    expect(wikiJson.outputDir).toBe(wikiDir);
+    expect(wikiJson.files.map((file) => file.name)).toEqual([
+      "README.md",
+      "sources.md",
+      "facts.md",
+      "tools.md",
+      "benchmark.md",
+      "artifacts.json",
+    ]);
+    expect(await readFile(join(wikiDir, "README.md"), "utf8")).toContain(
+      "# SQLite Operations Demo",
+    );
+    const wikiArtifacts = JSON.parse(
+      await readFile(join(wikiDir, "artifacts.json"), "utf8"),
+    ) as {
+      almanacId: string;
+      files: Array<{ name: string; byteLength: number }>;
+    };
+    expect(wikiArtifacts.almanacId).toBe("sqlite-demo");
+    expect(wikiArtifacts.files.map((file) => file.name)).toContain(
+      "artifacts.json",
+    );
 
     const failedRefreshId = "refresh-2099-01-05T00-00-00-000Z-00000005";
     const failedRefreshArtifact = RefreshArtifactSchema.parse({
