@@ -1011,7 +1011,8 @@ answer-mode regression workflow:
 - doctor/profile readiness that points to exact fixture and suite next steps.
 
 See [`docs/v0.9-plan.md`](./v0.9-plan.md) for scope, non-goals, PR sequence,
-and release smoke targets.
+and release smoke targets. The concrete release-candidate runbook is
+[`docs/v0.9-rc-smoke.md`](./v0.9-rc-smoke.md).
 
 ### v0.10+ (long-tail)
 

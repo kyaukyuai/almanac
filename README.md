@@ -243,6 +243,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   replay behavior
 - [v0.9 plan](./docs/v0.9-plan.md): ask fixture authoring, suite gates,
   refresh validation, and answer readiness hardening
+- [v0.9 RC smoke](./docs/v0.9-rc-smoke.md): release-candidate validation for
+  ask fixture authoring, ask suites, refresh ask validation, and provider ask
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
