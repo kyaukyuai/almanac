@@ -30,6 +30,7 @@ import {
   type FactRecord,
   type ToolManifest,
 } from "../core/types.ts";
+import { createMockProvider } from "../llm/mock.ts";
 import { saveAnswerArtifact } from "./answer-artifacts.ts";
 import {
   addAskFixtureFromRun,
@@ -311,6 +312,127 @@ describe("ask suite gate", () => {
     expect(exitCodeForAskSuite(report)).toBe(1);
   });
 
+  test("propagates explicit entailment judge results", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-entailment");
+    mkdirSync(join(almanacDir, "tests"), { recursive: true });
+    writeFileSync(
+      join(almanacDir, "tests", "ask.jsonl"),
+      JSON.stringify({
+        id: "sqlite-suite-entailment",
+        question: "Are foreign keys supported?",
+        answer: "SQLite supports foreign key constraints.",
+        toolCalls: [
+          {
+            tool: "query_facts",
+            input: { q: "foreign keys" },
+            expectedStatus: "ok",
+          },
+        ],
+        expectedStatus: "ok",
+        minCitations: 1,
+      }) + "\n",
+      "utf8",
+    );
+    const provider = createMockProvider({
+      responses: {
+        "answer-entailment@judge-v1": JSON.stringify({
+          verdict: "supported",
+          summary: "The citation supports the foreign-key claim.",
+          claims: [
+            {
+              claim: "SQLite supports foreign key constraints.",
+              status: "supported",
+              citationIndexes: [0],
+              reason: "The cited evidence concerns SQLite foreign keys.",
+            },
+          ],
+        }),
+      },
+    });
+
+    const report = await runAskSuite({
+      almanacDir,
+      entailment: { provider },
+    });
+
+    expect(provider.callLog).toHaveLength(1);
+    expect(report.status).toBe("pass");
+    expect(report.entailment).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        passed: 1,
+        failed: 0,
+      }),
+    );
+    expect(report.results[0]?.entailment).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        verdict: "supported",
+      }),
+    );
+    expect(formatAskSuiteHuman(report)).toContain(
+      "entailment=pass/supported",
+    );
+  });
+
+  test("warns without provider calls when a judged fixture has no answer text", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-entailment-skip");
+    mkdirSync(join(almanacDir, "tests"), { recursive: true });
+    writeFileSync(
+      join(almanacDir, "tests", "ask.jsonl"),
+      JSON.stringify({
+        id: "sqlite-suite-entailment-skip",
+        question: "Are foreign keys supported?",
+        toolCalls: [
+          {
+            tool: "query_facts",
+            input: { q: "foreign keys" },
+            expectedStatus: "ok",
+          },
+        ],
+        expectedStatus: "ok",
+        minCitations: 1,
+      }) + "\n",
+      "utf8",
+    );
+    const provider = createMockProvider({
+      defaultResponse: JSON.stringify({
+        verdict: "supported",
+        summary: "unused",
+        claims: [
+          {
+            claim: "unused",
+            status: "supported",
+            citationIndexes: [],
+            reason: "unused",
+          },
+        ],
+      }),
+    });
+
+    const report = await runAskSuite({
+      almanacDir,
+      entailment: { provider },
+    });
+
+    expect(provider.callLog).toHaveLength(0);
+    expect(report.status).toBe("pass");
+    expect(report.entailment).toEqual(
+      expect.objectContaining({
+        status: "warning",
+        passed: 0,
+        failed: 0,
+        warned: 1,
+      }),
+    );
+    expect(report.results[0]?.entailment).toEqual(
+      expect.objectContaining({
+        status: "warning",
+        verdict: "uncertain",
+      }),
+    );
+  });
+
   test("rejects duplicate fixture ids across discovered files", async () => {
     const almanacDir = await buildAskReplayFixture("ask-suite-duplicates");
     mkdirSync(join(almanacDir, "tests"), { recursive: true });
@@ -396,6 +518,7 @@ describe("ask fixture authoring", () => {
         fixture: expect.objectContaining({
           id: saved.artifact.answerId,
           expectedStatus: "ok",
+          answer: "SQLite supports foreign key constraints.",
           minCitations: 1,
           maxStaleCitations: 0,
         }),
@@ -533,6 +656,145 @@ describe("ask replay saved artifacts", () => {
         }),
       }),
     );
+  });
+
+  test("runs an explicit entailment judge for saved answer replay", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-replay-entailment");
+    await saveAnswerArtifact({
+      almanacDir,
+      answerId: "answer-2026-01-02T00-00-00-000Z-00000006",
+      question: "Are foreign keys supported?",
+      status: "ok",
+      exitCode: 0,
+      startedAt: "2026-01-02T00:00:00.000Z",
+      finishedAt: "2026-01-02T00:00:01.000Z",
+      label: "judge",
+      answer: "SQLite supports foreign key constraints.",
+      toolCalls: [
+        {
+          toolName: "query_facts",
+          input: { q: "foreign keys" },
+          status: "ok",
+          durationMs: 10,
+          citationsCount: 1,
+        },
+      ],
+      citations: [fixtureCitation()],
+      freshness: {
+        class: "static",
+        maxAge: null,
+        staleness: "fresh",
+      },
+    });
+    const provider = createMockProvider({
+      responses: {
+        "answer-entailment@judge-v1": JSON.stringify({
+          verdict: "supported",
+          summary: "The citation mentions foreign key constraints.",
+          claims: [
+            {
+              claim: "SQLite supports foreign key constraints.",
+              status: "supported",
+              citationIndexes: [0],
+              reason: "The excerpt is about SQLite foreign key constraints.",
+            },
+          ],
+        }),
+      },
+    });
+
+    const report = await runAskReplayFromSavedRuns({
+      almanacDir,
+      label: "judge",
+      entailment: { provider },
+    });
+
+    expect(provider.callLog).toHaveLength(1);
+    expect(report.entailment).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        passed: 1,
+        failed: 0,
+        claimsChecked: 1,
+      }),
+    );
+    expect(report.results[0]).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        entailment: expect.objectContaining({
+          status: "pass",
+          verdict: "supported",
+        }),
+      }),
+    );
+    expect(formatAskReplayHuman(report)).toContain(
+      "entailment=pass/supported",
+    );
+  });
+
+  test("fails replay when the entailment judge finds unsupported claims", async () => {
+    const almanacDir = await buildAskReplayFixture(
+      "ask-replay-entailment-fail",
+    );
+    await saveAnswerArtifact({
+      almanacDir,
+      answerId: "answer-2026-01-02T00-00-00-000Z-00000007",
+      question: "Does SQLite encrypt every page by default?",
+      status: "ok",
+      exitCode: 0,
+      startedAt: "2026-01-02T00:00:00.000Z",
+      finishedAt: "2026-01-02T00:00:01.000Z",
+      label: "judge-fail",
+      answer: "SQLite encrypts every page by default.",
+      toolCalls: [
+        {
+          toolName: "query_facts",
+          input: { q: "foreign keys" },
+          status: "ok",
+          durationMs: 10,
+          citationsCount: 1,
+        },
+      ],
+      citations: [fixtureCitation()],
+      freshness: {
+        class: "static",
+        maxAge: null,
+        staleness: "fresh",
+      },
+    });
+    const provider = createMockProvider({
+      responses: {
+        "answer-entailment@judge-v1": JSON.stringify({
+          verdict: "unsupported",
+          summary: "The citation does not discuss encryption.",
+          claims: [
+            {
+              claim: "SQLite encrypts every page by default.",
+              status: "unsupported",
+              citationIndexes: [],
+              reason: "The citation is about foreign keys, not encryption.",
+            },
+          ],
+        }),
+      },
+    });
+
+    const report = await runAskReplayFromSavedRuns({
+      almanacDir,
+      label: "judge-fail",
+      entailment: { provider },
+    });
+
+    expect(report.failed).toBe(1);
+    expect(report.entailment).toEqual(
+      expect.objectContaining({
+        status: "fail",
+        failed: 1,
+        unsupportedClaimCount: 1,
+      }),
+    );
+    expect(report.results[0]?.reasons.join("\n")).toContain("entailment:");
+    expect(exitCodeForAskReplay(report)).toBe(1);
   });
 
   test("replays saved abstentions against the recorded final answer status", async () => {

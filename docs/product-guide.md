@@ -286,8 +286,13 @@ almanac ask-replay sqlite-demo \
 Replay reports include an ask-mode quality gate. The gate records citation
 rate, unsupported claim count, stale citation count, and abstention
 expected/actual matching separately from benchmark fixtures. Fixture rows can
-set `unsupportedClaims`, `minCitations`, `maxStaleCitations`, and
+set `answer`, `unsupportedClaims`, `minCitations`, `maxStaleCitations`, and
 `expectedAbstentionReason` to make replay failures explicit.
+
+When a saved answer or fixture row includes answer text, add `--judge` to
+`ask-replay` or `ask-suite` to run an explicit LLM entailment judge over the
+answer and replayed citations. The judge is provider-backed and opt-in;
+deterministic replay remains provider-free by default.
 
 `profile` and `doctor` also expose answer readiness without calling a provider:
 ask fixture coverage by path, latest saved refresh ask-suite status, latest

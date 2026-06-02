@@ -2,7 +2,8 @@
  * Suite-level gate for deterministic ask replay fixtures.
  *
  * The suite discovers reviewable JSONL fixtures and delegates execution to the
- * ask-replay engine. It does not call an LLM provider.
+ * ask-replay engine. It does not call an LLM provider unless callers pass an
+ * explicit entailment judge.
  */
 
 import { existsSync } from "node:fs";
@@ -19,6 +20,7 @@ import {
   AskReplayFixtureSchema,
   AskReplaySetupError,
   runAskReplayFromFixtures,
+  type AskReplayEntailmentOptions,
   type AskReplayFixture,
   type AskReplayReport,
   type AskReplayResultEntry,
@@ -29,6 +31,7 @@ export interface RunAskSuiteOptions {
   almanacDir: string;
   /** Optional absolute or cwd-relative fixture paths. Defaults to known paths. */
   fixturePaths?: string[];
+  entailment?: AskReplayEntailmentOptions;
 }
 
 export interface AskSuiteFixtureFileSummary {
@@ -64,6 +67,7 @@ export interface AskSuiteReport {
     staleCitationCount: number;
     abstentionMismatchCount: number;
   };
+  entailment?: AskReplayReport["entailment"];
   observedStatusCounts: Record<AnswerArtifactStatus, number>;
   results: AskSuiteResultEntry[];
 }
@@ -129,6 +133,9 @@ export async function runAskSuite(
     replay = await runAskReplayFromFixtures({
       almanacDir: options.almanacDir,
       fixtures,
+      ...(options.entailment === undefined
+        ? {}
+        : { entailment: options.entailment }),
     });
   } catch (cause) {
     if (cause instanceof AskReplaySetupError) {
@@ -183,6 +190,7 @@ export async function runAskSuite(
     failed: replay.failed,
     errored: replay.errored,
     quality,
+    ...(replay.entailment === undefined ? {} : { entailment: replay.entailment }),
     observedStatusCounts: summarizeObservedStatuses(results),
     results,
   };
@@ -206,14 +214,25 @@ export function formatAskSuiteHuman(report: AskSuiteReport): string {
       `abstentionMismatches=${report.quality.abstentionMismatchCount}`,
     `observed: ${formatObservedStatusCounts(report.observedStatusCounts)}`,
   );
+  if (report.entailment !== undefined) {
+    lines.push(
+      `entailment: ${report.entailment.status} passed=${report.entailment.passed} ` +
+        `failed=${report.entailment.failed} warned=${report.entailment.warned} ` +
+        `unsupported=${report.entailment.unsupportedClaimCount} uncertain=${report.entailment.uncertainClaimCount}`,
+    );
+  }
   for (const result of report.results) {
     const reasons =
       result.reasons.length === 0 ? "" : ` reasons=${result.reasons.join("; ")}`;
+    const entailment =
+      result.entailment === undefined
+        ? ""
+        : ` entailment=${result.entailment.status}/${result.entailment.verdict}`;
     lines.push(
       `  - ${result.fixtureId}  ${result.status}  ${result.fixtureFile.relPath}:${result.fixtureFile.line} ` +
         `expected=${result.expected.status} observed=${result.observed.status} ` +
         `citations=${result.observed.citationsCount} stale=${result.observed.staleCitationCount} ` +
-        `quality=${result.quality.status}${reasons}`,
+        `quality=${result.quality.status}${entailment}${reasons}`,
     );
   }
   return lines.join("\n") + "\n";

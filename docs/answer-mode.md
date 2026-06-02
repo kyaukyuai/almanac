@@ -129,6 +129,7 @@ Fixture rows are intentionally small. Stable fields are:
 
 - `id`
 - `question`
+- `answer` (optional; required for semantic `--judge` checks)
 - `toolCalls[]`
 - `expectedStatus`
 - `minCitations`
@@ -139,6 +140,24 @@ Fixture rows are intentionally small. Stable fields are:
 
 Replay is an answer-mode regression surface. It complements Stage 11/12
 benchmarks; it does not replace them.
+
+Replay can also run an explicit semantic entailment judge:
+
+```bash
+almanac ask-replay sqlite-demo \
+  --from-runs \
+  --label rc-answer \
+  --judge \
+  --json \
+  --root "$tmp"
+```
+
+`--judge` is opt-in and calls the configured LLM provider. It checks whether
+answer claims are supported by the replayed citations and reports
+`supported`, `unsupported`, `mixed`, or `uncertain` verdicts. Deterministic
+replay remains provider-free when `--judge` is omitted. Fixture-only replay can
+be judged only when the fixture row includes `answer`; otherwise the judge
+records a warning instead of making an unsupported provider call.
 
 ## Ask Suite Gate
 
@@ -153,10 +172,17 @@ almanac ask-suite sqlite-demo --json --root "$tmp"
 Use `--fixture <path>` one or more times to gate an explicit fixture set instead
 of the standard paths.
 
+Use `--judge` to run the optional entailment judge across answer-bearing
+fixtures:
+
+```bash
+almanac ask-suite sqlite-demo --judge --json --root "$tmp"
+```
+
 Exit codes:
 
 - `0`: all replay cases and quality gates passed,
-- `1`: at least one replay case or quality gate failed,
+- `1`: at least one replay case, quality gate, or entailment judge failed,
 - `2`: suite setup failed, such as missing fixtures, malformed JSONL, duplicate
   ids, or a missing almanac directory.
 
@@ -179,6 +205,10 @@ Default expectations:
 
 Live saved answers persist the gate verdict in `trace.quality`. Replay reports
 both per-case quality and aggregate quality.
+
+The entailment judge is separate from this deterministic quality gate. It is
+useful for release smoke and fixture review, but it is not run by `profile`,
+`doctor`, default `ask-replay`, or default `ask-suite`.
 
 ## Readiness
 

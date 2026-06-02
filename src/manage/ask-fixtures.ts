@@ -170,6 +170,7 @@ export function askReplayFixtureFromAnswerArtifact(
   return AskReplayFixtureSchema.parse({
     id: options.fixtureId ?? artifact.answerId,
     question: artifact.question,
+    ...(artifact.answer === undefined ? {} : { answer: artifact.answer }),
     toolCalls: artifact.toolCalls.map((call) => ({
       tool: call.toolName,
       input: call.input,
