@@ -3285,6 +3285,7 @@ async function cmdSources(id: string, opts: SourcesOptions): Promise<void> {
           approvedBy: sources.approvedBy ?? null,
           coverage: sources.coverage,
           warnings: sources.warnings,
+          stability: sources.stability ?? null,
           sources: accepted,
           rejected: opts.rejected === true ? sources.rejected : [],
         },
@@ -3305,6 +3306,13 @@ async function cmdSources(id: string, opts: SourcesOptions): Promise<void> {
   );
   if (sources.warnings.length > 0) {
     process.stdout.write(`  warnings      ${sources.warnings.join("; ")}\n`);
+  }
+  if (sources.stability !== undefined) {
+    process.stdout.write(
+      `  drift         previous=${sources.stability.previousAcceptedCount}, current=${sources.stability.currentAcceptedCount}, ` +
+        `preserved=${sources.stability.preservedSourceIds.length}, restored=${sources.stability.restoredSourceIds.length}, ` +
+        `replaced=${sources.stability.replacedSources.length}, dropped=${sources.stability.droppedSources.length}, added=${sources.stability.addedSourceIds.length}\n`,
+    );
   }
 
   process.stdout.write(`\naccepted:\n`);

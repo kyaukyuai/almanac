@@ -27,8 +27,10 @@ import {
   parseStage11Output,
   type BenchmarkReport,
   type BenchmarkSet,
+  type BenchmarkFixtureCoverage,
   type DomainSpec,
   type FactRecord,
+  type Stage11PreflightAttempt,
   type Stage11Output,
   type ToolManifest,
 } from "../../core/types.ts";
@@ -339,6 +341,53 @@ function stabilizeByDroppingFixtureIds(
   };
 }
 
+function benchmarkFixtureCoverage(set: BenchmarkSet): BenchmarkFixtureCoverage {
+  const positive = set.positive.length;
+  const negative = set.negative.length;
+  return { positive, negative, total: positive + negative };
+}
+
+function generatedBenchmarkCoverageFloor(): BenchmarkFixtureCoverage {
+  return {
+    positive: STAGE11_MIN_GENERATED_POSITIVE_FIXTURES,
+    negative: STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES,
+    total: STAGE11_MIN_GENERATED_TOTAL_FIXTURES,
+  };
+}
+
+function benchmarkCoverageMeetsFloor(coverage: BenchmarkFixtureCoverage): boolean {
+  const floor = generatedBenchmarkCoverageFloor();
+  return (
+    coverage.positive >= floor.positive &&
+    coverage.negative >= floor.negative &&
+    coverage.total >= floor.total
+  );
+}
+
+function attachStage11Stability(
+  output: Stage11Output,
+  preflightEnabled: boolean,
+  preflightAttempts: readonly Stage11PreflightAttempt[],
+): Stage11Output {
+  const finalCoverage = benchmarkFixtureCoverage(output.set);
+  return {
+    ...output,
+    stability: {
+      coverageFloor: generatedBenchmarkCoverageFloor(),
+      finalCoverage,
+      coverageOk: benchmarkCoverageMeetsFloor(finalCoverage),
+      ...(preflightEnabled
+        ? {
+            preflight: {
+              enabled: true,
+              attempts: [...preflightAttempts],
+            },
+          }
+        : {}),
+    },
+  };
+}
+
 function stabilizeFromPreflight(
   output: Stage11Output,
   report: BenchmarkReport,
@@ -396,6 +445,7 @@ function formatPreflightFailures(
     "For positives, use only invocations that can pass against deterministic facts-backed tools.",
     "Avoid positive fixtures for facts-backed custom tools with empty sampleUrls unless the exact invocation passed preflight.",
     "Do not keep skipped/unverified fixtures in mixed deterministic benchmark sets; replace them or add enough deterministic coverage that they can be dropped.",
+    "Use documented enum values exactly; do not substitute near-synonyms for intent, refusalReason, status, or error-code fields.",
     "For negative fixture coverage, prefer deterministic error-code checks such as bad-input on facts-backed tools when no-results queries are prone to accidental corpus matches.",
     "Use refusalReason \"no-source\" for no-result negatives; \"no-results\" is an error code, not a refusalReason.",
   );
@@ -414,17 +464,11 @@ function formatPreflightCoverageError(error: BenchmarkPreflightCoverageError): s
 }
 
 function benchmarkCoverageMinimumIssue(set: BenchmarkSet): string | null {
-  const positive = set.positive.length;
-  const negative = set.negative.length;
-  const total = positive + negative;
-  if (
-    positive >= STAGE11_MIN_GENERATED_POSITIVE_FIXTURES &&
-    negative >= STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES &&
-    total >= STAGE11_MIN_GENERATED_TOTAL_FIXTURES
-  ) {
+  const coverage = benchmarkFixtureCoverage(set);
+  if (benchmarkCoverageMeetsFloor(coverage)) {
     return null;
   }
-  return formatBenchmarkCoverageMinimumIssue({ positive, negative, total });
+  return formatBenchmarkCoverageMinimumIssue(coverage);
 }
 
 function formatBenchmarkCoverageMinimumIssue(args: {
@@ -688,6 +732,7 @@ export function createBenchmarkGenRunner(
         | null = null;
       let output: Stage11Output | null = null;
       let lastDurationMs = 0;
+      const preflightAttempts: Stage11PreflightAttempt[] = [];
 
       const retryCoverageMinimumIfNeeded = (
         candidateOutput: Stage11Output,
@@ -696,10 +741,23 @@ export function createBenchmarkGenRunner(
       ): boolean => {
         const detail = benchmarkCoverageMinimumIssue(candidateOutput.set);
         if (detail === null) return false;
+        const coverage = benchmarkFixtureCoverage(candidateOutput.set);
+        if (opts.preflightGeneratedSet === true) {
+          preflightAttempts.push({
+            attempt,
+            generatedCoverage: coverage,
+            includedFixtureIds: [],
+            skippedFixtureIds: [],
+            failedFixtureIds: [],
+            droppedFixtureIds: [],
+            outcome: attempt < maxAttempts ? "retry-coverage-minimum" : "blocked",
+            ...(attempt < maxAttempts ? {} : { blockedReason: detail }),
+          });
+        }
         lastError = new BenchmarkCoverageMinimumError(
-          candidateOutput.set.positive.length,
-          candidateOutput.set.negative.length,
-          candidateOutput.set.positive.length + candidateOutput.set.negative.length,
+          coverage.positive,
+          coverage.negative,
+          coverage.total,
         );
         if (attempt < maxAttempts) {
           ctx.log({
@@ -789,6 +847,15 @@ export function createBenchmarkGenRunner(
               normalized.output.set,
               manifests,
             );
+            const preflightAttempt: Stage11PreflightAttempt = {
+              attempt,
+              generatedCoverage: benchmarkFixtureCoverage(normalized.output.set),
+              includedFixtureIds: preflightPlan.includedFixtureIds,
+              skippedFixtureIds: preflightPlan.skippedFixtureIds,
+              failedFixtureIds: [],
+              droppedFixtureIds: [],
+              outcome: "passed",
+            };
             if (preflightPlan.skippedFixtureIds.length > 0) {
               ctx.log({
                 event: "stage11:preflight:filtered",
@@ -798,6 +865,8 @@ export function createBenchmarkGenRunner(
               });
             }
             if (preflightPlan.set === null) {
+              preflightAttempt.outcome = "skipped-no-deterministic-fixtures";
+              preflightAttempts.push(preflightAttempt);
               ctx.log({
                 event: "stage11:preflight:skipped",
                 reason: "no-deterministic-fixtures",
@@ -832,12 +901,15 @@ export function createBenchmarkGenRunner(
               failed: report.summary.failed,
               errored: report.summary.errored,
             });
+            preflightAttempt.failedFixtureIds = failed.map((f) => f.fixtureId);
             if (failed.length > 0) {
               lastError = new BenchmarkPreflightValidationError(
                 report,
                 failed.map((f) => f.fixtureId),
               );
               if (attempt < maxAttempts) {
+                preflightAttempt.outcome = "retry-preflight-failed";
+                preflightAttempts.push(preflightAttempt);
                 const detail = formatPreflightFailures(
                   report,
                   normalized.output.set,
@@ -868,6 +940,8 @@ export function createBenchmarkGenRunner(
                 report,
               );
               if (stabilized.blockedReason !== undefined) {
+                preflightAttempt.outcome = "blocked";
+                preflightAttempt.blockedReason = stabilized.blockedReason;
                 ctx.log({
                   event: "stage11:preflight:stabilization-skipped",
                   reason: stabilized.blockedReason,
@@ -875,6 +949,11 @@ export function createBenchmarkGenRunner(
                 });
               }
               if (stabilized.droppedFixtureIds.length > 0) {
+                preflightAttempt.outcome = "stabilized";
+                preflightAttempt.droppedFixtureIds = [
+                  ...preflightAttempt.droppedFixtureIds,
+                  ...stabilized.droppedFixtureIds,
+                ];
                 ctx.log({
                   event: "stage11:preflight:stabilized",
                   dropped: stabilized.droppedFixtureIds,
@@ -904,6 +983,10 @@ export function createBenchmarkGenRunner(
                       unverified,
                     );
                     if (withoutSkipped.blockedReason !== undefined) {
+                      preflightAttempt.outcome = "blocked";
+                      preflightAttempt.blockedReason =
+                        withoutSkipped.blockedReason;
+                      preflightAttempts.push(preflightAttempt);
                       ctx.log({
                         event: "stage11:preflight:stabilization-skipped",
                         reason: withoutSkipped.blockedReason,
@@ -915,6 +998,11 @@ export function createBenchmarkGenRunner(
                       );
                     }
                     if (withoutSkipped.droppedFixtureIds.length > 0) {
+                      preflightAttempt.outcome = "stabilized";
+                      preflightAttempt.droppedFixtureIds = [
+                        ...preflightAttempt.droppedFixtureIds,
+                        ...withoutSkipped.droppedFixtureIds,
+                      ];
                       ctx.log({
                         event: "stage11:preflight:stabilized",
                         dropped: withoutSkipped.droppedFixtureIds,
@@ -930,8 +1018,10 @@ export function createBenchmarkGenRunner(
                   if (
                     retryCoverageMinimumIfNeeded(output, attempt, completion.text)
                   ) {
+                    preflightAttempts.push(preflightAttempt);
                     continue;
                   }
+                  preflightAttempts.push(preflightAttempt);
                   lastError = null;
                   break;
                 }
@@ -948,6 +1038,11 @@ export function createBenchmarkGenRunner(
                 preflightPlan.skippedFixtureIds,
               );
               if (stabilized.blockedReason !== undefined) {
+                preflightAttempt.outcome = attempt < maxAttempts
+                  ? "retry-unverified-coverage"
+                  : "blocked";
+                preflightAttempt.blockedReason = stabilized.blockedReason;
+                preflightAttempts.push(preflightAttempt);
                 const coverageError = new BenchmarkPreflightCoverageError(
                   preflightPlan.skippedFixtureIds,
                   stabilized.blockedReason,
@@ -982,6 +1077,9 @@ export function createBenchmarkGenRunner(
                 throw coverageError;
               }
               if (stabilized.droppedFixtureIds.length > 0) {
+                preflightAttempt.outcome = "stabilized";
+                preflightAttempt.droppedFixtureIds =
+                  stabilized.droppedFixtureIds;
                 ctx.log({
                   event: "stage11:preflight:stabilized",
                   dropped: stabilized.droppedFixtureIds,
@@ -993,12 +1091,15 @@ export function createBenchmarkGenRunner(
                 if (
                   retryCoverageMinimumIfNeeded(output, attempt, completion.text)
                 ) {
+                  preflightAttempts.push(preflightAttempt);
                   continue;
                 }
+                preflightAttempts.push(preflightAttempt);
                 lastError = null;
                 break;
               }
             }
+            preflightAttempts.push(preflightAttempt);
           }
 
           output = normalized.output;
@@ -1067,6 +1168,24 @@ export function createBenchmarkGenRunner(
       if (output === null) {
         throw lastError ?? new Error("Stage 11: exhausted attempts with no result");
       }
+
+      output = attachStage11Stability(
+        output,
+        opts.preflightGeneratedSet === true,
+        preflightAttempts,
+      );
+      const finalCoverage = output.stability!.finalCoverage;
+      const coverageFloor = output.stability!.coverageFloor;
+      ctx.log({
+        event: "stage11:coverage:checked",
+        positive: finalCoverage.positive,
+        negative: finalCoverage.negative,
+        total: finalCoverage.total,
+        minPositive: coverageFloor.positive,
+        minNegative: coverageFloor.negative,
+        minTotal: coverageFloor.total,
+        ok: output.stability!.coverageOk,
+      });
 
       // Persist artifacts.
       const canonicalText = JSON.stringify(output, null, 2);
@@ -1145,10 +1264,10 @@ function buildRetryFeedback(args: {
   lines.push(
     "",
     args.reason === "preflight-failed"
-      ? "Please re-emit a corrected benchmark set. Remove or replace every fixture that failed or was skipped by preflight; prefer deterministic facts-backed tools for benchmark fixtures. The final set must still contain at least 8 positive fixtures, 5 negative fixtures, and 13 total fixtures after failed/skipped fixtures are removed. For negative coverage, prefer deterministic bad-input/error-code fixtures when no-results text queries may accidentally match the corpus."
+      ? "Please re-emit a corrected benchmark set. Remove or replace every fixture that failed or was skipped by preflight; prefer deterministic facts-backed tools for benchmark fixtures. The final set must still contain at least 8 positive fixtures, 5 negative fixtures, and 13 total fixtures after failed/skipped fixtures are removed. Use documented enum values exactly; do not substitute near-synonyms. For negative coverage, prefer deterministic bad-input/error-code fixtures when no-results text queries may accidentally match the corpus."
       : args.reason === "coverage-minimum"
         ? "Please re-emit a corrected benchmark set with enough deterministic fixtures to satisfy the minimum positive, negative, and total fixture counts after preflight filtering."
-      : "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions.",
+      : "Please re-emit the SAME conceptual response, corrected to satisfy the schema and all invariants described in the original instructions. Use documented enum values exactly; do not substitute near-synonyms.",
     "Return ONLY the JSON object — no prose, no code fences, no explanation.",
   );
   return lines.join("\n");

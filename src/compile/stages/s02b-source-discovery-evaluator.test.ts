@@ -510,6 +510,102 @@ describe("createSourceDiscoveryEvaluatorRunner", () => {
       }),
     );
   });
+
+  test("persists source-set drift diagnostics for prior approved sources", async () => {
+    const fx = await freshFixture();
+    const prior = approveSourcesFile(buildDraftSourcesFile());
+    const approvedPath = join(fx.almanacDir, "sources/sources.json");
+    await mkdir(dirname(approvedPath), { recursive: true });
+    writeFileSync(approvedPath, JSON.stringify(prior, null, 2), "utf8");
+
+    const draft = buildDraftSourcesFile();
+    draft.sources = [
+      draft.sources[1]!,
+      {
+        id: "k8s-community",
+        url: "https://community.example.com/kubernetes",
+        kind: "community",
+        trust: 0.74,
+        volatility: "slow",
+        rationale: "Useful operator discussion with concrete examples.",
+        ingestion: {
+          mode: "index-only",
+          scope: ["**"],
+          refreshIntervalHours: 168,
+        },
+        notes: null,
+      },
+    ];
+    draft.generatedBy.acceptedCount = 2;
+    draft.coverage = {
+      ...draft.coverage,
+      docs: 0,
+      repo: 1,
+      community: 1,
+    };
+    const candidates: Candidates = [
+      {
+        ...VALID_CANDIDATES[0]!,
+        fetchStatus: "client-error",
+        preview: null,
+      },
+      VALID_CANDIDATES[1]!,
+      {
+        url: "https://community.example.com/kubernetes",
+        kind: "community",
+        title: "Kubernetes community notes",
+        snippet: "Operational examples",
+        preview: "Operators describe rollout checks and common incidents.",
+        fetchedAt: "2026-05-08T11:59:55.000Z",
+        fetchStatus: "ok",
+        origin: { type: "web-search", queryIndex: 0, rank: 0 },
+        meta: { httpStatusCode: 200, contentType: "text/html" },
+      },
+    ];
+    const p = candidatesPath(fx.almanacDir);
+    writeFileSync(p, JSON.stringify(candidates, null, 2), "utf8");
+
+    const events: object[] = [];
+    const provider = createMockProvider({
+      responses: {
+        "02-source-discovery@evaluator-v1": JSON.stringify(draft),
+      },
+    });
+
+    await createSourceDiscoveryEvaluatorRunner({ provider }).run(
+      makeCtx({ ...fx, log: (e) => events.push(e) }),
+    );
+
+    const draftBody = readFileSync(sourcesDraftPath(fx.almanacDir), "utf8");
+    const persisted = SourcesFileSchema.parse(JSON.parse(draftBody));
+    expect(persisted.stability).toEqual({
+      previousAcceptedCount: 2,
+      currentAcceptedCount: 2,
+      preservedSourceIds: ["k8s-repo"],
+      restoredSourceIds: [],
+      replacedSources: [],
+      addedSourceIds: ["k8s-community"],
+      droppedSources: [
+        {
+          sourceId: "k8s-docs",
+          url: "https://kubernetes.io/docs/",
+          reason: "not-fetchable",
+        },
+      ],
+    });
+    expect(events).toContainEqual(
+      expect.objectContaining({
+        event: "stage2b:source-stability",
+        previousAccepted: 2,
+        currentAccepted: 2,
+        preserved: 1,
+        dropped: 1,
+        added: 1,
+        droppedSourceIds: ["k8s-docs"],
+        addedSourceIds: ["k8s-community"],
+      }),
+    );
+  });
 });
 
 describe("applyApprovedSourceReuse", () => {

@@ -26,6 +26,7 @@ import {
   type Candidate,
   type Candidates,
   type DomainSpec,
+  type SourceDiscoveryStability,
   type RejectedSource,
   type SourceDiscoveryPlan,
   type SourcesFile,
@@ -238,6 +239,31 @@ export function createSourceDiscoveryEvaluatorRunner(
         });
       }
 
+      const stability = buildSourceDiscoveryStability({
+        file: draft,
+        candidates,
+        priorApproved,
+        reuseAdjustments: reused.adjustments,
+        policyRejectedSourceIds: acceptanceNormalized.adjustments.map(
+          (adjustment) => adjustment.sourceId,
+        ),
+      });
+      if (stability !== null) {
+        draft = SourcesFileSchema.parse({ ...draft, stability });
+        ctx.log({
+          event: "stage2b:source-stability",
+          previousAccepted: stability.previousAcceptedCount,
+          currentAccepted: stability.currentAcceptedCount,
+          preserved: stability.preservedSourceIds.length,
+          restored: stability.restoredSourceIds.length,
+          replaced: stability.replacedSources.length,
+          dropped: stability.droppedSources.length,
+          added: stability.addedSourceIds.length,
+          droppedSourceIds: stability.droppedSources.map((source) => source.sourceId),
+          addedSourceIds: stability.addedSourceIds,
+        });
+      }
+
       const canonicalText = JSON.stringify(draft, null, 2);
       const outPath = sourcesDraftPath(ctx.almanacDir);
       await mkdir(dirname(outPath), { recursive: true });
@@ -310,6 +336,14 @@ export interface SourceReuseAdjustment {
   url: string;
   action: "preserved" | "replaced" | "restored";
   replacedSourceId?: string;
+}
+
+export interface BuildSourceDiscoveryStabilityOptions {
+  file: SourcesFile;
+  candidates: Candidates;
+  priorApproved: SourcesFile | null;
+  reuseAdjustments: readonly SourceReuseAdjustment[];
+  policyRejectedSourceIds?: readonly string[];
 }
 
 const KNOWN_PERMISSIVE_DOCS_SNAPSHOT_POLICIES: readonly PermissiveDocsSnapshotPolicy[] =
@@ -443,6 +477,79 @@ export function applyApprovedSourceReuse(
       normalizeDerivableCounts({ ...file, sources: nextSources }),
     ),
     adjustments,
+  };
+}
+
+export function buildSourceDiscoveryStability(
+  opts: BuildSourceDiscoveryStabilityOptions,
+): SourceDiscoveryStability | null {
+  const priorApproved = opts.priorApproved;
+  if (priorApproved === null || priorApproved.status !== "approved") {
+    return null;
+  }
+
+  const currentIds = new Set(opts.file.sources.map((source) => source.id));
+  const priorIds = new Set(priorApproved.sources.map((source) => source.id));
+  const fetchableCandidates = buildFetchableCandidateIndex(opts.candidates);
+  const rejectedUrlKeys = new Set(
+    opts.file.rejected
+      .map((source) => canonicalUrlKey(source.url))
+      .filter((key): key is string => key !== undefined),
+  );
+  const policyRejectedSourceIds = new Set(opts.policyRejectedSourceIds ?? []);
+
+  const preservedSourceIds: string[] = [];
+  const restoredSourceIds: string[] = [];
+  const replacedSources: SourceDiscoveryStability["replacedSources"] = [];
+  for (const adjustment of opts.reuseAdjustments) {
+    if (adjustment.action === "preserved") {
+      preservedSourceIds.push(adjustment.sourceId);
+    } else if (adjustment.action === "restored") {
+      restoredSourceIds.push(adjustment.sourceId);
+    } else {
+      replacedSources.push({
+        sourceId: adjustment.sourceId,
+        replacedSourceId: adjustment.replacedSourceId ?? adjustment.sourceId,
+      });
+    }
+  }
+
+  const droppedSources: SourceDiscoveryStability["droppedSources"] = [];
+  for (const source of priorApproved.sources) {
+    if (currentIds.has(source.id)) continue;
+    const sourceKey = canonicalUrlKey(source.url);
+    const candidate = sourceKey === undefined
+      ? undefined
+      : fetchableCandidates.get(sourceKey);
+    const reason =
+      policyRejectedSourceIds.has(source.id)
+        ? "policy-rejected"
+        : sourceKey !== undefined && rejectedUrlKeys.has(sourceKey)
+        ? "explicitly-rejected"
+        : candidate === undefined
+        ? "not-fetchable"
+        : candidate.kind !== source.kind
+        ? "kind-changed"
+        : "not-selected";
+    droppedSources.push({
+      sourceId: source.id,
+      url: source.url,
+      reason,
+    });
+  }
+
+  const addedSourceIds = opts.file.sources
+    .map((source) => source.id)
+    .filter((id) => !priorIds.has(id));
+
+  return {
+    previousAcceptedCount: priorApproved.sources.length,
+    currentAcceptedCount: opts.file.sources.length,
+    preservedSourceIds,
+    restoredSourceIds,
+    replacedSources,
+    addedSourceIds,
+    droppedSources,
   };
 }
 

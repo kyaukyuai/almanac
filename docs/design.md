@@ -335,7 +335,10 @@ The bridge type between 2a→2x→2b is `Candidate` (`src/core/types.ts`):
 - **2b (evaluator)** consumes (`DomainSpec`, plan, candidates) and emits a
   `SourcesFile` with `status: "draft"`. It scores trust per a fixed rubric,
   assigns volatility per source, picks `ingestion.mode` with licensing
-  awareness, enforces `coverageGoals`, and caps total accepted at 12.
+  awareness, enforces `coverageGoals`, and caps total accepted at 12. When
+  prior approved sources exist, the compiler adds optional `stability`
+  diagnostics to the SourcesFile so operators can see which source ids were
+  preserved, restored, replaced, newly added, or dropped.
 
 State recorded in `compile-state.json.stages`:
 
@@ -1031,7 +1034,9 @@ doctor/profile reporting answer mode as ready.
 - v0.10 planning is captured in [`docs/v0.10-plan.md`](./v0.10-plan.md). The
   release theme is answer trust and compile stability: optional entailment
   judging, source/fixture stability controls, retrieval readiness, and RC smoke
-  coverage for ask-suite workflows.
+  coverage for ask-suite workflows. Compile stability diagnostics are persisted
+  in `sources.json` and `.compile/stage11-output.json` rather than only being
+  transient logs.
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
@@ -1072,13 +1077,15 @@ releases:
    enum-framing is still weak enough that the LLM occasionally
    reaches for a near-synonym. Candidate: explicit
    "do-not-substitute" lists per enum, similar to the v0.3.5
-   error-code taxonomy fix.
+   error-code taxonomy fix. v0.10 Stage 11 repair feedback now carries this
+   warning when retrying schema or preflight failures.
 5. **Stage 2 source-discovery non-determinism.** The recurring
    ±2 pass-count swing across Rust smokes traces back to Stage 2
    picking partly different source sets each run. Stabilizing
    this (e.g. canonical source sets per domain after the first
    approval, or a seed-pinning option) would make benchmark
-   comparisons cross-version more meaningful.
+   comparisons cross-version more meaningful. v0.10 adds source-set drift
+   diagnostics, but does not yet freeze discovery.
 6. **Stage 7 prompt-vs-validator division of labor.** Through
    v0.3.x, every new validator rule has been paired with a
    prompt hard-requirement so the LLM avoids the pattern on the
