@@ -28,7 +28,7 @@ import {
   writeManifest,
 } from "./compile/storage.ts";
 import { bootstrapAlmanac } from "./compile/stages/s00-bootstrap.ts";
-import { markStageCompleted } from "./compile/pipeline.ts";
+import { markStageCompleted, markStageFailed } from "./compile/pipeline.ts";
 import {
   negativeJsonlPath,
   positiveJsonlPath,
@@ -232,6 +232,47 @@ async function writeLegacyCountFixture(
   }
 }
 
+async function writeFailedStageFixture(args: {
+  almanacId: string;
+  stageId: (typeof STAGE_IDS)[number];
+  code: string;
+  message: string;
+}): Promise<void> {
+  const dir = almanacDirPath(root, args.almanacId);
+  const { manifest, compileState } = bootstrapAlmanac({
+    almanacId: args.almanacId,
+    domain: `${args.almanacId} domain`,
+    displayName: "Failure Recovery Domain",
+    freshnessProfileId: "mixed",
+    runId: "run-failure-recovery",
+    forgerVersion: "0.0.0",
+    options: {
+      depth: "quick",
+      sourcesHint: [],
+      target: "both",
+      autoApprove: true,
+      language: "ts",
+    },
+    now: new Date("2026-05-09T12:00:00.000Z"),
+  });
+  let state = markStageCompleted(
+    compileState,
+    "00-bootstrap",
+    new Date("2026-05-09T12:01:00.000Z"),
+    { outputHash: "a".repeat(64) },
+  );
+  state = markStageFailed(
+    state,
+    args.stageId,
+    new Date("2026-05-09T12:02:00.000Z"),
+    { code: args.code, message: args.message },
+  );
+
+  await ensureAlmanacLayout(dir);
+  await writeManifest(dir, manifest);
+  await writeCompileState(dir, state);
+}
+
 describe("almanac CLI legacy artifact counts", () => {
   test("list shows actual fact/tool counts and annotates stale manifest counts", async () => {
     await writeLegacyCountFixture();
@@ -341,6 +382,118 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(1);
     expect(result.stderr).toContain(
       "ALMANAC_ANTHROPIC_TIMEOUT_MS must be a positive integer number of milliseconds",
+    );
+  });
+
+  test("new pipeline failures print deterministic recovery guidance", () => {
+    const result = runCli(
+      [
+        "new",
+        "Failure UX",
+        "--slug",
+        "failure-ux",
+        "--profile",
+        "mixed",
+        "--root",
+        root,
+      ],
+      {
+        ALMANAC_LLM: "mock",
+        ALMANAC_MOCK_DEFAULT_RESPONSE: "not json",
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("Pipeline halted.");
+    expect(result.stderr).toContain("First failed stage: 01-domain-analysis");
+    expect(result.stderr).toContain(
+      `Recovery: almanac update failure-ux --from-stage=01-domain-analysis --no-bump --root ${root}`,
+    );
+    expect(result.stderr).toContain(
+      `State: ${join(root, "failure-ux", ".compile", "compile-state.json")}`,
+    );
+    expect(result.stderr).toContain("Expected stage artifact:");
+    expect(result.stderr).toContain("Guidance: deterministic validation failure");
+
+    const inspect = runCli(["inspect", "failure-ux", "--root", root]);
+    expect(inspect.status).toBe(0);
+    expect(inspect.stdout).toContain("health         failed");
+    expect(inspect.stdout).toContain(
+      `rerun from the first failed stage: almanac update failure-ux --from-stage=01-domain-analysis --no-bump --root ${root}`,
+    );
+    expect(inspect.stdout).toContain("inspect compile state:");
+    expect(inspect.stdout).toContain(
+      "failure guidance: deterministic validation failure",
+    );
+  });
+
+  test("inspect profile and doctor distinguish provider timeout recovery", async () => {
+    await writeFailedStageFixture({
+      almanacId: "timeout-fixture",
+      stageId: "02b-source-discovery-evaluator",
+      code: "unknown",
+      message: "Request timed out.",
+    });
+
+    const inspect = runCli(["inspect", "timeout-fixture", "--root", root]);
+    expect(inspect.status).toBe(0);
+    expect(inspect.stdout).toContain("health         failed");
+    expect(inspect.stdout).toContain(
+      `almanac update timeout-fixture --from-stage=02b-source-discovery-evaluator --no-bump --root ${root}`,
+    );
+    expect(inspect.stdout).toContain(
+      "failure guidance: provider or network failure",
+    );
+
+    const profile = runCli(["profile", "timeout-fixture", "--root", root]);
+    expect(profile.status).toBe(0);
+    expect(profile.stdout).toContain("status         not-ready");
+    expect(profile.stdout).toContain(
+      "failure guidance: provider or network failure",
+    );
+
+    const doctor = runCli(["doctor", "timeout-fixture", "--root", root]);
+    expect(doctor.status).toBe(1);
+    expect(doctor.stdout).toContain("fail=1");
+    expect(doctor.stdout).toContain("recovery");
+    expect(doctor.stdout).toContain(
+      "first failed stage 02b-source-discovery-evaluator",
+    );
+    expect(doctor.stdout).toContain("provider or network failure");
+  });
+
+  test("refresh run pipeline failures print recovery footer", () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const refresh = runCli(
+      [
+        "refresh",
+        "run",
+        "sqlite-demo",
+        "--from-stage",
+        "01-domain-analysis",
+        "--root",
+        root,
+      ],
+      {
+        ALMANAC_LLM: "mock",
+        ALMANAC_MOCK_DEFAULT_RESPONSE: "not json",
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+
+    expect(refresh.status).toBe(1);
+    expect(refresh.stdout).toContain("refresh run: sqlite-demo");
+    expect(refresh.stdout).toContain("status: failed");
+    expect(refresh.stderr).toContain("Refresh pipeline halted.");
+    expect(refresh.stderr).toContain("First failed stage: 01-domain-analysis");
+    expect(refresh.stderr).toContain(
+      `Recovery: almanac update sqlite-demo --from-stage=01-domain-analysis --no-bump --root ${root}`,
+    );
+    expect(refresh.stderr).toContain(
+      "Guidance: deterministic validation failure",
     );
   });
 });

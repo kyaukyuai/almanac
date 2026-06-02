@@ -71,8 +71,14 @@ import {
   createDomainAnalysisRunner,
   domainSpecPath,
 } from "./compile/stages/s01-domain-analysis.ts";
-import { createSourceDiscoveryPlannerRunner } from "./compile/stages/s02a-source-discovery-planner.ts";
-import { createSourceDiscoveryExecutorRunner } from "./compile/stages/s02x-source-discovery-executor.ts";
+import {
+  createSourceDiscoveryPlannerRunner,
+  sourceDiscoveryPlanPath,
+} from "./compile/stages/s02a-source-discovery-planner.ts";
+import {
+  candidatesPath,
+  createSourceDiscoveryExecutorRunner,
+} from "./compile/stages/s02x-source-discovery-executor.ts";
 import {
   createSourceDiscoveryEvaluatorRunner,
   sourcesDraftPath,
@@ -84,6 +90,7 @@ import {
 import {
   createSourceFetchRunner,
   defaultFetchers,
+  sourceFetchManifestPath,
 } from "./compile/stages/s04-source-fetch-runner.ts";
 import {
   createFactExtractionRunner,
@@ -93,14 +100,23 @@ import {
   createToolDesignRunner,
   toolDesignPath,
 } from "./compile/stages/s06-tool-design.ts";
-import { createToolImplRunner } from "./compile/stages/s07-tool-impl-runner.ts";
+import {
+  createToolImplRunner,
+  stage07OutputPath,
+} from "./compile/stages/s07-tool-impl-runner.ts";
 import { createLlmCodeWriter } from "./compile/stages/s07/code-writer.ts";
 import { createBunxTscRunner } from "./compile/stages/s07/tsc-runner.ts";
 import { createBunSmokeRunner } from "./compile/stages/s07/smoke-runner.ts";
 import { LlmImplementer } from "./compile/stages/s07/llm-implementer.ts";
 import { createKnowledgeIndexRunner } from "./compile/stages/s08-knowledge-index-runner.ts";
-import { createContractFilesRunner } from "./compile/stages/s09-contract-runner.ts";
-import { createSkillAdapterRunner } from "./compile/stages/s10-skill-adapter-runner.ts";
+import {
+  createContractFilesRunner,
+  stage09OutputPath,
+} from "./compile/stages/s09-contract-runner.ts";
+import {
+  createSkillAdapterRunner,
+  stage10OutputPath,
+} from "./compile/stages/s10-skill-adapter-runner.ts";
 import {
   STAGE11_MIN_GENERATED_NEGATIVE_FIXTURES,
   STAGE11_MIN_GENERATED_POSITIVE_FIXTURES,
@@ -124,7 +140,9 @@ import { createDefaultCommunitySearchers } from "./compile/discovery/community-s
 import {
   defaultAlmanacRoot,
   almanacDirPath,
+  compileStatePath,
   ensureAlmanacLayout,
+  knowledgeIndexManifestPath,
   listAlmanacs,
   readCompileState,
   readImplementedToolCount,
@@ -781,6 +799,163 @@ function rootArg(root: string): string {
   return root === defaultAlmanacRoot() ? "" : ` --root ${shellArg(root)}`;
 }
 
+interface StageFailureRecovery {
+  stageId: StageId;
+  code: string;
+  message: string;
+  resumeCommand: string;
+  inspectCommand: string;
+  compileStatePath: string;
+  artifactPath: string;
+  artifactExists: boolean;
+  guidance: string;
+}
+
+function buildStageFailureRecovery(args: {
+  almanacId: string;
+  root: string;
+  almanacDir: string;
+  state: CompileState;
+  failedStages?: StageId[];
+}): StageFailureRecovery | null {
+  const failedStages =
+    args.failedStages ??
+    (STAGE_IDS as readonly StageId[]).filter(
+      (stageId) => args.state.stages[stageId].status === "failed",
+    );
+  const stageId = failedStages[0];
+  if (stageId === undefined) return null;
+  const entry = args.state.stages[stageId];
+  const error = entry.error;
+  const code = error?.code ?? "unknown";
+  const message = error?.message ?? "no stage error message recorded";
+  const artifactPath = stageRecoveryArtifactPath(args.almanacDir, stageId);
+  const rootSuffix = rootArg(args.root);
+  return {
+    stageId,
+    code,
+    message,
+    resumeCommand:
+      `almanac update ${args.almanacId} --from-stage=${stageId}` +
+      ` --no-bump${rootSuffix}`,
+    inspectCommand: `almanac inspect ${args.almanacId}${rootSuffix}`,
+    compileStatePath: compileStatePath(args.almanacDir),
+    artifactPath,
+    artifactExists: existsSync(artifactPath),
+    guidance: stageFailureGuidance(code, message),
+  };
+}
+
+function formatPipelineFailureRecovery(args: {
+  recovery: StageFailureRecovery | null;
+  failedStages: StageId[];
+  heading?: string;
+}): string {
+  const heading = args.heading ?? "Pipeline halted.";
+  if (args.recovery === null) {
+    return (
+      `\n${heading}\n` +
+      `Failed stages: ${args.failedStages.join(", ") || "(unknown)"}\n`
+    );
+  }
+  const artifactLabel = args.recovery.artifactExists
+    ? "Stage artifact"
+    : "Expected stage artifact";
+  return (
+    `\n${heading}\n` +
+    `First failed stage: ${args.recovery.stageId}\n` +
+    `Failure: ${args.recovery.code}: ${args.recovery.message}\n` +
+    `Recovery: ${args.recovery.resumeCommand}\n` +
+    `Inspect: ${args.recovery.inspectCommand}\n` +
+    `State: ${args.recovery.compileStatePath}\n` +
+    `${artifactLabel}: ${args.recovery.artifactPath}\n` +
+    `Guidance: ${args.recovery.guidance}\n`
+  );
+}
+
+function stageFailureNextActions(
+  recovery: StageFailureRecovery | null,
+): string[] {
+  if (recovery === null) return [];
+  const artifactLabel = recovery.artifactExists
+    ? "inspect failed stage artifact"
+    : "inspect expected failed stage artifact path";
+  return [
+    `rerun from the first failed stage: ${recovery.resumeCommand}`,
+    `inspect compile state: ${recovery.compileStatePath}`,
+    `${artifactLabel}: ${recovery.artifactPath}`,
+    `failure guidance: ${recovery.guidance}`,
+  ];
+}
+
+function stageFailureGuidance(code: string, message: string): string {
+  const normalized = `${code} ${message}`.toLowerCase();
+  if (
+    normalized.includes("timeout") ||
+    normalized.includes("timed out") ||
+    normalized.includes("rate limit") ||
+    normalized.includes("overloaded")
+  ) {
+    return (
+      "provider or network failure; retry the same stage with --no-bump after " +
+      "checking provider status, timeout settings, and credentials"
+    );
+  }
+  if (
+    normalized.includes("schema") ||
+    normalized.includes("validation") ||
+    normalized.includes("preflight") ||
+    normalized.includes("coverage") ||
+    normalized.includes("malformed") ||
+    normalized.includes("json") ||
+    normalized.includes("parse")
+  ) {
+    return (
+      "deterministic validation failure; inspect the stage artifact and fix " +
+      "inputs, fixtures, or generator constraints before rerunning"
+    );
+  }
+  return (
+    "inspect the compile state and stage artifact, then rerun the same stage " +
+    "with --no-bump"
+  );
+}
+
+function stageRecoveryArtifactPath(almanacDir: string, stageId: StageId): string {
+  switch (stageId) {
+    case "00-bootstrap":
+      return compileStatePath(almanacDir);
+    case "01-domain-analysis":
+      return domainSpecPath(almanacDir);
+    case "02a-source-discovery-planner":
+      return sourceDiscoveryPlanPath(almanacDir);
+    case "02x-source-discovery-executor":
+      return candidatesPath(almanacDir);
+    case "02b-source-discovery-evaluator":
+      return sourcesDraftPath(almanacDir);
+    case "03-source-approve":
+      return approvedSourcesPath(almanacDir);
+    case "04-source-fetch":
+      return sourceFetchManifestPath(almanacDir);
+    case "05-fact-extraction":
+      return factsJsonlPath(almanacDir);
+    case "06-tool-design":
+      return toolDesignPath(almanacDir);
+    case "07-tool-impl":
+      return stage07OutputPath(almanacDir);
+    case "08-knowledge-index":
+      return knowledgeIndexManifestPath(almanacDir);
+    case "09-contract-files":
+      return stage09OutputPath(almanacDir);
+    case "10-adapter-generation":
+      return stage10OutputPath(almanacDir);
+    case "11-benchmark-gen":
+      return stage11OutputPath(almanacDir);
+    case "12-benchmark-run":
+      return benchmarkResultPath(almanacDir);
+  }
+}
+
 /**
  * Open `$EDITOR` (falls back to `vi`) on a temp file pre-filled with `content`.
  * Returns the user's saved contents. If the editor exits non-zero, throws.
@@ -1105,8 +1280,19 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
       log: (e) => process.stdout.write(`  · ${JSON.stringify(e)}\n`),
     });
     if (stage1Result.failed.length > 0) {
+      const recovery = buildStageFailureRecovery({
+        almanacId: slug,
+        root: opts.root,
+        almanacDir,
+        state: stage1Result.state,
+        failedStages: stage1Result.failed,
+      });
       process.stderr.write(
-        `\nStage 1 failed; cannot review. See ${almanacDir}/.compile/compile-state.json.\n`,
+        formatPipelineFailureRecovery({
+          recovery,
+          failedStages: stage1Result.failed,
+          heading: "Stage 1 failed; cannot review.",
+        }),
       );
       process.exit(1);
     }
@@ -1138,9 +1324,18 @@ async function cmdNew(domain: string, opts: NewOptions): Promise<void> {
   );
 
   if (result.failed.length > 0) {
+    const recovery = buildStageFailureRecovery({
+      almanacId: slug,
+      root: opts.root,
+      almanacDir,
+      state: result.state,
+      failedStages: result.failed,
+    });
     process.stderr.write(
-      `\nPipeline halted at: ${result.failed.join(", ")}\n` +
-        `See ${almanacDir}/.compile/compile-state.json for details.\n`,
+      formatPipelineFailureRecovery({
+        recovery,
+        failedStages: result.failed,
+      }),
     );
     process.exit(1);
   }
@@ -1725,10 +1920,15 @@ async function cmdInspect(id: string, opts: InspectOptions): Promise<void> {
         : "ok";
   const nextActions: string[] = [];
   const rootSuffix = rootArg(opts.root);
+  const failureRecovery = buildStageFailureRecovery({
+    almanacId: id,
+    root: opts.root,
+    almanacDir: dir,
+    state,
+    failedStages,
+  });
   if (failedStages.length > 0) {
-    nextActions.push(
-      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}${rootSuffix}`,
-    );
+    nextActions.push(...stageFailureNextActions(failureRecovery));
   }
   if (sources === null) {
     nextActions.push("create or restore sources/sources.json");
@@ -2082,10 +2282,15 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
 
   const rootSuffix = rootArg(opts.root);
   const nextActions: string[] = [];
+  const failureRecovery = buildStageFailureRecovery({
+    almanacId: id,
+    root: opts.root,
+    almanacDir: dir,
+    state,
+    failedStages,
+  });
   if (failedStages.length > 0) {
-    nextActions.push(
-      `rerun from the first failed stage: almanac update ${id} --from-stage=${failedStages[0]}${rootSuffix}`,
-    );
+    nextActions.push(...stageFailureNextActions(failureRecovery));
   }
   if (domainSpec === null) {
     nextActions.push(`restore domain scope artifact: ${domainSpecPath(dir)}`);
@@ -3206,6 +3411,23 @@ async function cmdRefreshRun(
         ? JSON.stringify(result, null, 2) + "\n"
         : formatRefreshRunHuman(result),
     );
+    if (opts.json !== true && result.stageSummary.failed.length > 0) {
+      const state = await readCompileState(almanacDir);
+      const recovery = buildStageFailureRecovery({
+        almanacId: id,
+        root: opts.root,
+        almanacDir,
+        state,
+        failedStages: result.stageSummary.failed,
+      });
+      process.stderr.write(
+        formatPipelineFailureRecovery({
+          recovery,
+          failedStages: result.stageSummary.failed,
+          heading: "Refresh pipeline halted.",
+        }),
+      );
+    }
     process.exitCode = result.exitCode;
   } catch (e) {
     if (e instanceof RefreshRunError || e instanceof RefreshStatusError) {
@@ -3662,6 +3884,27 @@ async function cmdDoctor(
           "stages",
           `${stageCounts.completed} completed, ${stageCounts.skipped} skipped, ${stageCounts.failed} failed, ${stageCounts.pending} pending`,
         );
+        const failedStages = (STAGE_IDS as readonly StageId[]).filter(
+          (stageId) => state.stages[stageId].status === "failed",
+        );
+        const failureRecovery = buildStageFailureRecovery({
+          almanacId: id,
+          root: opts.root,
+          almanacDir,
+          state,
+          failedStages,
+        });
+        if (failureRecovery !== null) {
+          addDoctorReadiness(readiness, {
+            status: "blocked",
+            name: "recovery",
+            message: `first failed stage ${failureRecovery.stageId}; ${failureRecovery.guidance}`,
+            nextActions: [
+              failureRecovery.resumeCommand,
+              `inspect compile state: ${failureRecovery.compileStatePath}`,
+            ],
+          });
+        }
         const knowledge = await readKnowledgeIndexManifest(almanacDir);
         add(
           knowledge === null ? "warn" : "ok",
@@ -3964,9 +4207,18 @@ async function cmdUpdate(id: string, opts: UpdateOptions): Promise<void> {
   );
 
   if (result.failed.length > 0) {
+    const recovery = buildStageFailureRecovery({
+      almanacId: id,
+      root: opts.root,
+      almanacDir,
+      state: result.state,
+      failedStages: result.failed,
+    });
     process.stderr.write(
-      `\nPipeline halted at: ${result.failed.join(", ")}\n` +
-        `See ${almanacDir}/.compile/compile-state.json for details.\n`,
+      formatPipelineFailureRecovery({
+        recovery,
+        failedStages: result.failed,
+      }),
     );
     process.exit(1);
   }
