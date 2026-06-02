@@ -104,11 +104,18 @@ almanac run sqlite-demo \
   --tool query_facts \
   --input '{"q":"transactions atomic"}' \
   --root "$tmp"
+almanac export sqlite-demo --root "$tmp"
+almanac wiki sqlite-demo --root "$tmp"
 ```
 
 The demo creates a complete local almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
 golden benchmark fixtures.
+
+`export` creates a portable archive that excludes saved `.runs/` records by
+default. Use `--include-runs` only when the receiver should get saved tool,
+refresh, and answer artifacts. `wiki` creates a Markdown inspection bundle for
+reviewing sources, facts, tools, benchmarks, and the generated file manifest.
 
 If you did not run `bun link`, replace `almanac` with `bun src/cli.ts` in the
 examples.
