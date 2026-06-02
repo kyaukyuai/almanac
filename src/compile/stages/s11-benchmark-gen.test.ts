@@ -880,6 +880,50 @@ describe("createBenchmarkGenRunner", () => {
     expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
   });
 
+  test("preflight retry feedback includes skipped fixtures when deterministic fixtures also fail", async () => {
+    const fx = await freshFixture();
+    const unstable = buildCoveredStage11Output("query_facts");
+    unstable.set.negative.push({
+      ...unstable.set.negative[0]!,
+      id: "k8s-neg-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    const repaired = buildCoveredStage11Output("query_facts");
+
+    let call = 0;
+    let preflightCall = 0;
+    const provider = createMockProvider({
+      defaultResponse: () => {
+        call += 1;
+        return JSON.stringify(call === 1 ? unstable : repaired);
+      },
+    });
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 2,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) => {
+        preflightCall += 1;
+        return benchmarkReportFor(
+          set,
+          preflightCall === 1 ? ["k8s-neg-001"] : [],
+        );
+      },
+      readEnabledManifests: async () => [
+        buildManifest("query_facts", "slow"),
+        buildNetworkManifest("latest_releases"),
+      ],
+    });
+
+    const outcome = await runner.run(makeCtx(fx));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const retryMessage = provider.callLog[1]?.request.messages.at(-1)?.content;
+    expect(retryMessage).toContain("k8s-neg-001");
+    expect(retryMessage).toContain("k8s-neg-live");
+    expect(retryMessage).toContain("bad-input");
+  });
+
   test("refuses final unpreflighted stabilization below minimum coverage", async () => {
     const fx = await freshFixture();
     const out = buildStage11Output("query_facts");
@@ -1037,6 +1081,63 @@ describe("createBenchmarkGenRunner", () => {
       expect.objectContaining({
         event: "stage11:preflight:stabilized",
         dropped: ["k8s-pos-001"],
+      }),
+    );
+  });
+
+  test("drops final failed and skipped fixtures when stabilized coverage remains above minimum", async () => {
+    const fx = await freshFixture();
+    const out = buildStage11Output("query_facts");
+    addDeterministicCoverage(out, "query_facts", 9, 5);
+    out.set.negative.push({
+      ...out.set.negative[0]!,
+      id: "k8s-neg-live",
+      invocation: { tool: "latest_releases", input: { owner: "x", repo: "y" } },
+    });
+    const provider = createMockProvider({
+      responses: {
+        "11-benchmark-gen@v3": JSON.stringify(out),
+      },
+    });
+    const logs: object[] = [];
+    const runner = createBenchmarkGenRunner({
+      provider,
+      maxAttempts: 1,
+      preflightGeneratedSet: true,
+      preflightBenchmarkSet: async (_dir, set) =>
+        benchmarkReportFor(
+          set,
+          set.positive.some((f) => f.id === "k8s-pos-001")
+            ? ["k8s-pos-001"]
+            : [],
+        ),
+      readEnabledManifests: async () => [
+        buildManifest("query_facts", "slow"),
+        buildNetworkManifest("latest_releases"),
+      ],
+    });
+
+    const outcome = await runner.run(makeCtx({ ...fx, log: (e) => logs.push(e) }));
+    if (outcome.kind !== "success") throw new Error("expected success");
+
+    const persisted = Stage11OutputSchema.parse(
+      JSON.parse(readFileSync(stage11OutputPath(fx.almanacDir), "utf8")),
+    );
+    expect(persisted.set.positive.map((f) => f.id)).not.toContain("k8s-pos-001");
+    expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
+    expect(persisted.set.positive).toHaveLength(8);
+    expect(persisted.set.negative).toHaveLength(5);
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:preflight:stabilized",
+        dropped: ["k8s-pos-001"],
+      }),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:preflight:stabilized",
+        dropped: ["k8s-neg-live"],
+        reason: "unverified-fixtures",
       }),
     );
   });
