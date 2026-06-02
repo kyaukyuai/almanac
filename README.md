@@ -112,6 +112,9 @@ The demo creates a complete local almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
 golden benchmark fixtures.
 
+For a committed inspection snapshot and answer-mode handoff commands, see
+the [sample almanacs guide](./docs/sample-almanacs.md).
+
 `export` creates a portable archive that excludes saved `.runs/` records by
 default. Use `--include-runs` only when the receiver should get saved tool,
 refresh, and answer artifacts. `wiki` creates a Markdown inspection bundle for
@@ -285,6 +288,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   compile stages, and runtime contract
 - [Answer mode](./docs/answer-mode.md): `ask`, citations, abstention, and
   replay behavior
+- [Sample almanacs](./docs/sample-almanacs.md): committed sqlite-demo wiki
+  snapshot, export handoff, and answer-mode sample commands
 - [v0.9 plan](./docs/v0.9-plan.md): ask fixture authoring, suite gates,
   refresh validation, and answer readiness hardening
 - [v0.9 RC smoke](./docs/v0.9-rc-smoke.md): release-candidate validation for

@@ -20,6 +20,12 @@ Creates `sqlite-demo` under the default almanac root. It includes:
 - human golden fixtures in `tests/positive.jsonl` and `tests/negative.jsonl`
 - a Stage 12 report in `.compile/benchmark-result.json`
 
+The committed golden sample wiki is
+[`samples/sqlite-demo-wiki`](./samples/sqlite-demo-wiki/README.md). It is a
+small inspection bundle for the same demo almanac with disposable local paths
+replaced by `<generated-root>` placeholders. For the complete handoff flow, see
+[`sample-almanacs.md`](./sample-almanacs.md).
+
 Use a disposable root when evaluating:
 
 ```bash
