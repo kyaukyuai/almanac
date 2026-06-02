@@ -304,6 +304,7 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.stdout).toContain("expert profile: sqlite-demo (SQLite Operations Demo)");
     expect(profile.stdout).toContain("status         usable");
     expect(profile.stdout).toContain("evidence       3 facts from 3 sources");
+    expect(profile.stdout).toContain("retrieval      fts-only");
     expect(profile.stdout).toContain("benchmark      2/2 passed, citationRate 100%");
     expect(profile.stdout).toContain("answer mode    needs-validation");
     expect(profile.stdout).toContain("ask fixtures   0 found");
@@ -319,6 +320,7 @@ describe("almanac CLI product onboarding", () => {
       status: string;
       evidence: {
         facts: number;
+        retrieval: { mode: string; status: string };
         factSourceCount: number;
         acceptedSources: number;
       };
@@ -334,6 +336,8 @@ describe("almanac CLI product onboarding", () => {
     };
     expect(parsedProfile.status).toBe("usable");
     expect(parsedProfile.evidence.facts).toBe(3);
+    expect(parsedProfile.evidence.retrieval.mode).toBe("fts-only");
+    expect(parsedProfile.evidence.retrieval.status).toBe("ready");
     expect(parsedProfile.evidence.factSourceCount).toBe(3);
     expect(parsedProfile.evidence.acceptedSources).toBe(3);
     expect(parsedProfile.benchmark.report.passed).toBe(2);
@@ -526,6 +530,8 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("doctor: sqlite-demo");
     expect(doctor.stdout).toContain("fail=0");
     expect(doctor.stdout).toContain("embeddings");
+    expect(doctor.stdout).toContain("retrieval");
+    expect(doctor.stdout).toContain("fts-only");
     expect(doctor.stdout).toContain("warn answer");
     expect(doctor.stdout).toContain("no ask replay fixtures");
 

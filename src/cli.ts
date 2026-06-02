@@ -174,7 +174,6 @@ import { createAnthropicProvider } from "./llm/anthropic.ts";
 import { createMockProvider, type MockProviderOptions } from "./llm/mock.ts";
 import type { LlmProvider } from "./llm/provider.ts";
 import {
-  describeEmbeddingProviderConfig,
   resolveEmbeddingProviderConfig,
 } from "./embeddings/config.ts";
 import {
@@ -244,6 +243,11 @@ import {
   getAnswerReadiness,
   type AnswerReadiness,
 } from "./manage/answer-readiness.ts";
+import {
+  embeddingReadinessLevel,
+  formatEmbeddingReadiness,
+  getRetrievalReadiness,
+} from "./manage/retrieval-readiness.ts";
 import {
   RefreshStatusError,
   formatRefreshDueHuman,
@@ -1965,6 +1969,11 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   const benchmarkCoverage = benchmarkCoverageGate(dir, state, benchmarkSet);
   const refreshRunVisibility = await readRefreshRunVisibility(dir);
   const answerReadiness = await getAnswerReadiness({ almanacDir: dir });
+  const embeddingConfig = resolveEmbeddingProviderConfig(process.env);
+  const retrieval = getRetrievalReadiness({
+    vectorIndex: knowledge?.vectorIndex ?? null,
+    embeddingConfig,
+  });
   const factsBySource = countFactsBySource(facts);
   const acceptedSources = sources?.sources ?? [];
   const highTrustZeroFactSources = acceptedSources
@@ -2045,6 +2054,9 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
   if (refreshRunVisibility.issue !== null) {
     validationIssues.push(refreshRunVisibility.issue);
+  }
+  if (retrieval.status === "needs-attention") {
+    validationIssues.push(`retrieval ${retrieval.summary}`);
   }
 
   const status: ExpertiseStatus =
@@ -2164,6 +2176,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       facts: facts.length,
       manifestFacts: counts.manifestFacts,
       knowledgeFacts: knowledge?.factCount ?? null,
+      retrieval,
       factSourceCount: uniqueFactSources,
       acceptedSources: acceptedSources.length,
       rejectedSources: sources?.rejected.length ?? null,
@@ -2226,6 +2239,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   process.stdout.write(
     `  evidence       ${facts.length} facts from ${uniqueFactSources} source${uniqueFactSources === 1 ? "" : "s"}\n`,
   );
+  process.stdout.write(`  retrieval      ${retrieval.summary}\n`);
   if (knowledge?.vectorIndex !== undefined) {
     process.stdout.write(
       `  vectors        ${formatVectorIndexSummary(knowledge.vectorIndex)}\n`,
@@ -3526,9 +3540,9 @@ async function cmdDoctor(
   }
   const embeddingConfig = resolveEmbeddingProviderConfig(process.env);
   add(
-    embeddingConfig.status === "configured" ? "ok" : "warn",
+    embeddingReadinessLevel(embeddingConfig),
     "embeddings",
-    describeEmbeddingProviderConfig(embeddingConfig),
+    formatEmbeddingReadiness(embeddingConfig),
   );
   const pdftotext = spawnSync("pdftotext", ["-v"], { encoding: "utf8" });
   add(
@@ -3567,6 +3581,17 @@ async function cmdDoctor(
         );
         if (knowledge?.vectorIndex !== undefined) {
           add("ok", "vectors", formatVectorIndexSummary(knowledge.vectorIndex));
+        }
+        if (knowledge !== null) {
+          const retrieval = getRetrievalReadiness({
+            vectorIndex: knowledge.vectorIndex ?? null,
+            embeddingConfig,
+          });
+          add(
+            retrieval.status === "ready" ? "ok" : "warn",
+            "retrieval",
+            retrieval.summary,
+          );
         }
         const counts = await readDisplayCounts(almanacDir, manifest, knowledge);
         add(

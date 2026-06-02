@@ -98,6 +98,33 @@ preserved/restored/replaced source ids, newly added source ids, and dropped
 prior sources with reasons such as `not-fetchable`, `explicitly-rejected`, or
 `policy-rejected`.
 
+## Retrieval Modes
+
+Almanac always has a SQLite FTS index after Stage 8 succeeds. Embeddings are
+optional:
+
+- `fts-only`: default mode; deterministic, local, and valid for normal use
+- `hybrid`: SQLite FTS plus built vector artifacts
+- `vector-configured-but-skipped`: semantic retrieval was requested or
+  available, but vector artifacts were not built or cannot run
+
+`profile` prints the active retrieval mode and includes the same data in
+`evidence.retrieval` for release gates. `doctor` treats missing optional
+embeddings as `ok`; it warns only when embeddings were requested but cannot be
+used.
+
+Recommended defaults:
+
+- leave embeddings unset for deterministic local smoke and personal offline use
+- use `VOYAGE_API_KEY` as the preferred hosted provider configuration when
+  semantic retrieval is enabled
+- use `ALMANAC_EMBEDDINGS=openai` only when OpenAI embeddings are explicitly
+  desired
+- use `ALMANAC_EMBEDDINGS=deterministic` for tests
+
+Hosted provider configuration is surfaced for readiness; it does not create a
+hidden provider call from `doctor`, `profile`, or default answer workflows.
+
 ## Refresh due checks
 
 Use `refresh due` before wiring an almanac into cron or CI. The command is

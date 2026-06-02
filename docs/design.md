@@ -1036,7 +1036,9 @@ doctor/profile reporting answer mode as ready.
   judging, source/fixture stability controls, retrieval readiness, and RC smoke
   coverage for ask-suite workflows. Compile stability diagnostics are persisted
   in `sources.json` and `.compile/stage11-output.json` rather than only being
-  transient logs.
+  transient logs. Retrieval readiness is reported as `fts-only`, `hybrid`, or
+  `vector-configured-but-skipped` so missing optional embeddings do not look
+  like product failure.
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
@@ -1063,7 +1065,8 @@ releases:
    fallback.
 2. **Hybrid retrieval recipe.** RRF (parameter-free, well-cited)
    vs a weighted linear blend (tunable per domain). Start with
-   RRF; promote to weighted only if benchmark signals demand it.
+   RRF; promote to weighted only if benchmark signals demand it. v0.10 keeps
+   this as a readiness/defaults surface rather than a ranking-algorithm change.
 3. **Snapshot allowlist.** Curated list of trusted hosts whose
    docs default to `snapshot` rather than `index-only`. Needs to
    be additive (never *block* a source, only *upgrade* the
