@@ -21,6 +21,7 @@
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac ask <id> <question> [opts]     synthesize a cited one-shot answer
  *   almanac ask-replay <id> [opts]         replay saved or fixture answer runs
+ *   almanac ask-suite <id> [opts]          run ask replay fixture suite gate
  *   almanac ask-fixtures <subcommand>      author ask replay fixture JSONL
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac refresh due <id> [opts]        check read-only refresh due status
@@ -225,6 +226,12 @@ import {
   runAskReplayFromFixtureFile,
   runAskReplayFromSavedRuns,
 } from "./manage/ask-replay.ts";
+import {
+  AskSuiteSetupError,
+  exitCodeForAskSuite,
+  formatAskSuiteHuman,
+  runAskSuite,
+} from "./manage/ask-suite.ts";
 import {
   AskFixtureAuthoringError,
   addAskFixtureFromRun,
@@ -2876,6 +2883,49 @@ function askReplayUsageError(message: string): never {
   process.exit(2);
 }
 
+interface AskSuiteOptions {
+  root: string;
+  fixture?: string[];
+  json?: boolean;
+}
+
+async function cmdAskSuite(id: string, opts: AskSuiteOptions): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  try {
+    const fixturePaths =
+      opts.fixture === undefined || opts.fixture.length === 0
+        ? undefined
+        : opts.fixture.map((path) => resolve(path));
+    const report = await runAskSuite({
+      almanacDir,
+      ...(fixturePaths === undefined ? {} : { fixturePaths }),
+    });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(report, null, 2) + "\n"
+        : formatAskSuiteHuman(report),
+    );
+    process.exitCode = exitCodeForAskSuite(report);
+  } catch (e) {
+    if (e instanceof AskSuiteSetupError) {
+      askSuiteUsageError(e.message);
+    }
+    if (e instanceof RunToolSetupError) {
+      askSuiteUsageError(e.message);
+    }
+    throw e;
+  }
+}
+
+function collectAskSuiteFixture(value: string, previous: string[]): string[] {
+  return [...previous, value];
+}
+
+function askSuiteUsageError(message: string): never {
+  process.stderr.write(`error: ask-suite: ${message}\n`);
+  process.exit(2);
+}
+
 interface AskFixturesInitOptions {
   root: string;
   fixture?: string;
@@ -4396,6 +4446,19 @@ program
   .option("--label <name>", "With --from-runs, replay only this answer label")
   .addOption(rootOption)
   .action(cmdAskReplay);
+
+program
+  .command("ask-suite <id>")
+  .description("run deterministic ask fixture suite gate without an LLM provider")
+  .option(
+    "--fixture <path>",
+    "Read fixture JSONL path (repeatable; default: known paths)",
+    collectAskSuiteFixture,
+    [] as string[],
+  )
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdAskSuite);
 
 const askFixturesCommand = program
   .command("ask-fixtures")

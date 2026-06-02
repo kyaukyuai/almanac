@@ -45,6 +45,12 @@ import {
   runAskReplayFromFixtures,
   runAskReplayFromSavedRuns,
 } from "./ask-replay.ts";
+import {
+  AskSuiteSetupError,
+  exitCodeForAskSuite,
+  formatAskSuiteHuman,
+  runAskSuite,
+} from "./ask-suite.ts";
 
 const cleanup: string[] = [];
 afterAll(() => {
@@ -211,6 +217,128 @@ describe("ask replay fixtures", () => {
     );
     expect(exitCodeForAskReplay(report)).toBe(1);
     expect(formatAskReplayHuman(report)).toContain("quality=fail");
+  });
+});
+
+describe("ask suite gate", () => {
+  test("discovers standard fixture files and records fixture source lines", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-pass");
+    mkdirSync(join(almanacDir, "tests"), { recursive: true });
+    writeFileSync(
+      join(almanacDir, "tests", "ask.jsonl"),
+      JSON.stringify({
+        id: "sqlite-suite-foreign-keys",
+        question: "Are foreign keys supported?",
+        toolCalls: [
+          {
+            tool: "query_facts",
+            input: { q: "foreign keys" },
+            expectedStatus: "ok",
+          },
+        ],
+        expectedStatus: "ok",
+        minCitations: 1,
+        maxStaleCitations: 0,
+      }) + "\n",
+      "utf8",
+    );
+
+    const report = await runAskSuite({ almanacDir });
+
+    expect(report).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        total: 1,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+      }),
+    );
+    expect(report.fixtureFiles).toEqual([
+      expect.objectContaining({
+        relPath: "tests/ask.jsonl",
+        count: 1,
+      }),
+    ]);
+    expect(report.observedStatusCounts.ok).toBe(1);
+    expect(report.results[0]).toEqual(
+      expect.objectContaining({
+        fixtureId: "sqlite-suite-foreign-keys",
+        fixtureFile: expect.objectContaining({
+          relPath: "tests/ask.jsonl",
+          line: 1,
+        }),
+      }),
+    );
+    expect(exitCodeForAskSuite(report)).toBe(0);
+    expect(formatAskSuiteHuman(report)).toContain(
+      "sqlite-suite-foreign-keys  pass  tests/ask.jsonl:1",
+    );
+  });
+
+  test("fails aggregate quality gates for unsupported claims", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-quality");
+    mkdirSync(join(almanacDir, "tests"), { recursive: true });
+    writeFileSync(
+      join(almanacDir, "tests", "ask.jsonl"),
+      JSON.stringify({
+        id: "sqlite-suite-unsupported",
+        question: "Does SQLite encrypt every page by default?",
+        toolCalls: [
+          {
+            tool: "query_facts",
+            input: { q: "foreign keys" },
+            expectedStatus: "ok",
+          },
+        ],
+        expectedStatus: "ok",
+        minCitations: 1,
+        unsupportedClaims: ["SQLite encrypts every page by default."],
+      }) + "\n",
+      "utf8",
+    );
+
+    const report = await runAskSuite({ almanacDir });
+
+    expect(report.status).toBe("fail");
+    expect(report.failed).toBe(1);
+    expect(report.quality).toEqual(
+      expect.objectContaining({
+        status: "fail",
+        unsupportedClaimCount: 1,
+      }),
+    );
+    expect(exitCodeForAskSuite(report)).toBe(1);
+  });
+
+  test("rejects duplicate fixture ids across discovered files", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-duplicates");
+    mkdirSync(join(almanacDir, "tests"), { recursive: true });
+    mkdirSync(join(almanacDir, "fixtures"), { recursive: true });
+    const row =
+      JSON.stringify({
+        id: "sqlite-suite-duplicate",
+        question: "Are foreign keys supported?",
+        toolCalls: [{ tool: "query_facts", input: { q: "foreign keys" } }],
+        expectedStatus: "ok",
+      }) + "\n";
+    writeFileSync(join(almanacDir, "tests", "ask.jsonl"), row, "utf8");
+    writeFileSync(join(almanacDir, "fixtures", "ask.jsonl"), row, "utf8");
+
+    await expect(runAskSuite({ almanacDir })).rejects.toThrow(
+      "duplicate ask fixture id sqlite-suite-duplicate",
+    );
+  });
+
+  test("requires at least one ask fixture", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-suite-empty");
+
+    await expect(runAskSuite({ almanacDir })).rejects.toBeInstanceOf(
+      AskSuiteSetupError,
+    );
+    await expect(runAskSuite({ almanacDir })).rejects.toThrow(
+      "no ask fixtures found",
+    );
   });
 });
 

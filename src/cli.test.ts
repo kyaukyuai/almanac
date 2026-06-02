@@ -1487,6 +1487,43 @@ describe("almanac CLI product onboarding", () => {
       }),
     ).toEqual(expect.objectContaining({ mode: "fixture", passed: 1 }));
 
+    const askSuite = runCli([
+      "ask-suite",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(askSuite.status).toBe(0);
+    const askSuiteReport = JSON.parse(askSuite.stdout) as {
+      status: string;
+      total: number;
+      passed: number;
+      failed: number;
+      errored: number;
+      fixtureFiles: Array<{ relPath: string; count: number }>;
+      quality: { status: string; citationRate: number };
+      observedStatusCounts: { ok: number };
+      results: Array<{ fixtureFile: { relPath: string; line: number } }>;
+    };
+    expect(askSuiteReport).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        total: 1,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+        quality: expect.objectContaining({ status: "pass", citationRate: 1 }),
+      }),
+    );
+    expect(askSuiteReport.fixtureFiles).toEqual([
+      expect.objectContaining({ relPath: "tests/ask.jsonl", count: 1 }),
+    ]);
+    expect(askSuiteReport.observedStatusCounts.ok).toBe(1);
+    expect(askSuiteReport.results[0]?.fixtureFile).toEqual(
+      expect.objectContaining({ relPath: "tests/ask.jsonl", line: 1 }),
+    );
+
     const fixturePath = join(root, "ask-fixtures.jsonl");
     await writeFile(
       fixturePath,
