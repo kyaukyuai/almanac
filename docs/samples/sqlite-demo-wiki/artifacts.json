@@ -1,0 +1,33 @@
+{
+  "schemaVersion": "0.1.0",
+  "almanacId": "sqlite-demo",
+  "version": "0.1.0",
+  "generatedAt": "2026-06-03T00:00:00.000Z",
+  "sourceDir": "<generated-root>/sqlite-demo",
+  "files": [
+    {
+      "name": "README.md",
+      "byteLength": 1804
+    },
+    {
+      "name": "sources.md",
+      "byteLength": 430
+    },
+    {
+      "name": "facts.md",
+      "byteLength": 811
+    },
+    {
+      "name": "tools.md",
+      "byteLength": 1481
+    },
+    {
+      "name": "benchmark.md",
+      "byteLength": 499
+    },
+    {
+      "name": "artifacts.json",
+      "byteLength": 585
+    }
+  ]
+}
