@@ -11,6 +11,34 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.9.0] — 2026-06-02
+
+### Added
+
+- **Ask fixture authoring.** `almanac ask-fixtures init` creates reviewable
+  ask-mode fixture JSONL, and `ask-fixtures add-from-run` promotes saved
+  answer artifacts into deterministic replay fixtures.
+- **Ask suite gate.** `almanac ask-suite <id>` runs all ask fixtures with
+  stable JSON/text output, pass/fail exit codes, citation quality summaries,
+  stale citation counts, unsupported claim counts, and abstention mismatch
+  reporting.
+- **Refresh-integrated ask validation.** `almanac refresh run --ask-suite`
+  can run the ask suite after benchmark validation and records the ask-suite
+  result in saved refresh artifacts.
+- **Answer readiness hardening.** `profile` and `doctor` now report fixture
+  paths, fixture counts, latest ask-suite status, latest answer quality, and
+  exact next actions for moving answer mode from needs-validation to ready.
+- **v0.9 RC smoke runbook.** `docs/v0.9-rc-smoke.md` captures sqlite-demo,
+  Enterprise AI, real-provider ask, saved-answer replay, fixture promotion,
+  ask-suite, and refresh-validation release checks.
+
+### Fixed
+
+- **Stage 11 preflight repair feedback.** Benchmark generation retry feedback
+  now includes skipped live/network fixtures as well as deterministic failures,
+  guides repairs toward facts-backed deterministic coverage, and keeps the
+  generated coverage floor intact after final stabilization.
+
 ## [0.8.0] — 2026-06-02
 
 ### Added
