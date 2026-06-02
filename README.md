@@ -194,6 +194,10 @@ saved runs or fixture JSONL without provider calls, quality gates separate
 answer behavior from compile-time benchmarks, and readiness signals explain
 whether an almanac is prepared for ask-mode use.
 
+`v0.9` is planned to turn answer replay from ad hoc release smoke into a
+maintained ask-mode suite: fixture authoring, suite-level gates, refresh +
+answer validation, and more actionable doctor/profile readiness.
+
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
 ## Benchmarks
@@ -237,6 +241,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   compile stages, and runtime contract
 - [Answer mode](./docs/answer-mode.md): `ask`, citations, abstention, and
   replay behavior
+- [v0.9 plan](./docs/v0.9-plan.md): ask fixture authoring, suite gates,
+  refresh validation, and answer readiness hardening
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
