@@ -500,3 +500,30 @@ are available (`judge`). These checks are local artifact and environment checks;
 `doctor` does not call an LLM provider.
 
 Use `--strict` in automation when warnings should block promotion.
+
+## Failure recovery
+
+When `new`, `update`, or a manual refresh halts during the compile pipeline,
+the CLI prints a recovery footer with:
+
+- the first failed stage,
+- the stage error code and message,
+- the exact `almanac update <id> --from-stage=<stage> --no-bump` command,
+- the `inspect` command for the partial artifact,
+- `.compile/compile-state.json`,
+- the expected stage artifact path,
+- guidance that distinguishes provider/network failures from deterministic
+  validation failures.
+
+Use the same stage and `--no-bump` when retrying after a timeout so the partial
+artifact keeps its version:
+
+```bash
+almanac update my-almanac \
+  --from-stage=02b-source-discovery-evaluator \
+  --no-bump
+```
+
+For deterministic validation failures, inspect the compile state and the
+reported stage artifact before rerunning. `inspect`, `profile`, and `doctor`
+also surface the same recovery command and guidance for partial almanacs.
