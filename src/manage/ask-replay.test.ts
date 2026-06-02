@@ -1,7 +1,9 @@
 import { afterAll, describe, expect, test } from "bun:test";
 import {
+  existsSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   writeFileSync,
 } from "node:fs";
@@ -29,6 +31,11 @@ import {
   type ToolManifest,
 } from "../core/types.ts";
 import { saveAnswerArtifact } from "./answer-artifacts.ts";
+import {
+  addAskFixtureFromRun,
+  askReplayFixtureFromAnswerArtifact,
+  initAskFixtureFile,
+} from "./ask-fixtures.ts";
 
 import {
   AskReplaySetupError,
@@ -65,6 +72,24 @@ describe("ask replay fixtures", () => {
     expect(() => parseAskReplayFixtureJsonl("{not-json}")).toThrow(
       AskReplaySetupError,
     );
+    expect(() =>
+      parseAskReplayFixtureJsonl(
+        [
+          JSON.stringify({
+            id: "duplicate",
+            question: "one",
+            toolCalls: [{ tool: "query_facts" }],
+            expectedStatus: "ok",
+          }),
+          JSON.stringify({
+            id: "duplicate",
+            question: "two",
+            toolCalls: [{ tool: "query_facts" }],
+            expectedStatus: "ok",
+          }),
+        ].join("\n"),
+      ),
+    ).toThrow("duplicate fixture id");
   });
 
   test("replays fixture-declared tool calls without an LLM provider", async () => {
@@ -186,6 +211,142 @@ describe("ask replay fixtures", () => {
     );
     expect(exitCodeForAskReplay(report)).toBe(1);
     expect(formatAskReplayHuman(report)).toContain("quality=fail");
+  });
+});
+
+describe("ask fixture authoring", () => {
+  test("initializes the default fixture file and promotes a saved answer", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-fixture-authoring");
+
+    const initialized = await initAskFixtureFile({ almanacDir });
+    expect(initialized).toEqual(
+      expect.objectContaining({
+        almanacId: "ask-fixture-authoring",
+        relPath: "tests/ask.jsonl",
+        created: true,
+        fixtureCount: 0,
+      }),
+    );
+    expect(existsSync(initialized.path)).toBe(true);
+
+    const saved = await saveAnswerArtifact({
+      almanacDir,
+      answerId: "answer-2026-01-03T00-00-00-000Z-00000003",
+      question: "Are foreign keys supported?",
+      status: "ok",
+      exitCode: 0,
+      startedAt: "2026-01-03T00:00:00.000Z",
+      finishedAt: "2026-01-03T00:00:01.000Z",
+      answer: "SQLite supports foreign key constraints.",
+      toolCalls: [
+        {
+          toolName: "query_facts",
+          input: { q: "foreign keys" },
+          status: "ok",
+          durationMs: 10,
+          citationsCount: 1,
+        },
+      ],
+      citations: [fixtureCitation()],
+      freshness: {
+        class: "static",
+        maxAge: null,
+        staleness: "fresh",
+      },
+    });
+
+    const added = await addAskFixtureFromRun({
+      almanacDir,
+      answerId: saved.artifact.answerId,
+    });
+    expect(added).toEqual(
+      expect.objectContaining({
+        relPath: "tests/ask.jsonl",
+        created: false,
+        fixtureCount: 1,
+        sourceAnswerId: saved.artifact.answerId,
+        fixture: expect.objectContaining({
+          id: saved.artifact.answerId,
+          expectedStatus: "ok",
+          minCitations: 1,
+          maxStaleCitations: 0,
+        }),
+      }),
+    );
+
+    const fixtures = parseAskReplayFixtureJsonl(readFileSync(added.path, "utf8"));
+    const report = await runAskReplayFromFixtures({ almanacDir, fixtures });
+    expect(report.passed).toBe(1);
+    expect(report.results[0]?.fixtureId).toBe(saved.artifact.answerId);
+
+    await expect(
+      addAskFixtureFromRun({
+        almanacDir,
+        answerId: saved.artifact.answerId,
+      }),
+    ).rejects.toThrow("ask fixture id already exists");
+  });
+
+  test("converts saved abstentions and rejects answers without tool calls", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-fixture-abstention");
+    const saved = await saveAnswerArtifact({
+      almanacDir,
+      answerId: "answer-2026-01-03T00-00-00-000Z-00000004",
+      question: "Who won an unrelated tournament?",
+      status: "abstained",
+      exitCode: 1,
+      startedAt: "2026-01-03T00:00:00.000Z",
+      finishedAt: "2026-01-03T00:00:01.000Z",
+      abstentionReason: "tool-errors-only",
+      toolCalls: [
+        {
+          toolName: "query_facts",
+          input: { q: "unrelated tournament winner" },
+          status: "tool-error",
+          durationMs: 10,
+          citationsCount: 0,
+        },
+      ],
+      citations: [],
+      freshness: {
+        class: "static",
+        maxAge: null,
+        staleness: "fresh",
+      },
+    });
+
+    expect(askReplayFixtureFromAnswerArtifact(saved.artifact)).toEqual(
+      expect.objectContaining({
+        id: saved.artifact.answerId,
+        expectedStatus: "abstained",
+        expectedAbstentionReason: "tool-errors-only",
+      }),
+    );
+
+    const report = await runAskReplayFromFixtures({
+      almanacDir,
+      fixtures: [askReplayFixtureFromAnswerArtifact(saved.artifact)],
+    });
+    expect(report.passed).toBe(1);
+
+    await expect(
+      saveAnswerArtifact({
+        almanacDir,
+        answerId: "answer-2026-01-03T00-00-00-000Z-00000005",
+        question: "What happened?",
+        status: "model-error",
+        exitCode: 1,
+        startedAt: "2026-01-03T00:00:00.000Z",
+        finishedAt: "2026-01-03T00:00:01.000Z",
+        toolCalls: [],
+        citations: [],
+        error: {
+          code: "model-error",
+          message: "planner failed before tool calls",
+          retryable: false,
+        },
+      }).then((result) => askReplayFixtureFromAnswerArtifact(result.artifact)),
+    ).rejects.toThrow("no recorded tool calls");
   });
 });
 

@@ -11,6 +11,7 @@ import {
   readRunToolArtifact,
   type RunToolArtifactSummary,
 } from "./run-tool.ts";
+import { ASK_FIXTURE_REL_PATHS } from "./ask-fixtures.ts";
 
 export type AnswerReadinessStatus = "ready" | "needs-validation" | "not-ready";
 
@@ -44,13 +45,6 @@ export interface AnswerReadiness {
     validation: string[];
   };
 }
-
-const ASK_FIXTURE_REL_PATHS = [
-  "tests/ask.jsonl",
-  "tests/ask-replay.jsonl",
-  "fixtures/ask.jsonl",
-  "fixtures/ask-replay.jsonl",
-];
 
 export async function getAnswerReadiness(input: {
   almanacDir: string;

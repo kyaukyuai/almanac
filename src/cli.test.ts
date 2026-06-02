@@ -1413,6 +1413,80 @@ describe("almanac CLI product onboarding", () => {
       }),
     );
 
+    const initAskFixtures = runCli([
+      "ask-fixtures",
+      "init",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(initAskFixtures.status).toBe(0);
+    const initializedAskFixtures = JSON.parse(initAskFixtures.stdout) as {
+      relPath: string;
+      created: boolean;
+      fixtureCount: number;
+    };
+    expect(initializedAskFixtures).toEqual(
+      expect.objectContaining({
+        relPath: "tests/ask.jsonl",
+        created: true,
+        fixtureCount: 0,
+      }),
+    );
+
+    const addAskFixture = runCli([
+      "ask-fixtures",
+      "add-from-run",
+      "sqlite-demo",
+      savedArtifact.answerId,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(addAskFixture.status).toBe(0);
+    const addedAskFixture = JSON.parse(addAskFixture.stdout) as {
+      relPath: string;
+      fixtureCount: number;
+      fixture: { id: string; expectedStatus: string; minCitations: number };
+    };
+    expect(addedAskFixture).toEqual(
+      expect.objectContaining({
+        relPath: "tests/ask.jsonl",
+        fixtureCount: 1,
+        fixture: expect.objectContaining({
+          id: savedArtifact.answerId,
+          expectedStatus: "ok",
+          minCitations: 1,
+        }),
+      }),
+    );
+
+    const authoredFixturePath = join(
+      almanacDirPath(root, "sqlite-demo"),
+      "tests",
+      "ask.jsonl",
+    );
+    expect(await readFile(authoredFixturePath, "utf8")).toContain(
+      savedArtifact.answerId,
+    );
+    const replayAuthoredFixture = runCli([
+      "ask-replay",
+      "sqlite-demo",
+      "--fixture",
+      authoredFixturePath,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(replayAuthoredFixture.status).toBe(0);
+    expect(
+      (JSON.parse(replayAuthoredFixture.stdout) as {
+        mode: string;
+        passed: number;
+      }),
+    ).toEqual(expect.objectContaining({ mode: "fixture", passed: 1 }));
+
     const fixturePath = join(root, "ask-fixtures.jsonl");
     await writeFile(
       fixturePath,

@@ -66,6 +66,37 @@ The saved artifact includes a compact answer trace:
 The trace is intended for diagnosis. It does not persist API keys, environment
 dumps, or raw provider request/response bodies.
 
+## Fixture Authoring
+
+Use `almanac ask-fixtures` to create deterministic replay fixtures without
+calling an LLM provider.
+
+Initialize the standard fixture file:
+
+```bash
+almanac ask-fixtures init sqlite-demo --root "$tmp"
+```
+
+The default path is `tests/ask.jsonl` under the compiled almanac. Alternate
+recognized fixture paths are `tests/ask-replay.jsonl`, `fixtures/ask.jsonl`,
+and `fixtures/ask-replay.jsonl`.
+
+Promote a saved answer artifact into the fixture file:
+
+```bash
+answer_id="$(
+  almanac runs sqlite-demo --kind answer --latest --json --root "$tmp" \
+    | jq -r '.runs[0].runId'
+)"
+
+almanac ask-fixtures add-from-run sqlite-demo "$answer_id" --root "$tmp"
+```
+
+The added row keeps the saved question, recorded tool calls, expected final
+answer status, citation expectations, and abstention reason when present. The
+default fixture id is the saved `answer-*` id; pass `--fixture-id` when a
+shorter stable id is preferable. Duplicate fixture ids are rejected.
+
 ## Replay
 
 `almanac ask-replay` reruns answer-mode checks without calling an LLM provider.

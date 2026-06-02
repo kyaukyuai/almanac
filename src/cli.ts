@@ -21,6 +21,7 @@
  *   almanac run <id> --tool <name> [opts]  invoke one compiled tool locally
  *   almanac ask <id> <question> [opts]     synthesize a cited one-shot answer
  *   almanac ask-replay <id> [opts]         replay saved or fixture answer runs
+ *   almanac ask-fixtures <subcommand>      author ask replay fixture JSONL
  *   almanac runs <id> [runId] [opts]       view saved local run artifacts
  *   almanac refresh due <id> [opts]        check read-only refresh due status
  *   almanac refresh run <id> [opts]        run a manual refresh over update
@@ -224,6 +225,12 @@ import {
   runAskReplayFromFixtureFile,
   runAskReplayFromSavedRuns,
 } from "./manage/ask-replay.ts";
+import {
+  AskFixtureAuthoringError,
+  addAskFixtureFromRun,
+  formatAskFixtureAuthoringHuman,
+  initAskFixtureFile,
+} from "./manage/ask-fixtures.ts";
 import {
   formatAnswerReadinessDoctor,
   getAnswerReadiness,
@@ -2869,6 +2876,79 @@ function askReplayUsageError(message: string): never {
   process.exit(2);
 }
 
+interface AskFixturesInitOptions {
+  root: string;
+  fixture?: string;
+  json?: boolean;
+  overwrite?: boolean;
+}
+
+async function cmdAskFixturesInit(
+  id: string,
+  opts: AskFixturesInitOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  try {
+    const result = await initAskFixtureFile({
+      almanacDir,
+      ...(opts.fixture === undefined
+        ? {}
+        : { fixturePath: resolve(opts.fixture) }),
+      overwrite: opts.overwrite === true,
+    });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(result, null, 2) + "\n"
+        : formatAskFixtureAuthoringHuman(result),
+    );
+  } catch (e) {
+    if (e instanceof AskFixtureAuthoringError) {
+      fail(`ask-fixtures: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+interface AskFixturesAddFromRunOptions {
+  root: string;
+  fixture?: string;
+  fixtureId?: string;
+  json?: boolean;
+}
+
+async function cmdAskFixturesAddFromRun(
+  id: string,
+  answerId: string,
+  opts: AskFixturesAddFromRunOptions,
+): Promise<void> {
+  const almanacDir = almanacDirPath(opts.root, id);
+  try {
+    const result = await addAskFixtureFromRun({
+      almanacDir,
+      answerId,
+      ...(opts.fixture === undefined
+        ? {}
+        : { fixturePath: resolve(opts.fixture) }),
+      ...(opts.fixtureId === undefined
+        ? {}
+        : { fixtureId: opts.fixtureId.trim() }),
+    });
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(result, null, 2) + "\n"
+        : formatAskFixtureAuthoringHuman(result),
+    );
+  } catch (e) {
+    if (e instanceof AskFixtureAuthoringError) {
+      fail(`ask-fixtures: ${e.message}`);
+    }
+    if (e instanceof RunToolSetupError) {
+      fail(`ask-fixtures: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
 interface RefreshDueOptions {
   root: string;
   json?: boolean;
@@ -4316,6 +4396,34 @@ program
   .option("--label <name>", "With --from-runs, replay only this answer label")
   .addOption(rootOption)
   .action(cmdAskReplay);
+
+const askFixturesCommand = program
+  .command("ask-fixtures")
+  .description("author ask replay fixture JSONL without an LLM provider");
+
+askFixturesCommand
+  .command("init <id>")
+  .description("create an ask replay fixture JSONL file")
+  .option(
+    "--fixture <path>",
+    "Fixture JSONL path (default: <almanac>/tests/ask.jsonl)",
+  )
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--overwrite", "Replace an existing fixture file with an empty file")
+  .addOption(rootOption)
+  .action(cmdAskFixturesInit);
+
+askFixturesCommand
+  .command("add-from-run <id> <answerId>")
+  .description("append a saved answer artifact to an ask replay fixture file")
+  .option(
+    "--fixture <path>",
+    "Fixture JSONL path (default: <almanac>/tests/ask.jsonl)",
+  )
+  .option("--fixture-id <id>", "Override the fixture id (default: answer id)")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdAskFixturesAddFromRun);
 
 program
   .command("runs <id> [runId]")
