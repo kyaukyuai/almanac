@@ -34,9 +34,7 @@ almanac serve sqlite-demo
 almanac serve sqlite-demo --transport=http --port=7331
 ```
 
-## Quick Start
-
-Requirements:
+## Requirements
 
 - Bun 1.1.0 or newer
 - `ANTHROPIC_API_KEY` for real LLM-backed compile or answer runs
@@ -44,19 +42,38 @@ Requirements:
 - optional `VOYAGE_API_KEY`, `OPENAI_API_KEY`, or `ALMANAC_EMBEDDINGS` for
   vector retrieval artifacts
 
-Run the offline demo first. It does not require API keys.
+## Install
+
+`almanac` is currently source-first and is not published as a package. Clone
+the repository, install dependencies, and link the local CLI with Bun:
 
 ```bash
 git clone https://github.com/kyaukyuai/almanac.git
 cd almanac
 bun install
+bun link
+```
 
+After linking, `almanac` should resolve to the local checkout:
+
+```bash
+almanac doctor
+```
+
+For one-off use without linking, run the same commands with `bun src/cli.ts`
+from the repository root.
+
+## Quick Start
+
+Run the offline demo first. It does not require API keys.
+
+```bash
 tmp=$(mktemp -d)
-bun src/cli.ts demo --root "$tmp"
-bun src/cli.ts inspect sqlite-demo --root "$tmp"
-bun src/cli.ts profile sqlite-demo --root "$tmp"
-bun src/cli.ts benchmark sqlite-demo --root "$tmp"
-bun src/cli.ts run sqlite-demo \
+almanac demo --root "$tmp"
+almanac inspect sqlite-demo --root "$tmp"
+almanac profile sqlite-demo --root "$tmp"
+almanac benchmark sqlite-demo --root "$tmp"
+almanac run sqlite-demo \
   --tool query_facts \
   --input '{"q":"transactions atomic"}' \
   --root "$tmp"
@@ -66,8 +83,8 @@ The demo creates a complete local almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
 golden benchmark fixtures.
 
-If you have the `almanac` binary on your path, replace `bun src/cli.ts` with
-`almanac` in the examples.
+If you did not run `bun link`, replace `almanac` with `bun src/cli.ts` in the
+examples.
 
 ## Compile a Real Almanac
 
@@ -79,18 +96,18 @@ generation.
 export ANTHROPIC_API_KEY=...
 export BRAVE_SEARCH_API_KEY=... # optional
 
-bun src/cli.ts new cooking
-bun src/cli.ts inspect cooking
-bun src/cli.ts profile cooking
-bun src/cli.ts sources cooking
-bun src/cli.ts benchmark cooking
+almanac new cooking
+almanac inspect cooking
+almanac profile cooking
+almanac sources cooking
+almanac benchmark cooking
 ```
 
 Register it with a host client:
 
 ```bash
-bun src/cli.ts register cooking --client=claude-code --apply
-bun src/cli.ts serve cooking
+almanac register cooking --client=claude-code --apply
+almanac serve cooking
 ```
 
 Supported registration targets are `claude-code`, `claude-desktop`, `cursor`,
