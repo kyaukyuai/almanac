@@ -1028,6 +1028,10 @@ doctor/profile reporting answer mode as ready.
 
 ### v0.10+ (long-tail)
 
+- v0.10 planning is captured in [`docs/v0.10-plan.md`](./v0.10-plan.md). The
+  release theme is answer trust and compile stability: optional entailment
+  judging, source/fixture stability controls, retrieval readiness, and RC smoke
+  coverage for ask-suite workflows.
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
