@@ -1060,6 +1060,10 @@ the promoted Enterprise AI answer, producing a documented review outcome.
 
 ### v0.11+ (long-tail)
 
+- v0.11 planning is captured in [`docs/v0.11-plan.md`](./v0.11-plan.md). The
+  release theme is Install + First Successful Almanac: source-first install
+  sanity, task-oriented first-run readiness, sqlite-demo handoff, and compile
+  failure recovery UX.
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
