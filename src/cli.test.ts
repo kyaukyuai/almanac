@@ -307,6 +307,7 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.stdout).toContain("benchmark      2/2 passed, citationRate 100%");
     expect(profile.stdout).toContain("answer mode    needs-validation");
     expect(profile.stdout).toContain("ask fixtures   0 found");
+    expect(profile.stdout).toContain("ask suite      not-run");
     expect(profile.stdout).toContain("quality gate   missing");
     expect(profile.stdout).toContain("no ask replay fixtures");
     expect(profile.stdout).toContain("sqlite-transactions");
@@ -327,6 +328,7 @@ describe("almanac CLI product onboarding", () => {
       answer: {
         status: string;
         fixtures: { count: number };
+        latestSuite: { status: string };
         qualityGate: { status: string };
       };
     };
@@ -339,6 +341,7 @@ describe("almanac CLI product onboarding", () => {
     expect(parsedProfile.benchmark.report.citationRate).toBe(1);
     expect(parsedProfile.answer.status).toBe("needs-validation");
     expect(parsedProfile.answer.fixtures.count).toBe(0);
+    expect(parsedProfile.answer.latestSuite.status).toBe("not-run");
     expect(parsedProfile.answer.qualityGate.status).toBe("missing");
 
     const sources = runCli(["sources", "sqlite-demo", "--root", root]);
@@ -1767,6 +1770,62 @@ describe("almanac CLI product onboarding", () => {
         askSuiteTotal: 1,
       }),
     );
+
+    const answerProfileAfterSuite = runCli([
+      "profile",
+      "sqlite-demo",
+      "--root",
+      root,
+    ]);
+    expect(answerProfileAfterSuite.status).toBe(0);
+    expect(answerProfileAfterSuite.stdout).toContain(
+      "answer mode    needs-validation",
+    );
+    expect(answerProfileAfterSuite.stdout).toContain(
+      "ask fixtures   1 found (tests/ask.jsonl:1)",
+    );
+    expect(answerProfileAfterSuite.stdout).toContain(
+      "ask suite      passed, 1/1 passed",
+    );
+    expect(answerProfileAfterSuite.stdout).toContain("latest answer  none");
+    expect(answerProfileAfterSuite.stdout).toContain("no saved answer artifacts");
+
+    const answerProfileJsonAfterSuite = runCli([
+      "profile",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(answerProfileJsonAfterSuite.status).toBe(0);
+    expect(
+      (JSON.parse(answerProfileJsonAfterSuite.stdout) as {
+        answer: {
+          status: string;
+          fixtures: { paths: Array<{ relPath: string; count: number }> };
+          latestSuite: { status: string; total?: number };
+        };
+      }).answer,
+    ).toEqual(
+      expect.objectContaining({
+        status: "needs-validation",
+        fixtures: expect.objectContaining({
+          paths: [expect.objectContaining({ relPath: "tests/ask.jsonl", count: 1 })],
+        }),
+        latestSuite: expect.objectContaining({ status: "passed", total: 1 }),
+      }),
+    );
+
+    const doctorAfterSuite = runCli([
+      "doctor",
+      "sqlite-demo",
+      "--root",
+      root,
+    ]);
+    expect(doctorAfterSuite.status).toBe(0);
+    expect(doctorAfterSuite.stdout).toContain("warn answer");
+    expect(doctorAfterSuite.stdout).toContain("suite passed");
+    expect(doctorAfterSuite.stdout).toContain("no saved answer artifacts");
 
     const metadataWithoutSave = runCli([
       "ask",

@@ -2109,7 +2109,24 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
   if (answerReadiness.fixtures.count === 0) {
     nextActions.push(
-      `create ask replay fixtures: ${join(dir, "tests", "ask.jsonl")}`,
+      `create ask replay fixtures: almanac ask-fixtures init ${id}${rootSuffix}`,
+    );
+  } else if (answerReadiness.latestSuite.status !== "passed") {
+    if (answerReadiness.latestSuite.refreshId !== undefined) {
+      nextActions.push(
+        `inspect latest ask suite refresh: almanac runs ${id} ${answerReadiness.latestSuite.refreshId}${rootSuffix}`,
+      );
+    }
+    nextActions.push(
+      `persist ask suite evidence: almanac refresh run ${id} --from-stage 12-benchmark-run --ask-suite --save${rootSuffix}`,
+    );
+  } else if (
+    answerReadiness.issues.validation.some((issue) =>
+      issue.startsWith("latest ask suite fixture coverage differs")
+    )
+  ) {
+    nextActions.push(
+      `rerun ask suite evidence: almanac refresh run ${id} --from-stage 12-benchmark-run --ask-suite --save${rootSuffix}`,
     );
   }
   if (answerReadiness.latestAnswer === null) {
@@ -2253,7 +2270,10 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
   process.stdout.write(`  answer mode    ${answerReadiness.status}\n`);
   process.stdout.write(
-    `  ask fixtures   ${answerReadiness.fixtures.count} found\n`,
+    `  ask fixtures   ${formatAnswerReadinessFixtures(answerReadiness)}\n`,
+  );
+  process.stdout.write(
+    `  ask suite      ${formatAnswerReadinessSuite(answerReadiness)}\n`,
   );
   process.stdout.write(
     `  latest answer  ${formatAnswerReadinessLatest(answerReadiness)}\n`,
@@ -2315,6 +2335,52 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   for (const action of nextActions) {
     process.stdout.write(`  - ${action}\n`);
   }
+}
+
+function formatAnswerReadinessFixtures(readiness: AnswerReadiness): string {
+  const suffix =
+    readiness.fixtures.paths.length === 0
+      ? ""
+      : ` (${readiness.fixtures.paths
+          .map((file) => `${file.relPath}:${file.count}`)
+          .join(", ")})`;
+  return `${readiness.fixtures.count} found${suffix}`;
+}
+
+function formatAnswerReadinessSuite(readiness: AnswerReadiness): string {
+  const suite = readiness.latestSuite;
+  if (suite.status === "not-run") return "not-run";
+  if (suite.status === "unreadable") {
+    return `unreadable${suite.readError === undefined ? "" : ` (${suite.readError})`}`;
+  }
+  const counts =
+    suite.total === undefined
+      ? ""
+      : `, ${suite.passed ?? 0}/${suite.total} passed`;
+  const quality = [
+    suite.citationRate === undefined
+      ? null
+      : `citationRate ${formatRate(suite.citationRate)}`,
+    suite.unsupportedClaimCount === undefined
+      ? null
+      : `unsupported ${suite.unsupportedClaimCount}`,
+    suite.staleCitationCount === undefined
+      ? null
+      : `stale ${suite.staleCitationCount}`,
+    suite.abstentionMismatchCount === undefined
+      ? null
+      : `abstentionMismatch ${suite.abstentionMismatchCount}`,
+  ].filter((part): part is string => part !== null);
+  const qualitySuffix = quality.length === 0 ? "" : ` (${quality.join(", ")})`;
+  const run =
+    suite.refreshId === undefined
+      ? ""
+      : `, ${suite.refreshId}${suite.label === undefined ? "" : ` label=${suite.label}`}`;
+  const error =
+    suite.error === undefined
+      ? ""
+      : ` (${suite.error.code}: ${suite.error.message})`;
+  return `${suite.status}${counts}${qualitySuffix}${run}${error}`;
 }
 
 function formatAnswerReadinessLatest(readiness: AnswerReadiness): string {

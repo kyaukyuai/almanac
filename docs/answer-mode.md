@@ -193,6 +193,7 @@ Readiness considers:
 
 - compiled tools and benchmark state,
 - ask fixture coverage,
+- latest saved refresh ask-suite status and fixture coverage,
 - latest saved answer status,
 - latest saved answer quality verdict,
 - malformed answer artifacts,
@@ -200,8 +201,23 @@ Readiness considers:
 
 States:
 
-- `ready`: benchmark passed, fixtures exist, latest answer gate passed.
+- `ready`: benchmark passed, ask fixtures exist, latest saved ask suite passed
+  against the current fixture files, and the latest saved answer gate passed.
 - `needs-validation`: answer mode can run but fixtures or saved quality evidence
-  are missing.
+  are missing, stale, or failed.
 - `not-ready`: benchmark/runtime state is missing or the latest answer failure
   indicates a blocking runtime issue.
+
+When fixtures exist but no saved suite evidence exists, run:
+
+```bash
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --root "$tmp"
+```
+
+`profile` shows fixture file paths, latest ask-suite status, latest answer
+status, and the answer quality gate. `doctor` emits the same readiness summary
+as an `answer` check without calling a model provider.

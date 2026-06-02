@@ -5,6 +5,7 @@ import { readManifest } from "../compile/storage.ts";
 import type {
   AnswerArtifact,
   AnswerTraceQuality,
+  RefreshArtifact,
 } from "../core/types.ts";
 import {
   listRunToolArtifacts,
@@ -32,9 +33,30 @@ export interface AnswerReadinessLatestAnswer {
   hasTrace: boolean;
 }
 
+export interface AnswerReadinessLatestSuite {
+  status: "passed" | "failed" | "missing" | "not-run" | "unreadable";
+  source: "refresh-artifact" | "none";
+  refreshId?: string;
+  startedAt?: string;
+  artifactRelPath?: string;
+  label?: string;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  citationRate?: number;
+  unsupportedClaimCount?: number;
+  staleCitationCount?: number;
+  abstentionMismatchCount?: number;
+  fixtureFiles: Array<{ relPath: string; count: number }>;
+  error?: { code: string; message: string };
+  readError?: string;
+}
+
 export interface AnswerReadiness {
   status: AnswerReadinessStatus;
   fixtures: AnswerFixtureCoverage;
+  latestSuite: AnswerReadinessLatestSuite;
   latestAnswer: AnswerReadinessLatestAnswer | null;
   qualityGate: {
     status: "pass" | "fail" | "missing";
@@ -59,6 +81,23 @@ export async function getAnswerReadiness(input: {
   const fixtures = await readAnswerFixtureCoverage(input.almanacDir);
   if (fixtures.count === 0) {
     validation.push("no ask replay fixtures");
+  }
+
+  const latestSuite = await readLatestAskSuite(input.almanacDir);
+  if (fixtures.count > 0) {
+    if (latestSuite.status === "not-run") {
+      validation.push("ask suite has not been run");
+    } else if (latestSuite.status === "unreadable") {
+      validation.push(
+        `ask suite artifacts unreadable: ${latestSuite.readError ?? "unknown error"}`,
+      );
+    } else if (latestSuite.status === "missing") {
+      validation.push("latest ask suite found no ask fixtures");
+    } else if (latestSuite.status === "failed") {
+      validation.push("latest ask suite failed");
+    } else if (!suiteMatchesFixtures(latestSuite, fixtures)) {
+      validation.push(suiteFixtureMismatchMessage(latestSuite, fixtures));
+    }
   }
 
   const latestAnswer = await readLatestAnswer(input.almanacDir);
@@ -100,6 +139,7 @@ export async function getAnswerReadiness(input: {
   return {
     status,
     fixtures,
+    latestSuite,
     latestAnswer: latest,
     qualityGate:
       qualityGate === null
@@ -116,6 +156,7 @@ export function formatAnswerReadinessDoctor(readiness: AnswerReadiness): string 
   const parts = [
     `mode ${readiness.status}`,
     `${readiness.fixtures.count} fixture${readiness.fixtures.count === 1 ? "" : "s"}`,
+    `suite ${formatDoctorSuite(readiness.latestSuite)}`,
     `quality ${readiness.qualityGate.status}`,
   ];
   if (readiness.latestAnswer === null) {
@@ -133,6 +174,59 @@ export function formatAnswerReadinessDoctor(readiness: AnswerReadiness): string 
     parts.push(issues.join("; "));
   }
   return parts.join("; ");
+}
+
+function formatDoctorSuite(suite: AnswerReadinessLatestSuite): string {
+  if (suite.status === "not-run" || suite.status === "unreadable") {
+    return suite.status;
+  }
+  const counts =
+    suite.total === undefined
+      ? ""
+      : ` ${suite.passed ?? 0}/${suite.total}`;
+  const refresh = suite.refreshId === undefined ? "" : ` ${suite.refreshId}`;
+  return `${suite.status}${counts}${refresh}`;
+}
+
+function suiteMatchesFixtures(
+  suite: AnswerReadinessLatestSuite,
+  fixtures: AnswerFixtureCoverage,
+): boolean {
+  if (suite.status !== "passed") return false;
+  if (suite.total !== undefined && suite.total !== fixtures.count) {
+    return false;
+  }
+  if (suite.fixtureFiles.length === 0) {
+    return suite.total === fixtures.count;
+  }
+  const suiteByPath = new Map(
+    suite.fixtureFiles.map((file) => [file.relPath, file.count]),
+  );
+  const fixtureByPath = new Map(
+    fixtures.paths.map((file) => [file.relPath, file.count]),
+  );
+  if (suiteByPath.size !== fixtureByPath.size) return false;
+  for (const [relPath, count] of fixtureByPath) {
+    if (suiteByPath.get(relPath) !== count) return false;
+  }
+  return true;
+}
+
+function suiteFixtureMismatchMessage(
+  suite: AnswerReadinessLatestSuite,
+  fixtures: AnswerFixtureCoverage,
+): string {
+  const suiteCoverage =
+    suite.fixtureFiles.length === 0
+      ? `${suite.total ?? 0} fixture(s)`
+      : suite.fixtureFiles
+          .map((file) => `${file.relPath}:${file.count}`)
+          .join(", ");
+  const currentCoverage =
+    fixtures.paths.length === 0
+      ? `${fixtures.count} fixture(s)`
+      : fixtures.paths.map((file) => `${file.relPath}:${file.count}`).join(", ");
+  return `latest ask suite fixture coverage differs: suite ${suiteCoverage}; current ${currentCoverage}`;
 }
 
 async function readAnswerFixtureCoverage(
@@ -197,6 +291,92 @@ async function readLatestAnswer(
   } catch (e) {
     return { status: "error", message: `latest answer unreadable: ${(e as Error).message}` };
   }
+}
+
+async function readLatestAskSuite(
+  almanacDir: string,
+): Promise<AnswerReadinessLatestSuite> {
+  let latestRefreshes: RunToolArtifactSummary[] = [];
+  try {
+    const list = await listRunToolArtifacts({
+      almanacDir,
+      kind: "refresh",
+    });
+    latestRefreshes = list.runs;
+  } catch (e) {
+    return {
+      status: "unreadable",
+      source: "none",
+      fixtureFiles: [],
+      readError: (e as Error).message,
+    };
+  }
+
+  for (const refresh of latestRefreshes) {
+    try {
+      const read = await readRunToolArtifact({
+        almanacDir,
+        runId: refresh.runId,
+      });
+      if (read.artifact.kind !== "refresh") continue;
+      if (read.artifact.askSuite === undefined) continue;
+      return summarizeAskSuite(read.artifact);
+    } catch (e) {
+      return {
+        status: "unreadable",
+        source: "refresh-artifact",
+        refreshId: refresh.runId,
+        artifactRelPath: refresh.artifactRelPath,
+        fixtureFiles: [],
+        readError: (e as Error).message,
+      };
+    }
+  }
+
+  return {
+    status: "not-run",
+    source: "none",
+    fixtureFiles: [],
+  };
+}
+
+function summarizeAskSuite(
+  artifact: RefreshArtifact,
+): AnswerReadinessLatestSuite {
+  const askSuite = artifact.askSuite;
+  if (askSuite === undefined) {
+    return {
+      status: "not-run",
+      source: "none",
+      fixtureFiles: [],
+    };
+  }
+  return {
+    status: askSuite.status,
+    source: "refresh-artifact",
+    refreshId: artifact.refreshId,
+    startedAt: artifact.startedAt,
+    artifactRelPath: artifact.artifactRelPath,
+    ...(artifact.label === undefined ? {} : { label: artifact.label }),
+    ...(askSuite.total === undefined ? {} : { total: askSuite.total }),
+    ...(askSuite.passed === undefined ? {} : { passed: askSuite.passed }),
+    ...(askSuite.failed === undefined ? {} : { failed: askSuite.failed }),
+    ...(askSuite.errored === undefined ? {} : { errored: askSuite.errored }),
+    ...(askSuite.citationRate === undefined
+      ? {}
+      : { citationRate: askSuite.citationRate }),
+    ...(askSuite.unsupportedClaimCount === undefined
+      ? {}
+      : { unsupportedClaimCount: askSuite.unsupportedClaimCount }),
+    ...(askSuite.staleCitationCount === undefined
+      ? {}
+      : { staleCitationCount: askSuite.staleCitationCount }),
+    ...(askSuite.abstentionMismatchCount === undefined
+      ? {}
+      : { abstentionMismatchCount: askSuite.abstentionMismatchCount }),
+    fixtureFiles: askSuite.fixtureFiles ?? [],
+    ...(askSuite.error === undefined ? {} : { error: askSuite.error }),
+  };
 }
 
 function summarizeAnswer(artifact: AnswerArtifact): AnswerReadinessLatestAnswer {
