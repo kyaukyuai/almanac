@@ -307,6 +307,8 @@ fields, quality gate behavior, and readiness states, see
 
 For the v0.8 release-candidate smoke sequence, see
 [`v0.8-rc-smoke.md`](./v0.8-rc-smoke.md).
+For the v0.9 ask-suite operations release-candidate smoke sequence, see
+[`v0.9-rc-smoke.md`](./v0.9-rc-smoke.md).
 
 Minimal answer-mode smoke:
 
