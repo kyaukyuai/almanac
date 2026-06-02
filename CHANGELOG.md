@@ -11,6 +11,47 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.11.0] — 2026-06-03
+
+### Added
+
+- **Source-first install sanity.** The product guide and RC smoke now cover
+  `bun src/cli.ts --version`, package `bin` integrity, and linked
+  `almanac --version` checks so a first-run user can verify they are invoking
+  the intended checkout.
+- **Task-oriented first-run readiness.** `doctor` now reports readiness by
+  task area, including demo, real compile, judge, answer, refresh, and
+  registration, with concrete next actions instead of only raw environment
+  warnings.
+- **Demo handoff runbook.** `docs/v0.11-rc-smoke.md`, README, and the product
+  guide describe the no-key sqlite-demo path, default export behavior, wiki
+  handoff files, saved answer replay, ask-suite promotion, and refresh-backed
+  ask validation.
+- **v0.11 RC smoke runbook.** The release-candidate smoke covers static gates,
+  source and linked CLI checks, sqlite-demo first-run handoff, saved answer
+  replay, ask-suite validation, refresh artifacts, mocked failure recovery,
+  and credentialed Enterprise AI compile/ask sections.
+
+### Changed
+
+- **First successful almanac posture.** The documented happy path now starts
+  with an offline sqlite-demo that reaches a usable profile, cited tool output,
+  exported archive, wiki handoff, saved answer artifact, deterministic replay,
+  and ready answer mode without provider credentials.
+- **Export and wiki handoff expectations.** Documentation now makes the default
+  portable export boundary explicit: `.compile/` and `.runs/` stay out of the
+  archive unless requested, while wiki export includes `artifacts.json` and its
+  own manifest entry.
+
+### Fixed
+
+- **Compile failure recovery UX.** Pipeline failures now print the first failed
+  stage, exact `almanac update ... --from-stage=... --no-bump` recovery
+  command, compile-state path, expected stage artifact path, and guidance that
+  distinguishes deterministic validation failures from provider/network
+  failures. `inspect`, `profile`, and `doctor` surface the same recovery
+  context after a halted compile.
+
 ## [0.10.0] — 2026-06-02
 
 ### Added

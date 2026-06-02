@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.10.0 shipped** · last updated 2026-06-02.
+Status: **v0.11.0 shipped** · last updated 2026-06-03.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1058,12 +1058,36 @@ validation, and doctor/profile reporting answer mode as ready. The optional
 entailment judge correctly flagged one unsupported and one uncertain claim in
 the promoted Enterprise AI answer, producing a documented review outcome.
 
-### v0.11+ (long-tail)
+### v0.11.0 — Install and first successful almanac
 
-- v0.11 planning is captured in [`docs/v0.11-plan.md`](./v0.11-plan.md). The
-  release theme is Install + First Successful Almanac: source-first install
-  sanity, task-oriented first-run readiness, sqlite-demo handoff, and compile
-  failure recovery UX.
+v0.11.0 shipped the install and first successful almanac release:
+
+- Source-first install sanity covers the source CLI version, package `bin`
+  integrity, linked `almanac --version`, and `doctor` from outside the
+  repository.
+- `doctor` reports readiness by task area, including demo, real compile,
+  judge, answer, refresh, and registration, with concrete next actions.
+- The sqlite-demo handoff path now has release smoke for no-key first run,
+  inspect/profile/benchmark, `run --tool`, default export, wiki export, saved
+  answer replay, ask fixture promotion, `ask-suite`, and refresh-backed ask
+  validation.
+- Compile failures print the first failed stage, exact recovery command,
+  compile-state path, expected stage artifact path, and deterministic versus
+  provider/network guidance; `inspect`, `profile`, and `doctor` repeat the
+  recovery context after a halted compile.
+
+See [`docs/v0.11-plan.md`](./v0.11-plan.md) for scope, non-goals, PR sequence,
+and the shipped implementation sequence. The concrete release-candidate runbook
+is [`docs/v0.11-rc-smoke.md`](./v0.11-rc-smoke.md).
+
+The v0.11 no-key release gate passed on 2026-06-02/03 with `git diff --check`,
+`bun run typecheck`, `bun test`, linked CLI smoke, sqlite-demo first-run
+handoff, default export/wiki generation, saved answer replay, ask fixture
+promotion, `ask-suite` pass, refresh-integrated ask validation, and mocked
+compile failure recovery printing actionable rerun guidance.
+
+### v0.12+ (long-tail)
+
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
@@ -1078,8 +1102,9 @@ The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, the v0.6 refresh contract, the v0.7
 answer boundary, the v0.8 answer diagnostics/readiness gates, the v0.9 ask
-suite operations, and the v0.10 answer-trust and compile-stability release
-documented in §8 above. Active questions carrying into future releases:
+suite operations, the v0.10 answer-trust and compile-stability release, and
+the v0.11 install and first-success release documented in §8 above. Active
+questions carrying into future releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local

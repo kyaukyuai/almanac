@@ -205,7 +205,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.10.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.11.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -225,11 +225,15 @@ Current shipped lines include:
   validation, and hardened answer readiness reporting
 - `v0.10`: optional answer entailment judging, compile stability diagnostics,
   retrieval readiness reporting, and v0.10 RC smoke coverage
+- `v0.11`: source-first install sanity, task-oriented first-run readiness,
+  sqlite-demo handoff, and compile failure recovery UX
 
-`v0.10.0` hardens answer trust and compile repeatability: deterministic replay
-and default `ask-suite` remain provider-free, `--judge` adds explicit
-LLM-backed entailment review, Stage 2/11 expose source and fixture stability,
-and `profile`/`doctor` make FTS-only versus semantic retrieval readiness clear.
+`v0.11.0` makes the first successful almanac path explicit: users can verify
+the source and linked CLI, run an offline sqlite-demo without provider keys,
+export or wiki-share a portable handoff, promote a saved answer into
+deterministic replay fixtures, and recover from compile failures using exact
+rerun commands surfaced by `new`, `update`, `inspect`, `profile`, and
+`doctor`.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -254,6 +258,11 @@ cited answer, replayed the saved answer artifact deterministically, promoted it
 to `tests/ask.jsonl`, passed `ask-suite`, persisted refresh-integrated ask
 validation, and recorded an optional judge failure with concrete
 unsupported/uncertain claims for review.
+
+The v0.11.0 no-key RC smoke passed source and linked CLI checks, sqlite-demo
+first-run handoff, default export/wiki generation, saved answer replay,
+`ask-suite`, refresh-integrated ask validation, and mocked compile failure
+recovery on `main`.
 
 ## Development
 
