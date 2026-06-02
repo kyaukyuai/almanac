@@ -251,6 +251,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.10 RC smoke](./docs/v0.10-rc-smoke.md): release-candidate validation for
   entailment judging, compile stability diagnostics, retrieval readiness, and
   ask-suite workflows
+- [v0.11 plan](./docs/v0.11-plan.md): source-first install, first successful
+  almanac, demo handoff, and compile failure recovery
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
