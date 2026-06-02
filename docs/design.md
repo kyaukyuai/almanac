@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.9.0 shipped** · last updated 2026-06-02.
+Status: **v0.10.0 shipped** · last updated 2026-06-02.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1029,17 +1029,37 @@ real-provider Enterprise AI ask producing a cited answer, saved-answer replay,
 fixture promotion, ask-suite pass, refresh-integrated ask validation, and
 doctor/profile reporting answer mode as ready.
 
-### v0.10+ (long-tail)
+### v0.10.0 — Answer trust and compile stability
 
-- v0.10 planning is captured in [`docs/v0.10-plan.md`](./v0.10-plan.md). The
-  release theme is answer trust and compile stability: optional entailment
-  judging, source/fixture stability controls, retrieval readiness, and RC smoke
-  coverage for ask-suite workflows. Compile stability diagnostics are persisted
-  in `sources.json` and `.compile/stage11-output.json` rather than only being
-  transient logs. Retrieval readiness is reported as `fts-only`, `hybrid`, or
-  `vector-configured-but-skipped` so missing optional embeddings do not look
-  like product failure. The v0.10 release-candidate runbook is
-  [`docs/v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
+v0.10.0 shipped the answer trust and compile stability release:
+
+- `ask-replay --judge` and `ask-suite --judge` add an explicit LLM-backed
+  entailment judge over answer text and cited evidence, with claim-level
+  supported, unsupported, and uncertain verdicts.
+- Deterministic replay and default `ask-suite` remain provider-free; semantic
+  judging is opt-in and auditable rather than hidden inside readiness checks.
+- Source discovery reruns persist accepted-source stability metadata in
+  `sources.json`, and Stage 11 persists coverage-floor and preflight-attempt
+  diagnostics in `.compile/stage11-output.json`.
+- `profile` and `doctor` report retrieval readiness as `fts-only`, `hybrid`,
+  or `vector-configured-but-skipped`, so optional embeddings do not look like a
+  product failure.
+
+See [`docs/v0.10-plan.md`](./v0.10-plan.md) for scope, non-goals, PR sequence,
+and the shipped implementation sequence. The concrete release-candidate runbook
+is [`docs/v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
+
+The v0.10 release gate passed on 2026-06-02 with `git diff --check`,
+`bun run typecheck`, `bun test`, sqlite-demo deterministic replay and mock
+judge validation, Enterprise AI fresh compile benchmark at 735 facts and 15/15
+passed fixtures, real-provider Enterprise AI ask producing a cited answer,
+saved-answer replay, fixture promotion, ask-suite pass, refresh-integrated ask
+validation, and doctor/profile reporting answer mode as ready. The optional
+entailment judge correctly flagged one unsupported and one uncertain claim in
+the promoted Enterprise AI answer, producing a documented review outcome.
+
+### v0.11+ (long-tail)
+
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
@@ -1053,9 +1073,9 @@ doctor/profile reporting answer mode as ready.
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, the v0.6 refresh contract, the v0.7
-answer boundary, the v0.8 answer diagnostics/readiness gates, and the v0.9 ask
-suite operations documented in §8 above. Active questions carrying into future
-releases:
+answer boundary, the v0.8 answer diagnostics/readiness gates, the v0.9 ask
+suite operations, and the v0.10 answer-trust and compile-stability release
+documented in §8 above. Active questions carrying into future releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
@@ -1066,7 +1086,7 @@ releases:
    fallback.
 2. **Hybrid retrieval recipe.** RRF (parameter-free, well-cited)
    vs a weighted linear blend (tunable per domain). Start with
-   RRF; promote to weighted only if benchmark signals demand it. v0.10 keeps
+   RRF; promote to weighted only if benchmark signals demand it. v0.10 kept
    this as a readiness/defaults surface rather than a ranking-algorithm change.
 3. **Snapshot allowlist.** Curated list of trusted hosts whose
    docs default to `snapshot` rather than `index-only`. Needs to
