@@ -97,7 +97,10 @@ abstain behavior and optional saved answer artifacts under `.runs/`. See
 v0.8 is planned as answer quality and diagnostics: structured answer traces,
 deterministic ask replay fixtures, answer-mode quality gates over replayed
 answers, and doctor/profile readiness for answer sessions. See
-[`docs/v0.8-plan.md`](./docs/v0.8-plan.md).
+[`docs/v0.8-plan.md`](./docs/v0.8-plan.md). The answer-mode operator contract
+is documented in [`docs/answer-mode.md`](./docs/answer-mode.md), and the
+release-candidate smoke sequence lives in
+[`docs/v0.8-rc-smoke.md`](./docs/v0.8-rc-smoke.md).
 
 v0.4.0 adds measurable comparison coverage, approved-source reuse, optional
 embedding/vector artifacts, hybrid RRF retrieval, Streamable HTTP/SSE MCP
@@ -313,6 +316,8 @@ sequence remains in
   handling, and expected abstention behavior in live traces and replay reports.
 - `doctor` and `profile` answer readiness signals for fixture coverage, latest
   saved answer status, and latest quality gate verdict.
+- Answer-mode docs and an RC smoke runbook for sqlite-demo, Enterprise AI,
+  real-provider ask, and saved-answer replay.
 
 ## Changelog
 
