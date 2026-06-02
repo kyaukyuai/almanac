@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.7.0 shipped** · last updated 2026-06-01.
+Status: **v0.8.0 shipped** · last updated 2026-06-02.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -971,19 +971,34 @@ The v0.7 release gate passed on 2026-06-01 with `bun run typecheck`,
 grounded and abstention `ask` checks, saved answer artifact visibility through
 `runs --kind answer`, and export inclusion/exclusion coverage for `.runs/`.
 
-### v0.8 — Answer quality and diagnostics
+### v0.8.0 — Answer quality and diagnostics
 
-v0.8 is planned as the answer-mode hardening release. It should add structured
-planner/tool/citation/abstain traces to answer artifacts, deterministic ask
-replay from saved runs or fixture JSONL, ask-mode quality gates, and
-doctor/profile answer readiness signals.
+v0.8.0 shipped the answer-mode hardening release:
 
-See [`docs/v0.8-plan.md`](./v0.8-plan.md) for the planned sequence and the
-gbrain-derived lessons that are intentionally scoped to diagnostics, replay,
-and readiness rather than broad personal-memory runtime features. The operator
-contract is captured in [`docs/answer-mode.md`](./answer-mode.md), and the
-release-candidate smoke runbook is captured in
+- Saved answer artifacts include structured planner, tool, citation, synthesis,
+  abstention, and quality trace sections.
+- `almanac runs <id> <answer-id>` renders answer artifact detail output for
+  debugging why a session answered, abstained, or failed.
+- `almanac ask-replay <id>` replays saved answer artifacts or fixture JSONL
+  through deterministic compiled tool calls without requiring an LLM provider.
+- Ask-mode quality gates report citation rate, unsupported claim count, stale
+  citation handling, and expected/actual abstention behavior.
+- `doctor` and `profile` expose answer readiness, fixture coverage, latest
+  saved answer status, quality gate verdicts, and answer-specific readiness
+  gaps without hidden provider calls.
+
+See [`docs/v0.8-plan.md`](./v0.8-plan.md) for the implementation sequence and
+the gbrain-derived lessons that were intentionally scoped to diagnostics,
+replay, and readiness rather than broad personal-memory runtime features. The
+operator contract is captured in [`docs/answer-mode.md`](./answer-mode.md),
+and the release-candidate smoke runbook is captured in
 [`docs/v0.8-rc-smoke.md`](./v0.8-rc-smoke.md).
+
+The v0.8 release gate passed on 2026-06-02 with `bun run typecheck`,
+`bun test`, sqlite-demo deterministic ask/replay/readiness smoke, Enterprise AI
+fresh compile benchmark at 642 facts and 15/15 passed fixtures,
+real-provider Enterprise AI ask producing a correct no-citation abstention, and
+saved answer artifact replay passing deterministically.
 
 ### v0.9+ (long-tail)
 
@@ -999,8 +1014,9 @@ release-candidate smoke runbook is captured in
 
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
-feature set, the v0.5 local run workflow, and the v0.6 refresh contract
-documented in §8 above. Active questions carrying into future releases:
+feature set, the v0.5 local run workflow, the v0.6 refresh contract, the v0.7
+answer boundary, and the v0.8 answer diagnostics/readiness gates documented in
+§8 above. Active questions carrying into future releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local

@@ -11,6 +11,34 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.8.0] — 2026-06-02
+
+### Added
+
+- **Answer trace diagnostics.** Saved answer artifacts now include structured
+  planner, tool, citation, synthesis, abstention, and quality trace sections,
+  and `almanac runs <id> <answer-id>` renders the answer path for debugging.
+- **Ask replay.** `almanac ask-replay <id>` can replay saved answer artifacts
+  or JSONL fixtures without an LLM provider by re-executing deterministic
+  compiled tools.
+- **Answer quality gates.** Ask-mode checks now report citation rate,
+  unsupported claim count, stale citation handling, and expected/actual
+  abstention behavior separately from Stage 11/12 benchmarks.
+- **Answer readiness.** `profile` and `doctor` expose ask-mode readiness,
+  fixture coverage, latest saved answer status, quality gate verdicts, and
+  answer-specific readiness gaps without making hidden provider calls.
+- **Answer-mode docs and RC smoke.** `docs/answer-mode.md` and
+  `docs/v0.8-rc-smoke.md` document answer traces, replay, quality gates,
+  readiness checks, sqlite-demo smoke, Enterprise AI smoke, and real-provider
+  ask validation.
+
+### Fixed
+
+- **Saved answer abstention replay.** Saved-run replay now evaluates the
+  recorded final answer or abstention status while still validating
+  deterministic tool re-execution, so a correct saved abstention can replay
+  cleanly even when observed tool calls returned citations.
+
 ## [0.7.0] — 2026-06-01
 
 ### Added
