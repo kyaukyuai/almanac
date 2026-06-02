@@ -1038,7 +1038,8 @@ doctor/profile reporting answer mode as ready.
   in `sources.json` and `.compile/stage11-output.json` rather than only being
   transient logs. Retrieval readiness is reported as `fts-only`, `hybrid`, or
   `vector-configured-but-skipped` so missing optional embeddings do not look
-  like product failure.
+  like product failure. The v0.10 release-candidate runbook is
+  [`docs/v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
 - Almanac marketplace
