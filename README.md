@@ -171,7 +171,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.8.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.9.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -187,16 +187,14 @@ Current shipped lines include:
   synthesis, and saved answer artifacts
 - `v0.8`: answer trace diagnostics, deterministic ask replay, answer quality
   gates, and doctor/profile answer readiness signals
+- `v0.9`: ask fixture authoring, suite-level ask gates, refresh-integrated ask
+  validation, and hardened answer readiness reporting
 
-`v0.8.0` hardens answer mode as an operator workflow: saved answer artifacts
-show planner/tool/citation/abstention traces, `ask-replay` can regression-test
-saved runs or fixture JSONL without provider calls, quality gates separate
-answer behavior from compile-time benchmarks, and readiness signals explain
-whether an almanac is prepared for ask-mode use.
-
-`v0.9` is planned to turn answer replay from ad hoc release smoke into a
-maintained ask-mode suite: fixture authoring, suite-level gates, refresh +
-answer validation, and more actionable doctor/profile readiness.
+`v0.9.0` turns answer replay from ad hoc release smoke into a maintained
+ask-mode suite: saved answers can be promoted into fixture JSONL, `ask-suite`
+runs deterministic replay gates without provider calls, refresh runs can persist
+post-refresh ask validation, and readiness signals explain exactly why answer
+mode is ready or still needs validation.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -208,7 +206,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.8.0 RC | 642 | 3 | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.9.0 RC | 289 | 2 | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -216,9 +214,10 @@ The stable signal across the validation runs is that negative fixtures pass:
 out-of-domain or unsupported questions abstain instead of fabricating
 citations.
 
-The v0.8.0 Enterprise AI RC smoke also passed a real-provider ask check with a
-correct no-citation abstention and replayed the saved answer artifact
-deterministically through `ask-replay`.
+The v0.9.0 Enterprise AI RC smoke also passed a real-provider ask check with a
+cited answer, replayed the saved answer artifact deterministically, promoted it
+to `tests/ask.jsonl`, passed `ask-suite`, and persisted refresh-integrated ask
+validation.
 
 ## Development
 

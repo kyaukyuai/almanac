@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.8.0 shipped** · last updated 2026-06-02.
+Status: **v0.9.0 shipped** · last updated 2026-06-02.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1000,19 +1000,31 @@ fresh compile benchmark at 642 facts and 15/15 passed fixtures,
 real-provider Enterprise AI ask producing a correct no-citation abstention, and
 saved answer artifact replay passing deterministically.
 
-### v0.9 — Ask suite operations
+### v0.9.0 — Ask suite operations
 
-v0.9 is planned to convert v0.8 answer diagnostics into a maintained
-answer-mode regression workflow:
+v0.9.0 shipped the ask-suite operations release:
 
-- ask replay fixture authoring and saved-answer promotion,
-- suite-level ask gates with CI-friendly exit codes,
-- refresh followed by deterministic answer validation,
-- doctor/profile readiness that points to exact fixture and suite next steps.
+- `almanac ask-fixtures init` creates reviewable answer replay fixture JSONL.
+- `almanac ask-fixtures add-from-run` promotes saved answer artifacts into
+  deterministic fixture rows.
+- `almanac ask-suite <id>` runs suite-level ask gates with CI-friendly exit
+  codes, citation quality summaries, stale citation counts, unsupported claim
+  counts, and abstention mismatch reporting.
+- `almanac refresh run --ask-suite` persists post-refresh answer validation
+  evidence alongside benchmark status in refresh artifacts.
+- `profile` and `doctor` report ask fixture paths, suite status, latest answer
+  quality, and answer readiness next actions without hidden provider calls.
 
 See [`docs/v0.9-plan.md`](./v0.9-plan.md) for scope, non-goals, PR sequence,
-and release smoke targets. The concrete release-candidate runbook is
-[`docs/v0.9-rc-smoke.md`](./v0.9-rc-smoke.md).
+and the shipped implementation sequence. The concrete release-candidate runbook
+is [`docs/v0.9-rc-smoke.md`](./v0.9-rc-smoke.md).
+
+The v0.9 release gate passed on 2026-06-02 with `bun run typecheck`,
+`bun test`, sqlite-demo deterministic ask-suite and refresh validation,
+Enterprise AI fresh compile benchmark at 289 facts and 15/15 passed fixtures,
+real-provider Enterprise AI ask producing a cited answer, saved-answer replay,
+fixture promotion, ask-suite pass, refresh-integrated ask validation, and
+doctor/profile reporting answer mode as ready.
 
 ### v0.10+ (long-tail)
 
@@ -1029,8 +1041,9 @@ and release smoke targets. The concrete release-candidate runbook is
 The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, the v0.6 refresh contract, the v0.7
-answer boundary, and the v0.8 answer diagnostics/readiness gates documented in
-§8 above. Active questions carrying into future releases:
+answer boundary, the v0.8 answer diagnostics/readiness gates, and the v0.9 ask
+suite operations documented in §8 above. Active questions carrying into future
+releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
    `text-embedding-3-small` vs local
