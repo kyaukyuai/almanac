@@ -3504,16 +3504,45 @@ interface DoctorCheck {
   message: string;
 }
 
+type DoctorReadinessStatus =
+  | "ready"
+  | "setup"
+  | "needs-validation"
+  | "optional"
+  | "blocked";
+
+interface DoctorReadinessItem {
+  status: DoctorReadinessStatus;
+  name: string;
+  message: string;
+  nextActions: string[];
+}
+
+function addDoctorReadiness(
+  readiness: DoctorReadinessItem[],
+  item: DoctorReadinessItem,
+): void {
+  readiness.push(item);
+}
+
+function formatDoctorReadinessStatus(status: DoctorReadinessStatus): string {
+  return status.padEnd(16);
+}
+
 async function cmdDoctor(
   id: string | undefined,
   opts: DoctorOptions,
 ): Promise<void> {
   const checks: DoctorCheck[] = [];
+  const readiness: DoctorReadinessItem[] = [];
   const add = (level: DoctorLevel, name: string, message: string) => {
     checks.push({ level, name, message });
   };
 
   const bunVersion = (process.versions as { bun?: string }).bun;
+  const rootSuffix = rootArg(opts.root);
+  const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
+  const hasMockProvider = process.env["ALMANAC_LLM"] === "mock";
   add(
     bunVersion ? "ok" : "fail",
     "runtime",
@@ -3538,6 +3567,38 @@ async function cmdDoctor(
       process.env[key] ? "set" : "unset",
     );
   }
+  addDoctorReadiness(readiness, {
+    status: bunVersion ? "ready" : "blocked",
+    name: "demo",
+    message: bunVersion
+      ? "offline demo can run without provider keys"
+      : "install Bun before running the offline demo",
+    nextActions: bunVersion
+      ? [`almanac demo${rootSuffix}`]
+      : ["install Bun 1.1.0 or newer"],
+  });
+  addDoctorReadiness(readiness, {
+    status: hasAnthropic ? "ready" : "setup",
+    name: "real-compile",
+    message: hasAnthropic
+      ? "ANTHROPIC_API_KEY is set for provider-backed compile stages"
+      : "set ANTHROPIC_API_KEY before running provider-backed compile stages; use demo first",
+    nextActions: hasAnthropic
+      ? [`almanac new <domain>${rootSuffix}`]
+      : ["export ANTHROPIC_API_KEY=...", `almanac demo${rootSuffix}`],
+  });
+  addDoctorReadiness(readiness, {
+    status: hasAnthropic || hasMockProvider ? "ready" : "optional",
+    name: "judge",
+    message:
+      hasAnthropic || hasMockProvider
+        ? "explicit --judge provider is available"
+        : "optional entailment judging needs ANTHROPIC_API_KEY or ALMANAC_LLM=mock",
+    nextActions:
+      hasAnthropic || hasMockProvider
+        ? ["almanac ask-suite <id> --judge"]
+        : ["set ANTHROPIC_API_KEY or ALMANAC_LLM=mock when running --judge"],
+  });
   const embeddingConfig = resolveEmbeddingProviderConfig(process.env);
   add(
     embeddingReadinessLevel(embeddingConfig),
@@ -3555,12 +3616,42 @@ async function cmdDoctor(
 
   if (id !== undefined) {
     const almanacDir = almanacDirPath(opts.root, id);
+    const almanacExists = existsSync(almanacDir);
     add(
-      existsSync(almanacDir) ? "ok" : "fail",
+      almanacExists ? "ok" : "fail",
       "almanac",
-      existsSync(almanacDir) ? `found: ${almanacDir}` : `not found: ${almanacDir}`,
+      almanacExists ? `found: ${almanacDir}` : `not found: ${almanacDir}`,
     );
-    if (existsSync(almanacDir)) {
+    if (!almanacExists) {
+      addDoctorReadiness(readiness, {
+        status: "setup",
+        name: "answer",
+        message: `create or restore ${id} before running answer mode`,
+        nextActions: [
+          `almanac demo${rootSuffix}`,
+          `almanac doctor ${id}${rootSuffix}`,
+        ],
+      });
+      addDoctorReadiness(readiness, {
+        status: "setup",
+        name: "refresh",
+        message: `create or restore ${id} before checking refresh readiness`,
+        nextActions: [
+          `almanac demo${rootSuffix}`,
+          `almanac doctor ${id}${rootSuffix}`,
+        ],
+      });
+      addDoctorReadiness(readiness, {
+        status: "setup",
+        name: "registration",
+        message: `create or restore ${id} before client registration`,
+        nextActions: [
+          `almanac demo${rootSuffix}`,
+          `almanac doctor ${id}${rootSuffix}`,
+        ],
+      });
+    }
+    if (almanacExists) {
       try {
         const manifest = await readManifest(almanacDir);
         add("ok", "manifest", `${manifest.almanacId} v${manifest.version}`);
@@ -3648,10 +3739,73 @@ async function cmdDoctor(
           "answer",
           formatAnswerReadinessDoctor(answerReadiness),
         );
+        addDoctorReadiness(readiness, {
+          status:
+            answerReadiness.status === "ready" ? "ready" : "needs-validation",
+          name: "answer",
+          message:
+            answerReadiness.status === "ready"
+              ? "answer fixtures and quality evidence are ready"
+              : formatAnswerReadinessDoctor(answerReadiness),
+          nextActions: answerReadinessNextActions(
+            id,
+            rootSuffix,
+            answerReadiness,
+          ),
+        });
+        addDoctorReadiness(readiness, {
+          status:
+            refreshRunVisibility.issue === null ? "ready" : "needs-validation",
+          name: "refresh",
+          message:
+            refreshRunVisibility.issue === null
+              ? "refresh due checks can run without provider calls"
+              : refreshRunVisibility.issue,
+          nextActions: [
+            `almanac refresh due ${id}${rootSuffix}`,
+            `almanac refresh run ${id} --save${rootSuffix}`,
+          ],
+        });
+        addDoctorReadiness(readiness, {
+          status: "ready",
+          name: "registration",
+          message: "compiled almanac can be registered with supported clients",
+          nextActions: [
+            `almanac register ${id} --client=claude-code --apply${rootSuffix}`,
+          ],
+        });
       } catch (e) {
         add("fail", "almanac-read", (e as Error).message);
       }
     }
+  } else {
+    addDoctorReadiness(readiness, {
+      status: "setup",
+      name: "answer",
+      message: "create or select an almanac before running answer mode",
+      nextActions: [
+        `almanac demo${rootSuffix}`,
+        `almanac doctor <id>${rootSuffix}`,
+      ],
+    });
+    addDoctorReadiness(readiness, {
+      status: "setup",
+      name: "refresh",
+      message: "create or select an almanac before checking refresh readiness",
+      nextActions: [
+        `almanac demo${rootSuffix}`,
+        `almanac refresh due <id>${rootSuffix}`,
+      ],
+    });
+    addDoctorReadiness(readiness, {
+      status: "setup",
+      name: "registration",
+      message: "create or select an almanac before client registration",
+      nextActions: [
+        `almanac demo${rootSuffix}`,
+        `almanac register <id> --client=claude-code${rootSuffix}`,
+      ],
+    });
   }
 
   const summary = {
@@ -3661,7 +3815,9 @@ async function cmdDoctor(
   };
 
   if (opts.json) {
-    process.stdout.write(JSON.stringify({ summary, checks }, null, 2) + "\n");
+    process.stdout.write(
+      JSON.stringify({ summary, checks, readiness }, null, 2) + "\n",
+    );
   } else {
     process.stdout.write(
       `doctor${id ? `: ${id}` : ""}\n` +
@@ -3672,6 +3828,17 @@ async function cmdDoctor(
         `  ${check.level.padEnd(4)} ${check.name.padEnd(24)} ${check.message}\n`,
       );
     }
+    process.stdout.write("\nreadiness:\n");
+    for (const item of readiness) {
+      process.stdout.write(
+        `  ${formatDoctorReadinessStatus(item.status)} ${item.name.padEnd(16)} ${
+          item.message
+        }\n`,
+      );
+      for (const action of item.nextActions.slice(0, 2)) {
+        process.stdout.write(`    - ${action}\n`);
+      }
+    }
   }
 
   if (
@@ -3680,6 +3847,31 @@ async function cmdDoctor(
   ) {
     process.exitCode = 1;
   }
+}
+
+function answerReadinessNextActions(
+  id: string,
+  rootSuffix: string,
+  answerReadiness: AnswerReadiness,
+): string[] {
+  if (answerReadiness.fixtures.count === 0) {
+    return [
+      `almanac ask ${id} "<question>" --save${rootSuffix}`,
+      `almanac ask-fixtures init ${id}${rootSuffix}`,
+    ];
+  }
+  if (answerReadiness.latestSuite.status !== "passed") {
+    return [`almanac ask-suite ${id}${rootSuffix}`];
+  }
+  if (answerReadiness.latestAnswer === null) {
+    return [`almanac ask ${id} "<question>" --save${rootSuffix}`];
+  }
+  if (answerReadiness.qualityGate.status !== "pass") {
+    return [
+      `almanac runs ${id} ${answerReadiness.latestAnswer.answerId}${rootSuffix}`,
+    ];
+  }
+  return [`almanac ask ${id} "<question>"${rootSuffix}`];
 }
 
 interface UpdateOptions {

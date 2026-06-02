@@ -60,6 +60,10 @@ bun src/cli.ts --version
 bun src/cli.ts doctor
 ```
 
+`doctor` does not call an LLM provider. It reports local setup status and a
+readiness section for demo, provider-backed compile, answer mode, refresh,
+registration, and optional judge checks.
+
 Then link the local CLI with Bun:
 
 ```bash

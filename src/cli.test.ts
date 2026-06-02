@@ -346,6 +346,55 @@ describe("almanac CLI legacy artifact counts", () => {
 });
 
 describe("almanac CLI product onboarding", () => {
+  test("doctor explains first-run task readiness without credentials", () => {
+    const doctor = runCli(["doctor", "--json", "--root", root], {
+      ALMANAC_LLM: undefined,
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(doctor.status).toBe(0);
+    expect(doctor.stderr).toBe("");
+    const parsed = JSON.parse(doctor.stdout) as {
+      summary: { fail: number };
+      readiness: Array<{
+        name: string;
+        status: string;
+        message: string;
+        nextActions: string[];
+      }>;
+    };
+    expect(parsed.summary.fail).toBe(0);
+    expect(parsed.readiness).toContainEqual(
+      expect.objectContaining({
+        name: "demo",
+        status: "ready",
+        nextActions: [`almanac demo --root ${root}`],
+      }),
+    );
+    expect(parsed.readiness).toContainEqual(
+      expect.objectContaining({
+        name: "real-compile",
+        status: "setup",
+      }),
+    );
+    expect(parsed.readiness).toContainEqual(
+      expect.objectContaining({
+        name: "answer",
+        status: "setup",
+        nextActions: [
+          `almanac demo --root ${root}`,
+          `almanac doctor <id> --root ${root}`,
+        ],
+      }),
+    );
+    expect(parsed.readiness).toContainEqual(
+      expect.objectContaining({
+        name: "registration",
+        status: "setup",
+      }),
+    );
+  });
+
   test("demo creates an inspectable almanac with sources, fixtures, and benchmark report", async () => {
     const demo = runCli(["demo", "--root", root]);
 
@@ -605,6 +654,38 @@ describe("almanac CLI product onboarding", () => {
     expect(doctor.stdout).toContain("fts-only");
     expect(doctor.stdout).toContain("warn answer");
     expect(doctor.stdout).toContain("no ask replay fixtures");
+    expect(doctor.stdout).toContain("readiness:");
+    expect(doctor.stdout).toContain("ready            demo");
+    expect(doctor.stdout).toContain("needs-validation answer");
+    expect(doctor.stdout).toContain("ready            registration");
+
+    const doctorJson = runCli(["doctor", "sqlite-demo", "--root", root, "--json"]);
+    expect(doctorJson.status).toBe(0);
+    expect(doctorJson.stderr).toBe("");
+    expect(
+      (JSON.parse(doctorJson.stdout) as {
+        readiness: Array<{ name: string; status: string; nextActions: string[] }>;
+      }).readiness,
+    ).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ name: "demo", status: "ready" }),
+        expect.objectContaining({
+          name: "answer",
+          status: "needs-validation",
+        }),
+        expect.objectContaining({
+          name: "refresh",
+          status: "ready",
+        }),
+        expect.objectContaining({
+          name: "registration",
+          status: "ready",
+          nextActions: [
+            `almanac register sqlite-demo --client=claude-code --apply --root ${root}`,
+          ],
+        }),
+      ]),
+    );
 
     const exported = runCli([
       "export",

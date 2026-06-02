@@ -466,4 +466,10 @@ root existence, stage health, knowledge index health, actual vs manifest counts,
 source file status, fixture status, the latest benchmark result, and the latest
 saved refresh run when one exists.
 
+It also prints a task-oriented `readiness` section. Use it before a first run to
+see what can be done immediately (`demo`), what needs setup
+(`real-compile`, `answer`, `refresh`, `registration`), and which optional gates
+are available (`judge`). These checks are local artifact and environment checks;
+`doctor` does not call an LLM provider.
+
 Use `--strict` in automation when warnings should block promotion.
