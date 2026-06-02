@@ -980,7 +980,10 @@ doctor/profile answer readiness signals.
 
 See [`docs/v0.8-plan.md`](./v0.8-plan.md) for the planned sequence and the
 gbrain-derived lessons that are intentionally scoped to diagnostics, replay,
-and readiness rather than broad personal-memory runtime features.
+and readiness rather than broad personal-memory runtime features. The operator
+contract is captured in [`docs/answer-mode.md`](./answer-mode.md), and the
+release-candidate smoke runbook is captured in
+[`docs/v0.8-rc-smoke.md`](./v0.8-rc-smoke.md).
 
 ### v0.9+ (long-tail)
 

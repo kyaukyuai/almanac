@@ -208,7 +208,7 @@ almanac export sqlite-demo --include-runs --root "$tmp"
 
 ## Answer mode
 
-`almanac ask` is the v0.7 local answer gate. It is intentionally different
+`almanac ask` is the local answer gate. It is intentionally different
 from `almanac run --tool`:
 
 - `run --tool` is deterministic and no-key friendly. It invokes exactly one
@@ -241,6 +241,11 @@ almanac ask sqlite-demo "Are SQLite transactions atomic?" \
   --root "$tmp"
 
 almanac runs sqlite-demo --kind answer --json --root "$tmp"
+answer_id="$(
+  almanac runs sqlite-demo --kind answer --latest --json --root "$tmp" \
+    | jq -r '.runs[0].runId'
+)"
+almanac runs sqlite-demo "$answer_id" --root "$tmp"
 ```
 
 Replay saved answers or hand-authored fixture rows without provider keys:
@@ -279,7 +284,14 @@ abstentions and model/tool failures exit `1`, and usage or tool-input errors
 exit `2`. Scripts should inspect the JSON `status` when they need to
 distinguish `abstained`, `tool-error`, `budget-exhausted`, and `model-error`.
 
-Minimal v0.7 release smoke:
+For the full answer-mode contract, including trace contents, replay fixture
+fields, quality gate behavior, and readiness states, see
+[`answer-mode.md`](./answer-mode.md).
+
+For the v0.8 release-candidate smoke sequence, see
+[`v0.8-rc-smoke.md`](./v0.8-rc-smoke.md).
+
+Minimal answer-mode smoke:
 
 ```bash
 tmp=$(mktemp -d)
