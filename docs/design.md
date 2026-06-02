@@ -1000,7 +1000,20 @@ fresh compile benchmark at 642 facts and 15/15 passed fixtures,
 real-provider Enterprise AI ask producing a correct no-citation abstention, and
 saved answer artifact replay passing deterministically.
 
-### v0.9+ (long-tail)
+### v0.9 — Ask suite operations
+
+v0.9 is planned to convert v0.8 answer diagnostics into a maintained
+answer-mode regression workflow:
+
+- ask replay fixture authoring and saved-answer promotion,
+- suite-level ask gates with CI-friendly exit codes,
+- refresh followed by deterministic answer validation,
+- doctor/profile readiness that points to exact fixture and suite next steps.
+
+See [`docs/v0.9-plan.md`](./v0.9-plan.md) for scope, non-goals, PR sequence,
+and release smoke targets.
+
+### v0.10+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
