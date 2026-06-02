@@ -171,7 +171,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.9.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.10.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -189,12 +189,13 @@ Current shipped lines include:
   gates, and doctor/profile answer readiness signals
 - `v0.9`: ask fixture authoring, suite-level ask gates, refresh-integrated ask
   validation, and hardened answer readiness reporting
+- `v0.10`: optional answer entailment judging, compile stability diagnostics,
+  retrieval readiness reporting, and v0.10 RC smoke coverage
 
-`v0.9.0` turns answer replay from ad hoc release smoke into a maintained
-ask-mode suite: saved answers can be promoted into fixture JSONL, `ask-suite`
-runs deterministic replay gates without provider calls, refresh runs can persist
-post-refresh ask validation, and readiness signals explain exactly why answer
-mode is ready or still needs validation.
+`v0.10.0` hardens answer trust and compile repeatability: deterministic replay
+and default `ask-suite` remain provider-free, `--judge` adds explicit
+LLM-backed entailment review, Stage 2/11 expose source and fixture stability,
+and `profile`/`doctor` make FTS-only versus semantic retrieval readiness clear.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -206,7 +207,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.9.0 RC | 289 | 2 | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.10.0 RC | 735 | 2 | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -214,10 +215,11 @@ The stable signal across the validation runs is that negative fixtures pass:
 out-of-domain or unsupported questions abstain instead of fabricating
 citations.
 
-The v0.9.0 Enterprise AI RC smoke also passed a real-provider ask check with a
+The v0.10.0 Enterprise AI RC smoke also passed a real-provider ask check with a
 cited answer, replayed the saved answer artifact deterministically, promoted it
-to `tests/ask.jsonl`, passed `ask-suite`, and persisted refresh-integrated ask
-validation.
+to `tests/ask.jsonl`, passed `ask-suite`, persisted refresh-integrated ask
+validation, and recorded an optional judge failure with concrete
+unsupported/uncertain claims for review.
 
 ## Development
 

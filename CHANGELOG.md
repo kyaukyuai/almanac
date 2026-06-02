@@ -11,6 +11,42 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.10.0] — 2026-06-02
+
+### Added
+
+- **Answer entailment judge.** `ask-replay --judge` and `ask-suite --judge`
+  can run an explicit LLM-backed entailment check over answer text and cited
+  evidence, reporting supported, unsupported, mixed, or uncertain verdicts
+  with claim-level reasons.
+- **Compile stability diagnostics.** Source discovery reruns now record
+  accepted-source stability metadata, and Stage 11 persists coverage-floor and
+  preflight-attempt diagnostics so operators can distinguish source drift from
+  benchmark fixture variance.
+- **Retrieval readiness.** `profile` and `doctor` now report the active
+  retrieval mode as `fts-only`, `hybrid`, or `vector-configured-but-skipped`,
+  making missing optional embeddings an explicit ready state instead of an
+  ambiguous warning.
+- **v0.10 RC smoke runbook.** `docs/v0.10-rc-smoke.md` captures static gates,
+  sqlite-demo deterministic replay, mock judge validation, Enterprise AI fresh
+  compile, real-provider ask/replay, ask-suite promotion, optional judge
+  review, refresh-integrated ask validation, and retrieval readiness checks.
+
+### Changed
+
+- **Answer validation posture.** Deterministic replay and default `ask-suite`
+  remain provider-free; semantic judging is opt-in and separated from the
+  deterministic quality gate.
+- **Embedding defaults.** FTS-only retrieval is documented and reported as the
+  default local/deterministic mode, while semantic retrieval warnings are
+  reserved for cases where vectors were explicitly configured but skipped.
+
+### Fixed
+
+- **Stage 11 repair guidance.** Preflight retry messages now include skipped
+  live/network fixtures, deterministic replacement guidance, exact enum-value
+  reminders, and negative-fixture advice for stable no-source coverage.
+
 ## [0.9.0] — 2026-06-02
 
 ### Added
