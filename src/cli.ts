@@ -225,6 +225,7 @@ import {
   formatAskReplayHuman,
   runAskReplayFromFixtureFile,
   runAskReplayFromSavedRuns,
+  type AskReplayEntailmentOptions,
 } from "./manage/ask-replay.ts";
 import {
   AskSuiteSetupError,
@@ -2906,6 +2907,8 @@ interface AskReplayOptions {
   fromRuns?: boolean;
   json?: boolean;
   label?: string;
+  judge?: boolean;
+  judgeModel?: string;
 }
 
 async function cmdAskReplay(
@@ -2921,17 +2924,23 @@ async function cmdAskReplay(
 
   const almanacDir = almanacDirPath(opts.root, id);
   try {
+    const entailment =
+      opts.judge === true
+        ? resolveEntailmentOptions(opts.judgeModel, askReplayUsageError)
+        : undefined;
     const report =
       opts.fixture !== undefined
         ? await runAskReplayFromFixtureFile({
             almanacDir,
             fixturePath: resolve(opts.fixture),
+            ...(entailment === undefined ? {} : { entailment }),
           })
         : await runAskReplayFromSavedRuns({
             almanacDir,
             ...(opts.label === undefined
               ? {}
               : { label: normalizeRunArtifactLabel(opts.label) }),
+            ...(entailment === undefined ? {} : { entailment }),
           });
     process.stdout.write(
       opts.json === true
@@ -2959,6 +2968,8 @@ interface AskSuiteOptions {
   root: string;
   fixture?: string[];
   json?: boolean;
+  judge?: boolean;
+  judgeModel?: string;
 }
 
 async function cmdAskSuite(id: string, opts: AskSuiteOptions): Promise<void> {
@@ -2971,6 +2982,14 @@ async function cmdAskSuite(id: string, opts: AskSuiteOptions): Promise<void> {
     const report = await runAskSuite({
       almanacDir,
       ...(fixturePaths === undefined ? {} : { fixturePaths }),
+      ...(opts.judge === true
+        ? {
+            entailment: resolveEntailmentOptions(
+              opts.judgeModel,
+              askSuiteUsageError,
+            ),
+          }
+        : {}),
     });
     process.stdout.write(
       opts.json === true
@@ -2996,6 +3015,22 @@ function collectAskSuiteFixture(value: string, previous: string[]): string[] {
 function askSuiteUsageError(message: string): never {
   process.stderr.write(`error: ask-suite: ${message}\n`);
   process.exit(2);
+}
+
+function resolveEntailmentOptions(
+  model: string | undefined,
+  usageError: (message: string) => never,
+): AskReplayEntailmentOptions {
+  const provider = resolveProvider();
+  if (provider === null) {
+    usageError(
+      "entailment judge requires an LLM provider. Export ANTHROPIC_API_KEY or set ALMANAC_LLM=mock.",
+    );
+  }
+  return {
+    provider,
+    ...(model === undefined ? {} : { model }),
+  };
 }
 
 interface AskFixturesInitOptions {
@@ -4514,17 +4549,19 @@ program
 
 program
   .command("ask-replay <id>")
-  .description("replay saved or fixture answer runs without an LLM provider")
+  .description("replay saved or fixture answer runs; --judge opts into an LLM")
   .option("--fixture <path>", "Read replay cases from JSONL fixture file")
   .option("--from-runs", "Replay saved answer artifacts under <almanac>/.runs/")
   .option("--json", "Emit JSON instead of a human-readable summary")
   .option("--label <name>", "With --from-runs, replay only this answer label")
+  .option("--judge", "Run an explicit LLM entailment judge over replayed answers")
+  .option("--judge-model <model>", "Model to use for --judge")
   .addOption(rootOption)
   .action(cmdAskReplay);
 
 program
   .command("ask-suite <id>")
-  .description("run deterministic ask fixture suite gate without an LLM provider")
+  .description("run deterministic ask fixture suite gate; --judge opts into an LLM")
   .option(
     "--fixture <path>",
     "Read fixture JSONL path (repeatable; default: known paths)",
@@ -4532,6 +4569,8 @@ program
     [] as string[],
   )
   .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--judge", "Run an explicit LLM entailment judge over fixture answers")
+  .option("--judge-model <model>", "Model to use for --judge")
   .addOption(rootOption)
   .action(cmdAskSuite);
 

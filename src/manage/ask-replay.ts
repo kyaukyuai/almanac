@@ -1,9 +1,9 @@
 /**
  * Deterministic replay for saved or fixture-authored answer sessions.
  *
- * This intentionally does not call an LLM provider. It re-executes recorded
- * tool calls and compares the observed evidence shape to expected answer-mode
- * outcomes.
+ * By default this intentionally does not call an LLM provider. It re-executes
+ * recorded tool calls and compares the observed evidence shape to expected
+ * answer-mode outcomes. Callers may opt into an explicit entailment judge.
  */
 
 import { existsSync } from "node:fs";
@@ -20,9 +20,15 @@ import {
   type AnswerArtifact,
   type AnswerArtifactStatus,
   type AnswerToolCallStatus,
+  type Citation,
   type ToolError,
   type ToolResultFreshness,
 } from "../core/types.ts";
+import type { LlmProvider } from "../llm/provider.ts";
+import {
+  evaluateAnswerEntailment,
+  type AnswerEntailmentResult,
+} from "./answer-entailment.ts";
 import {
   listRunToolArtifacts,
   readRunToolArtifact,
@@ -48,6 +54,7 @@ export const AskReplayFixtureSchema = z
       .max(120)
       .regex(/^[A-Za-z0-9_.:-]+$/, "must be a stable fixture id"),
     question: z.string().trim().min(1).max(4000),
+    answer: z.string().trim().min(1).max(12000).optional(),
     toolCalls: z.array(AskReplayFixtureToolCallSchema).min(1).max(20),
     expectedStatus: AnswerArtifactStatusSchema,
     minCitations: z.number().int().nonnegative().optional(),
@@ -78,6 +85,7 @@ export interface RunAskReplayFromFixturesOptions {
   /** Absolute path to the compiled almanac directory. */
   almanacDir: string;
   fixtures: AskReplayFixture[];
+  entailment?: AskReplayEntailmentOptions;
 }
 
 export interface RunAskReplayFromFixtureFileOptions {
@@ -85,6 +93,7 @@ export interface RunAskReplayFromFixtureFileOptions {
   almanacDir: string;
   /** Absolute or cwd-relative JSONL fixture file path. */
   fixturePath: string;
+  entailment?: AskReplayEntailmentOptions;
 }
 
 export interface RunAskReplayFromSavedRunsOptions {
@@ -92,6 +101,12 @@ export interface RunAskReplayFromSavedRunsOptions {
   almanacDir: string;
   /** Optional saved answer label filter. */
   label?: string;
+  entailment?: AskReplayEntailmentOptions;
+}
+
+export interface AskReplayEntailmentOptions {
+  provider: LlmProvider;
+  model?: string;
 }
 
 export interface AskReplayToolObservation {
@@ -101,6 +116,7 @@ export interface AskReplayToolObservation {
   status: AnswerToolCallStatus;
   durationMs: number;
   citationsCount: number;
+  citations?: Citation[];
   freshness?: ToolResultFreshness;
   error?: ToolError;
 }
@@ -138,6 +154,7 @@ export interface AskReplayResultEntry {
     toolCalls: AskReplayToolObservation[];
   };
   quality: AnswerQualityGateResult;
+  entailment?: AnswerEntailmentResult;
   status: "pass" | "fail" | "error";
   reasons: string[];
 }
@@ -158,6 +175,15 @@ export interface AskReplayReport {
     citationRate: number;
     unsupportedClaimCount: number;
     staleCitationCount: number;
+  };
+  entailment?: {
+    status: "pass" | "fail" | "warning";
+    passed: number;
+    failed: number;
+    warned: number;
+    claimsChecked: number;
+    unsupportedClaimCount: number;
+    uncertainClaimCount: number;
   };
   results: AskReplayResultEntry[];
 }
@@ -193,6 +219,8 @@ interface ReplayCase {
   maxUnsupportedClaims?: number;
   expectedAbstentionReason?: string;
   finalStatus?: AnswerArtifactStatus;
+  finalAnswer?: string;
+  finalCitations?: Citation[];
   finalAbstentionReason?: string;
   finalCitationsCount?: number;
   finalStaleCitationCount?: number;
@@ -248,6 +276,7 @@ export async function runAskReplayFromFixtureFile(
   return runAskReplayFromFixtures({
     almanacDir: options.almanacDir,
     fixtures: parseAskReplayFixtureJsonl(raw),
+    ...(options.entailment === undefined ? {} : { entailment: options.entailment }),
   });
 }
 
@@ -259,6 +288,7 @@ export async function runAskReplayFromFixtures(
     almanacDir: options.almanacDir,
     mode: "fixture",
     cases,
+    ...(options.entailment === undefined ? {} : { entailment: options.entailment }),
   });
 }
 
@@ -283,6 +313,7 @@ export async function runAskReplayFromSavedRuns(
     almanacDir: options.almanacDir,
     mode: "saved-runs",
     cases,
+    ...(options.entailment === undefined ? {} : { entailment: options.entailment }),
   });
 }
 
@@ -297,13 +328,24 @@ export function formatAskReplayHuman(report: AskReplayReport): string {
     `quality: ${report.quality.status} citationRate=${formatRate(report.quality.citationRate)} ` +
       `unsupported=${report.quality.unsupportedClaimCount} stale=${report.quality.staleCitationCount}`,
   ];
+  if (report.entailment !== undefined) {
+    lines.push(
+      `entailment: ${report.entailment.status} passed=${report.entailment.passed} ` +
+        `failed=${report.entailment.failed} warned=${report.entailment.warned} ` +
+        `unsupported=${report.entailment.unsupportedClaimCount} uncertain=${report.entailment.uncertainClaimCount}`,
+    );
+  }
   for (const result of report.results) {
     const reasons =
       result.reasons.length === 0 ? "" : ` reasons=${result.reasons.join("; ")}`;
+    const entailment =
+      result.entailment === undefined
+        ? ""
+        : ` entailment=${result.entailment.status}/${result.entailment.verdict}`;
     lines.push(
       `  - ${result.fixtureId}  ${result.status}  expected=${result.expected.status} ` +
         `observed=${result.observed.status} citations=${result.observed.citationsCount} ` +
-        `stale=${result.observed.staleCitationCount} quality=${result.quality.status}${reasons}`,
+        `stale=${result.observed.staleCitationCount} quality=${result.quality.status}${entailment}${reasons}`,
     );
   }
   return lines.join("\n") + "\n";
@@ -317,6 +359,7 @@ async function runAskReplayCases(input: {
   almanacDir: string;
   mode: AskReplayReport["mode"];
   cases: ReplayCase[];
+  entailment?: AskReplayEntailmentOptions;
 }): Promise<AskReplayReport> {
   const manifest = await readAskReplayManifest(input.almanacDir);
   if (input.cases.length === 0) {
@@ -327,7 +370,9 @@ async function runAskReplayCases(input: {
   }
   const results: AskReplayResultEntry[] = [];
   for (const replayCase of input.cases) {
-    results.push(await runAskReplayCase(input.almanacDir, replayCase));
+    results.push(
+      await runAskReplayCase(input.almanacDir, replayCase, input.entailment),
+    );
   }
   const passed = results.filter((result) => result.status === "pass").length;
   const failed = results.filter((result) => result.status === "fail").length;
@@ -343,6 +388,7 @@ async function runAskReplayCases(input: {
     failed,
     errored,
     quality,
+    ...(input.entailment === undefined ? {} : { entailment: summarizeEntailment(results) }),
     results,
   };
 }
@@ -350,6 +396,7 @@ async function runAskReplayCases(input: {
 async function runAskReplayCase(
   almanacDir: string,
   replayCase: ReplayCase,
+  entailment?: AskReplayEntailmentOptions,
 ): Promise<AskReplayResultEntry> {
   const observations: AskReplayToolObservation[] = [];
   const reasons: string[] = [];
@@ -393,12 +440,14 @@ async function runAskReplayCase(
     }
   }
 
-  return buildReplayResult({
+  const result = buildReplayResult({
     replayCase,
     observations,
     status: reasons.length === 0 ? "pass" : "fail",
     reasons,
   });
+  if (entailment === undefined) return result;
+  return withEntailment(result, replayCase, observations, entailment);
 }
 
 async function executeReplayToolCall(input: {
@@ -418,6 +467,7 @@ async function executeReplayToolCall(input: {
     status: answerToolStatusFromRunToolStatus(execution.status),
     durationMs: execution.durationMs,
     citationsCount: execution.citationsCount,
+    ...(execution.result.ok ? { citations: execution.result.citations } : {}),
     ...(execution.result.ok ? { freshness: execution.result.freshness } : {}),
     ...(execution.result.ok ? {} : { error: execution.result.error }),
   };
@@ -518,6 +568,39 @@ function buildReplayResult(input: {
   };
 }
 
+async function withEntailment(
+  result: AskReplayResultEntry,
+  replayCase: ReplayCase,
+  observations: AskReplayToolObservation[],
+  entailment: AskReplayEntailmentOptions,
+): Promise<AskReplayResultEntry> {
+  const entailmentResult = await evaluateAnswerEntailment({
+    question: replayCase.question,
+    answer: replayCase.finalAnswer,
+    citations: replayCase.finalCitations ?? citationsFromObservations(observations),
+    provider: entailment.provider,
+    ...(entailment.model === undefined ? {} : { model: entailment.model }),
+  });
+  const reasons =
+    entailmentResult.status === "fail"
+      ? [
+          ...result.reasons,
+          ...entailmentResult.reasons.map((reason) => `entailment: ${reason}`),
+        ]
+      : result.reasons;
+  return {
+    ...result,
+    entailment: entailmentResult,
+    reasons,
+    status:
+      result.status === "error"
+        ? "error"
+        : reasons.length === 0
+          ? "pass"
+          : "fail",
+  };
+}
+
 function replayCaseFromFixture(
   fixture: AskReplayFixture,
   index: number,
@@ -534,6 +617,7 @@ function replayCaseFromFixture(
         : { expectedStatus: call.expectedStatus }),
     })),
     expectedStatus: fixture.expectedStatus,
+    ...(fixture.answer === undefined ? {} : { finalAnswer: fixture.answer }),
     ...(fixture.minCitations === undefined
       ? {}
       : { minCitations: fixture.minCitations }),
@@ -610,11 +694,61 @@ function replayCaseFromAnswerArtifact(artifact: AnswerArtifact): ReplayCase {
       ? {}
       : { expectedAbstentionReason: artifact.abstentionReason }),
     finalStatus: artifact.status,
+    ...(artifact.answer === undefined ? {} : { finalAnswer: artifact.answer }),
+    finalCitations: artifact.citations,
     ...(artifact.abstentionReason === undefined
       ? {}
       : { finalAbstentionReason: artifact.abstentionReason }),
     finalCitationsCount: artifact.citations.length,
     finalStaleCitationCount: artifact.trace?.citations.staleCount ?? 0,
+  };
+}
+
+function citationsFromObservations(
+  observations: AskReplayToolObservation[],
+): Citation[] {
+  const seen = new Set<string>();
+  const citations: Citation[] = [];
+  for (const observation of observations) {
+    for (const citation of observation.citations ?? []) {
+      const key = `${citation.sourceId}\n${citation.url}\n${citation.excerpt ?? ""}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      citations.push(citation);
+    }
+  }
+  return citations;
+}
+
+function summarizeEntailment(
+  results: AskReplayResultEntry[],
+): NonNullable<AskReplayReport["entailment"]> {
+  const judged = results
+    .map((result) => result.entailment)
+    .filter((result): result is AnswerEntailmentResult => result !== undefined);
+  const failed = judged.filter((result) => result.status === "fail").length;
+  const warned = judged.filter((result) => result.status === "warning").length;
+  const passed = judged.filter((result) => result.status === "pass").length;
+  const claimsChecked = judged.reduce(
+    (sum, result) => sum + result.claimsChecked,
+    0,
+  );
+  const unsupportedClaimCount = judged.reduce(
+    (sum, result) => sum + result.unsupportedClaims.length,
+    0,
+  );
+  const uncertainClaimCount = judged.reduce(
+    (sum, result) => sum + result.uncertainClaims.length,
+    0,
+  );
+  return {
+    status: failed > 0 ? "fail" : warned > 0 ? "warning" : "pass",
+    passed,
+    failed,
+    warned,
+    claimsChecked,
+    unsupportedClaimCount,
+    uncertainClaimCount,
   };
 }
 
