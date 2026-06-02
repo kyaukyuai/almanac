@@ -334,6 +334,12 @@ function formatRefreshRunVisibility(
   if (latest.benchmarkStatus !== undefined) {
     parts.push(`benchmark=${latest.benchmarkStatus}`);
   }
+  if (latest.askSuiteStatus !== undefined) {
+    parts.push(
+      `askSuite=${latest.askSuiteStatus}` +
+        (latest.askSuiteTotal === undefined ? "" : `/${latest.askSuiteTotal}`),
+    );
+  }
   if (latest.label !== undefined) {
     parts.push(`label=${latest.label}`);
   }
@@ -3027,6 +3033,7 @@ async function cmdRefreshDue(
 interface RefreshRunCliOptions {
   root: string;
   fromStage?: string;
+  askSuite?: boolean;
   json?: boolean;
   label?: string;
   note?: string;
@@ -3052,6 +3059,7 @@ async function cmdRefreshRun(
     process.stdout.write(
       `▶ refresh run "${id}"\n` +
         `    fromStage     ${fromStage ?? "(auto)"}\n` +
+        `    askSuite      ${opts.askSuite === true ? "yes" : "no"}\n` +
         `    save          ${opts.save === true ? "yes" : "no"}\n`,
     );
     if (!providerAvailable) {
@@ -3075,6 +3083,7 @@ async function cmdRefreshRun(
           ? undefined
           : (event) => process.stdout.write(`  · ${JSON.stringify(event)}\n`),
       save: opts.save === true,
+      askSuite: opts.askSuite === true,
       ...metadata,
     });
     process.stdout.write(
@@ -4550,6 +4559,7 @@ refreshCommand
     ),
   )
   .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--ask-suite", "Run deterministic ask fixture suite after refresh")
   .option("--label <name>", "Human label for --save refresh artifacts")
   .option("--note <text>", "Human note for --save refresh artifacts")
   .option("--save", "Save a refresh artifact under <almanac>/.runs/")

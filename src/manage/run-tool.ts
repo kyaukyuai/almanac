@@ -151,6 +151,8 @@ export interface RunToolArtifactSummary {
   citationsCount?: number;
   fromStage?: StageId;
   benchmarkStatus?: "missing" | "passed" | "failed";
+  askSuiteStatus?: "missing" | "passed" | "failed";
+  askSuiteTotal?: number;
   question?: string;
   answer?: string;
   abstentionReason?: string;
@@ -513,8 +515,12 @@ export function formatRunToolArtifactListHuman(
     } else if (run.kind === "refresh") {
       const benchmark =
         run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
+      const askSuite =
+        run.askSuiteStatus === undefined
+          ? ""
+          : ` askSuite=${run.askSuiteStatus}${run.askSuiteTotal === undefined ? "" : `/${run.askSuiteTotal}`}`;
       lines.push(
-        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark} duration=${run.durationMs}ms${label}`,
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark}${askSuite} duration=${run.durationMs}ms${label}`,
       );
     } else {
       lines.push(
@@ -553,8 +559,12 @@ export function formatPruneRunToolArtifactsHuman(
       } else if (run.kind === "refresh") {
         const benchmark =
           run.benchmarkStatus === undefined ? "" : ` benchmark=${run.benchmarkStatus}`;
+        const askSuite =
+          run.askSuiteStatus === undefined
+            ? ""
+            : ` askSuite=${run.askSuiteStatus}${run.askSuiteTotal === undefined ? "" : `/${run.askSuiteTotal}`}`;
         lines.push(
-          `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark} duration=${run.durationMs}ms${label}`,
+          `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark}${askSuite} duration=${run.durationMs}ms${label}`,
         );
       } else {
         lines.push(
@@ -750,6 +760,19 @@ function formatRefreshArtifactHuman(artifact: RefreshArtifact): string {
   if (artifact.benchmark !== undefined) {
     lines.push(`benchmark: ${artifact.benchmark.status}`);
   }
+  if (artifact.askSuite !== undefined) {
+    lines.push(
+      `ask-suite: ${artifact.askSuite.status}` +
+        (artifact.askSuite.total === undefined
+          ? ""
+          : `, ${artifact.askSuite.passed ?? 0}/${artifact.askSuite.total} passed`),
+    );
+    if (artifact.askSuite.error !== undefined) {
+      lines.push(
+        `ask-suite-error: ${artifact.askSuite.error.code}: ${artifact.askSuite.error.message}`,
+      );
+    }
+  }
   if (artifact.error !== undefined) {
     lines.push(`error: ${artifact.error.code}: ${artifact.error.message}`);
   }
@@ -895,6 +918,14 @@ function summarizeRunToolArtifact(
       ...(artifact.benchmark === undefined
         ? {}
         : { benchmarkStatus: artifact.benchmark.status }),
+      ...(artifact.askSuite === undefined
+        ? {}
+        : {
+            askSuiteStatus: artifact.askSuite.status,
+            ...(artifact.askSuite.total === undefined
+              ? {}
+              : { askSuiteTotal: artifact.askSuite.total }),
+          }),
     };
   }
   if (artifact.kind === "answer") {

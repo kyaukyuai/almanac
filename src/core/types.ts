@@ -3588,6 +3588,35 @@ export const RefreshArtifactSchema = z
         citationRate: z.number().min(0).max(1).optional(),
       })
       .optional(),
+    askSuite: z
+      .object({
+        status: z.enum(["missing", "passed", "failed"]),
+        exitCode: RunToolExitCodeSchema,
+        total: z.number().int().nonnegative().optional(),
+        passed: z.number().int().nonnegative().optional(),
+        failed: z.number().int().nonnegative().optional(),
+        errored: z.number().int().nonnegative().optional(),
+        citationRate: z.number().min(0).max(1).optional(),
+        unsupportedClaimCount: z.number().int().nonnegative().optional(),
+        staleCitationCount: z.number().int().nonnegative().optional(),
+        abstentionMismatchCount: z.number().int().nonnegative().optional(),
+        fixtureFiles: z
+          .array(
+            z.object({
+              relPath: z.string().min(1).max(500),
+              count: z.number().int().nonnegative(),
+            }),
+          )
+          .max(20)
+          .optional(),
+        error: z
+          .object({
+            code: z.string().min(1).max(80),
+            message: z.string().min(1).max(2000),
+          })
+          .optional(),
+      })
+      .optional(),
     durationMs: z.number().int().nonnegative(),
     error: z
       .object({

@@ -132,6 +132,22 @@ almanac refresh run sqlite-demo \
   --root "$tmp"
 ```
 
+When ask fixtures exist, run the deterministic answer suite as part of the
+refresh command:
+
+```bash
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --label rc-smoke \
+  --root "$tmp"
+```
+
+`--ask-suite` invokes compiled tools only. A passing suite keeps the refresh
+exit code at `0`; a failing suite exits `1`; missing or unreadable ask fixtures
+exit `2`. Saved refresh artifacts include only a compact ask-suite summary.
+
 For recurring cron, GitHub Actions, or launchd usage, see
 [`refresh-scheduler.md`](./refresh-scheduler.md). That contract documents exit
 codes, provider key requirements, lock conflicts, saved refresh artifacts,

@@ -1710,6 +1710,64 @@ describe("almanac CLI product onboarding", () => {
       (JSON.parse(answerRunsAfterPrune.stdout) as { runs: unknown[] }).runs,
     ).toEqual([]);
 
+    const refreshWithAskSuite = runCli([
+      "refresh",
+      "run",
+      "sqlite-demo",
+      "--from-stage",
+      "12-benchmark-run",
+      "--ask-suite",
+      "--save",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshWithAskSuite.status).toBe(0);
+    const parsedRefreshWithAskSuite = JSON.parse(
+      refreshWithAskSuite.stdout,
+    ) as {
+      status: string;
+      exitCode: number;
+      askSuite?: { status: string; total: number; passed: number };
+      savedArtifact?: { relPath: string };
+    };
+    expect(parsedRefreshWithAskSuite).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        exitCode: 0,
+        askSuite: expect.objectContaining({
+          status: "passed",
+          total: 1,
+          passed: 1,
+        }),
+      }),
+    );
+    expect(parsedRefreshWithAskSuite.savedArtifact?.relPath).toContain(
+      ".runs/refresh-",
+    );
+
+    const latestRefreshWithAskSuite = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "refresh",
+      "--latest",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(latestRefreshWithAskSuite.status).toBe(0);
+    expect(
+      (JSON.parse(latestRefreshWithAskSuite.stdout) as {
+        runs: Array<{ askSuiteStatus?: string; askSuiteTotal?: number }>;
+      }).runs[0],
+    ).toEqual(
+      expect.objectContaining({
+        askSuiteStatus: "passed",
+        askSuiteTotal: 1,
+      }),
+    );
+
     const metadataWithoutSave = runCli([
       "ask",
       "sqlite-demo",
