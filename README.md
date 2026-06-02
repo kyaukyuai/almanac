@@ -246,6 +246,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   ask fixture authoring, ask suites, refresh ask validation, and provider ask
 - [v0.10 plan](./docs/v0.10-plan.md): optional entailment judging, compile
   stability controls, retrieval defaults, and release smoke targets
+- [v0.10 RC smoke](./docs/v0.10-rc-smoke.md): release-candidate validation for
+  entailment judging, compile stability diagnostics, retrieval readiness, and
+  ask-suite workflows
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
