@@ -5,7 +5,14 @@
  */
 
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -61,6 +68,29 @@ function runCli(
   };
 }
 
+function runCliExecutable(
+  args: string[],
+  envOverrides: Record<string, string | undefined> = {},
+) {
+  const cliPath = join(import.meta.dirname, "cli.ts");
+  const env = { ...process.env, ...envOverrides };
+  for (const [key, value] of Object.entries(envOverrides)) {
+    if (value === undefined) {
+      delete env[key];
+    }
+  }
+  const result = spawnSync(cliPath, args, {
+    cwd: join(import.meta.dirname, ".."),
+    encoding: "utf8",
+    env,
+  });
+  return {
+    status: result.status,
+    stdout: result.stdout,
+    stderr: result.stderr,
+  };
+}
+
 function mockAskProviderEnv(): Record<string, string | undefined> {
   return {
     ALMANAC_LLM: "mock",
@@ -88,6 +118,47 @@ function mockAskProviderEnv(): Record<string, string | undefined> {
     }),
   };
 }
+
+describe("almanac CLI install/bin sanity", () => {
+  test("package bin points at an executable Bun CLI entrypoint", async () => {
+    const repoRoot = join(import.meta.dirname, "..");
+    const packageJson = JSON.parse(
+      await readFile(join(repoRoot, "package.json"), "utf8"),
+    ) as {
+      bin?: Record<string, unknown>;
+      engines?: Record<string, unknown>;
+      version?: unknown;
+    };
+
+    expect(packageJson.version).toMatch(/^\d+\.\d+\.\d+/);
+    expect(packageJson.engines?.bun).toBe(">=1.1.0");
+    expect(packageJson.bin?.almanac).toBe("src/cli.ts");
+
+    const cliPath = join(repoRoot, "src/cli.ts");
+    const cliText = await readFile(cliPath, "utf8");
+    expect(cliText.split("\n")[0]).toBe("#!/usr/bin/env bun");
+
+    const cliMode = (await stat(cliPath)).mode;
+    expect(cliMode & 0o111).not.toBe(0);
+  });
+
+  test("version is stable through both source and executable entrypoints", async () => {
+    const repoRoot = join(import.meta.dirname, "..");
+    const packageJson = JSON.parse(
+      await readFile(join(repoRoot, "package.json"), "utf8"),
+    ) as { version: string };
+
+    const sourceResult = runCli(["--version"]);
+    expect(sourceResult.status).toBe(0);
+    expect(sourceResult.stderr).toBe("");
+    expect(sourceResult.stdout.trim()).toBe(packageJson.version);
+
+    const executableResult = runCliExecutable(["--version"]);
+    expect(executableResult.status).toBe(0);
+    expect(executableResult.stderr).toBe("");
+    expect(executableResult.stdout.trim()).toBe(packageJson.version);
+  });
+});
 
 async function writeLegacyCountFixture(
   opts: { completed?: boolean } = {},

@@ -27,6 +27,34 @@ tmp=$(mktemp -d)
 almanac demo --root "$tmp"
 ```
 
+## Install sanity
+
+Before compiling anything, verify the source-first CLI path from the repository
+root:
+
+```bash
+bun src/cli.ts --version
+bun src/cli.ts doctor
+```
+
+If you use `bun link`, verify the linked binary from outside the repository so
+the command is not accidentally depending on the current working directory:
+
+```bash
+bun link
+tmpdir="$(mktemp -d)"
+(cd "$tmpdir" && almanac --version && almanac doctor)
+```
+
+When `almanac --version` is stale, check which binary is being used and relink
+from the intended checkout:
+
+```bash
+which almanac
+readlink "$(which almanac)" 2>/dev/null || true
+bun link
+```
+
 ## Inspect
 
 ```bash

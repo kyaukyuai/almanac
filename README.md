@@ -45,23 +45,46 @@ almanac serve sqlite-demo --transport=http --port=7331
 ## Install
 
 `almanac` is currently source-first and is not published as a package. Clone
-the repository, install dependencies, and link the local CLI with Bun:
+the repository and install dependencies first:
 
 ```bash
 git clone https://github.com/kyaukyuai/almanac.git
 cd almanac
 bun install
+```
+
+Verify the source entrypoint before linking:
+
+```bash
+bun src/cli.ts --version
+bun src/cli.ts doctor
+```
+
+Then link the local CLI with Bun:
+
+```bash
 bun link
 ```
 
-After linking, `almanac` should resolve to the local checkout:
+After linking, `almanac` should resolve to this checkout and work from outside
+the repository:
 
 ```bash
-almanac doctor
+tmpdir="$(mktemp -d)"
+(cd "$tmpdir" && almanac --version && almanac doctor)
 ```
 
 For one-off use without linking, run the same commands with `bun src/cli.ts`
 from the repository root.
+
+If `almanac --version` is stale or points at the wrong checkout, inspect the
+resolved binary and rerun `bun link` from the repository you intend to use:
+
+```bash
+which almanac
+readlink "$(which almanac)" 2>/dev/null || true
+bun link
+```
 
 ## Quick Start
 
