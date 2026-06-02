@@ -37,6 +37,12 @@ import {
   type RefreshBenchmarkSummary,
   type RefreshDueStatus,
 } from "./refresh-status.ts";
+import {
+  AskSuiteSetupError,
+  exitCodeForAskSuite,
+  runAskSuite,
+  type AskSuiteReport,
+} from "./ask-suite.ts";
 
 export const REFRESH_LOCK_REL_PATH = ".compile/refresh.lock";
 
@@ -69,12 +75,35 @@ export interface RefreshRunOptions {
   label?: string;
   /** Optional human note for the saved artifact. */
   note?: string;
+  /** Run deterministic ask fixture suite after a successful refresh/not-due check. */
+  askSuite?: boolean;
 }
 
 export interface SavedRefreshArtifact {
   artifact: RefreshArtifact;
   path: string;
   relPath: string;
+}
+
+export interface RefreshAskSuiteSummary {
+  status: "missing" | "passed" | "failed";
+  exitCode: RunToolExitCode;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  citationRate?: number;
+  unsupportedClaimCount?: number;
+  staleCitationCount?: number;
+  abstentionMismatchCount?: number;
+  fixtureFiles?: Array<{
+    relPath: string;
+    count: number;
+  }>;
+  error?: {
+    code: string;
+    message: string;
+  };
 }
 
 export interface RefreshRunResult {
@@ -97,6 +126,7 @@ export interface RefreshRunResult {
     notReached: StageId[];
   };
   benchmark: RefreshBenchmarkSummary;
+  askSuite?: RefreshAskSuiteSummary;
   health: "ok" | "attention" | "failed";
   error?: {
     code: string;
@@ -178,7 +208,10 @@ export async function runRefresh(
         benchmark: dueDecision.benchmark,
         health: "ok",
       });
-      return await maybeSaveRefreshArtifact(options, result);
+      return await maybeSaveRefreshArtifact(
+        options,
+        await maybeRunAskSuiteValidation(options, result),
+      );
     }
 
     const pipelineResult = await runUpdatePipeline({
@@ -225,7 +258,10 @@ export async function runRefresh(
           }
         : {}),
     });
-    return await maybeSaveRefreshArtifact(options, result);
+    return await maybeSaveRefreshArtifact(
+      options,
+      await maybeRunAskSuiteValidation(options, result),
+    );
   } catch (e) {
     const finishedAt = clock().toISOString();
     const result = buildBaseResult({
@@ -265,6 +301,7 @@ export function formatRefreshRunHuman(result: RefreshRunResult): string {
     `due: ${result.dueDecision.due}`,
     `recommended-from-stage: ${result.dueDecision.recommendedFromStage}`,
     `benchmark: ${formatBenchmark(result.benchmark)}`,
+    `ask-suite: ${formatAskSuite(result.askSuite)}`,
     `health: ${result.health}`,
     `stages: succeeded=${result.stageSummary.succeeded.length}, skipped=${result.stageSummary.skipped.length}, failed=${result.stageSummary.failed.length}, notReached=${result.stageSummary.notReached.length}`,
   ];
@@ -382,6 +419,7 @@ function buildBaseResult(args: {
   dueDecision: RefreshDueStatus;
   stageSummary?: RefreshRunResult["stageSummary"];
   benchmark: RefreshBenchmarkSummary;
+  askSuite?: RefreshAskSuiteSummary;
   health: RefreshRunResult["health"];
   error?: RefreshRunResult["error"];
   lock?: RefreshRunLockHolder;
@@ -409,9 +447,95 @@ function buildBaseResult(args: {
       notReached: [],
     },
     benchmark: args.benchmark,
+    ...(args.askSuite === undefined ? {} : { askSuite: args.askSuite }),
     health: args.health,
     ...(args.error === undefined ? {} : { error: args.error }),
     ...(args.lock === undefined ? {} : { lock: args.lock }),
+  };
+}
+
+async function maybeRunAskSuiteValidation(
+  options: RefreshRunOptions,
+  result: RefreshRunResult,
+): Promise<RefreshRunResult> {
+  if (options.askSuite !== true) return result;
+  if (result.status !== "ok" && result.status !== "not-due") return result;
+
+  const askSuite = await runRefreshAskSuite(options.almanacDir);
+  if (askSuite.exitCode === 0) {
+    return {
+      ...result,
+      askSuite,
+    };
+  }
+
+  return {
+    ...result,
+    askSuite,
+    status: "failed",
+    exitCode: askSuite.exitCode,
+    health: "failed",
+    error: {
+      code:
+        askSuite.status === "missing"
+          ? "ask-suite-missing"
+          : "ask-suite-failed",
+      message:
+        askSuite.error?.message ??
+        `ask suite ${askSuite.status}: ${askSuite.passed ?? 0}/${askSuite.total ?? 0} passed`,
+    },
+  };
+}
+
+async function runRefreshAskSuite(
+  almanacDir: string,
+): Promise<RefreshAskSuiteSummary> {
+  try {
+    return summarizeAskSuiteReport(await runAskSuite({ almanacDir }));
+  } catch (cause) {
+    if (cause instanceof AskSuiteSetupError) {
+      return {
+        status: cause.code === "no-fixtures" ? "missing" : "failed",
+        exitCode: 2,
+        error: {
+          code: cause.code,
+          message: cause.message,
+        },
+      };
+    }
+    throw cause;
+  }
+}
+
+function summarizeAskSuiteReport(
+  report: AskSuiteReport,
+): RefreshAskSuiteSummary {
+  const exitCode = exitCodeForAskSuite(report);
+  return {
+    status: exitCode === 0 ? "passed" : "failed",
+    exitCode,
+    total: report.total,
+    passed: report.passed,
+    failed: report.failed,
+    errored: report.errored,
+    citationRate: report.quality.citationRate,
+    unsupportedClaimCount: report.quality.unsupportedClaimCount,
+    staleCitationCount: report.quality.staleCitationCount,
+    abstentionMismatchCount: report.quality.abstentionMismatchCount,
+    fixtureFiles: report.fixtureFiles.map((file) => ({
+      relPath: file.relPath,
+      count: file.count,
+    })),
+    ...(exitCode === 0
+      ? {}
+      : {
+          error: {
+            code: "ask-suite-failed",
+            message:
+              `ask suite failed: ${report.passed}/${report.total} passed, ` +
+              `failed=${report.failed}, errored=${report.errored}`,
+          },
+        }),
   };
 }
 
@@ -471,6 +595,9 @@ async function saveRefreshArtifact(input: {
       failed: input.result.stageSummary.failed,
     },
     benchmark: input.result.benchmark,
+    ...(input.result.askSuite === undefined
+      ? {}
+      : { askSuite: input.result.askSuite }),
     durationMs: input.result.durationMs,
     ...(input.result.error === undefined ? {} : { error: input.result.error }),
   });
@@ -573,6 +700,15 @@ function formatBenchmark(benchmark: RefreshBenchmarkSummary): string {
   return (
     `${benchmark.status}, ${benchmark.passed}/${benchmark.total} passed` +
     `, failed=${benchmark.failed}, errored=${benchmark.errored}`
+  );
+}
+
+function formatAskSuite(askSuite: RefreshAskSuiteSummary | undefined): string {
+  if (askSuite === undefined) return "not-run";
+  if (askSuite.status === "missing") return "missing";
+  return (
+    `${askSuite.status}, ${askSuite.passed ?? 0}/${askSuite.total ?? 0} passed` +
+    `, failed=${askSuite.failed ?? 0}, errored=${askSuite.errored ?? 0}`
   );
 }
 

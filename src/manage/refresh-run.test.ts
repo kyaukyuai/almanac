@@ -11,13 +11,24 @@ import {
   STAGE_IDS,
   type BenchmarkResult,
   type BenchmarkSet,
+  type FactRecord,
   type SourcesFile,
   type SourceFetchEntry,
+  type ToolManifest,
 } from "../core/types.ts";
 import {
   markStageCompleted,
   type StageRunner,
 } from "../compile/pipeline.ts";
+import {
+  DEFAULT_TOOL_TEMPLATES,
+} from "../compile/stages/s07/templates.ts";
+import {
+  synthesizeDefaultToolManifest,
+} from "../compile/stages/s07/template-implementer.ts";
+import {
+  buildKnowledgeIndex,
+} from "../compile/stages/s08-knowledge-index.ts";
 import { bootstrapAlmanac } from "../compile/stages/s00-bootstrap.ts";
 import { benchmarkResultPath } from "../compile/stages/s12-benchmark-run-runner.ts";
 import {
@@ -90,6 +101,133 @@ describe("runRefresh", () => {
         fromStage: "12-benchmark-run",
       }),
     ]);
+  });
+
+  test("runs an ask suite after refresh and saves a compact summary", async () => {
+    const almanacDir = await buildRefreshRunFixture({
+      id: "refresh-run-ask-suite",
+      benchmark: "missing",
+    });
+    await addAskSuiteFixture(almanacDir, "refresh-run-ask-suite");
+
+    const result = await runRefresh({
+      almanacDir,
+      runners: { "12-benchmark-run": benchmarkWritingRunner("passed") },
+      forgerVersion: "0.9.0-test",
+      save: true,
+      label: "nightly",
+      askSuite: true,
+      now: fixedClock("2026-06-01T12:00:00.000Z"),
+    });
+
+    expect(result.status).toBe("ok");
+    expect(result.exitCode).toBe(0);
+    expect(result.askSuite).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        exitCode: 0,
+        total: 1,
+        passed: 1,
+        failed: 0,
+        errored: 0,
+      }),
+    );
+    expect(result.askSuite?.fixtureFiles).toEqual([
+      expect.objectContaining({ relPath: "tests/ask.jsonl", count: 1 }),
+    ]);
+    expect(formatRefreshRunHuman(result)).toContain("ask-suite: passed");
+
+    const readBack = await readRunToolArtifact({
+      almanacDir,
+      runId: result.refreshId,
+    });
+    expect(readBack.artifact.kind).toBe("refresh");
+    if (readBack.artifact.kind === "refresh") {
+      expect(readBack.artifact.askSuite?.status).toBe("passed");
+      expect(readBack.artifact.askSuite?.total).toBe(1);
+    }
+
+    const refreshRuns = await listRunToolArtifacts({
+      almanacDir,
+      kind: "refresh",
+    });
+    expect(refreshRuns.runs[0]).toEqual(
+      expect.objectContaining({
+        runId: result.refreshId,
+        askSuiteStatus: "passed",
+        askSuiteTotal: 1,
+      }),
+    );
+  });
+
+  test("marks refresh failed when post-refresh ask suite fails", async () => {
+    const almanacDir = await buildRefreshRunFixture({
+      id: "refresh-run-ask-suite-fail",
+      benchmark: "passed",
+    });
+    await addAskSuiteFixture(almanacDir, "refresh-run-ask-suite-fail", {
+      unsupported: true,
+    });
+
+    const result = await runRefresh({
+      almanacDir,
+      runners: { "12-benchmark-run": benchmarkWritingRunner("passed") },
+      forgerVersion: "0.9.0-test",
+      save: true,
+      askSuite: true,
+      now: fixedClock("2026-06-01T12:00:00.000Z"),
+    });
+
+    expect(result.dueDecision.due).toBe(false);
+    expect(result.status).toBe("failed");
+    expect(result.exitCode).toBe(1);
+    expect(result.error?.code).toBe("ask-suite-failed");
+    expect(result.askSuite).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        exitCode: 1,
+        total: 1,
+        failed: 1,
+        unsupportedClaimCount: 1,
+      }),
+    );
+
+    const readBack = await readRunToolArtifact({
+      almanacDir,
+      runId: result.refreshId,
+    });
+    expect(readBack.artifact.kind).toBe("refresh");
+    if (readBack.artifact.kind === "refresh") {
+      expect(readBack.artifact.status).toBe("failed");
+      expect(readBack.artifact.askSuite?.status).toBe("failed");
+    }
+  });
+
+  test("marks refresh failed with setup exit when requested ask fixtures are missing", async () => {
+    const almanacDir = await buildRefreshRunFixture({
+      id: "refresh-run-ask-suite-missing",
+      benchmark: "passed",
+    });
+
+    const result = await runRefresh({
+      almanacDir,
+      runners: { "12-benchmark-run": benchmarkWritingRunner("passed") },
+      forgerVersion: "0.9.0-test",
+      save: true,
+      askSuite: true,
+      now: fixedClock("2026-06-01T12:00:00.000Z"),
+    });
+
+    expect(result.status).toBe("failed");
+    expect(result.exitCode).toBe(2);
+    expect(result.error?.code).toBe("ask-suite-missing");
+    expect(result.askSuite).toEqual(
+      expect.objectContaining({
+        status: "missing",
+        exitCode: 2,
+        error: expect.objectContaining({ code: "no-fixtures" }),
+      }),
+    );
   });
 
   test("does not mutate a not-due almanac unless fromStage is explicit", async () => {
@@ -257,6 +395,93 @@ async function buildRefreshRunFixture(options: {
     await writeBenchmark(almanacDir, options.id, options.benchmark);
   }
   return almanacDir;
+}
+
+async function addAskSuiteFixture(
+  almanacDir: string,
+  almanacId: string,
+  options: { unsupported?: boolean } = {},
+): Promise<void> {
+  await mkdir(join(almanacDir, "tests"), { recursive: true });
+  await mkdir(join(almanacDir, "knowledge"), { recursive: true });
+  await mkdir(join(almanacDir, "tools"), { recursive: true });
+
+  const built = buildKnowledgeIndex({
+    almanacId,
+    facts: [fixtureFact()],
+    dbPath: join(almanacDir, "knowledge", "almanac.sqlite"),
+  });
+  built.db.close();
+  await writeFile(
+    join(almanacDir, "knowledge", "index-manifest.json"),
+    JSON.stringify({ ...built.manifest, vectorIndex: undefined }, null, 2),
+    "utf8",
+  );
+
+  await writeFile(
+    join(almanacDir, "tools", "query_facts.json"),
+    JSON.stringify(queryFactsManifest(), null, 2),
+    "utf8",
+  );
+  await writeFile(
+    join(almanacDir, "tools", "query_facts.ts"),
+    DEFAULT_TOOL_TEMPLATES.query_facts!.implCode,
+    "utf8",
+  );
+  await writeFile(
+    join(almanacDir, "tests", "ask.jsonl"),
+    JSON.stringify({
+      id: `${almanacId}-foreign-keys`,
+      question: "Are foreign keys supported?",
+      toolCalls: [
+        {
+          tool: "query_facts",
+          input: { q: "foreign keys" },
+          expectedStatus: "ok",
+        },
+      ],
+      expectedStatus: "ok",
+      minCitations: 1,
+      maxStaleCitations: 0,
+      ...(options.unsupported === true
+        ? { unsupportedClaims: ["SQLite encrypts every page by default."] }
+        : {}),
+    }) + "\n",
+    "utf8",
+  );
+}
+
+function queryFactsManifest(): ToolManifest {
+  return {
+    ...synthesizeDefaultToolManifest("query_facts"),
+    inputSchema: {
+      type: "object",
+      properties: {
+        q: { type: "string" },
+      },
+      required: ["q"],
+    },
+  };
+}
+
+function fixtureFact(): FactRecord {
+  return {
+    id: "01J00000000000000000000001",
+    text: "Foreign key constraints can be enabled in SQLite with PRAGMA foreign_keys.",
+    type: "fact",
+    entities: ["SQLite", "foreign keys"],
+    source: {
+      sourceId: "sqlite-docs",
+      contentHash: "a".repeat(64),
+      url: "https://sqlite.org/foreignkeys.html",
+      excerpt: "Foreign key constraints are disabled by default.",
+    },
+    freshnessClass: "static",
+    validUntil: null,
+    confidence: 0.95,
+    extractedAt: "2026-01-01T00:00:00.000Z",
+    extractor: { model: "test", promptVersion: "v1" },
+  };
 }
 
 function benchmarkWritingRunner(

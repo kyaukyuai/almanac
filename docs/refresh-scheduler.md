@@ -131,9 +131,26 @@ almanac refresh run enterprise-ai \
   --root "$ALMANAC_ROOT"
 ```
 
+If the almanac has ask replay fixtures, add the deterministic answer suite gate
+to the refresh command:
+
+```bash
+almanac refresh run enterprise-ai \
+  --save \
+  --label cron-nightly \
+  --ask-suite \
+  --root "$ALMANAC_ROOT"
+```
+
+`--ask-suite` runs after an `ok` refresh or a `not-due` decision. It does not
+call an LLM provider. A failing suite changes the refresh result to `failed`;
+missing or invalid ask fixtures use setup exit code `2`.
+
 Saved refresh artifacts intentionally do not store API keys, environment dumps,
 raw provider requests, raw provider responses, or unredacted secrets from tool
 input.
+When `--ask-suite` is used, artifacts store only aggregate suite status,
+fixture counts, quality counters, and fixture file paths.
 
 `inspect`, `profile`, and `doctor` show the latest saved refresh run. A latest
 `failed` or `locked` refresh is surfaced as a health/readiness signal even if
@@ -308,7 +325,8 @@ Before relying on a scheduled refresh in production, run these once manually:
 ```bash
 almanac doctor <id> --root "$ALMANAC_ROOT"
 almanac refresh due <id> --json --root "$ALMANAC_ROOT"
-almanac refresh run <id> --save --label scheduler-smoke --json --root "$ALMANAC_ROOT"
+almanac ask-suite <id> --json --root "$ALMANAC_ROOT"
+almanac refresh run <id> --save --label scheduler-smoke --ask-suite --json --root "$ALMANAC_ROOT"
 almanac runs <id> --kind refresh --latest --json --root "$ALMANAC_ROOT"
 almanac inspect <id> --root "$ALMANAC_ROOT"
 almanac profile <id> --root "$ALMANAC_ROOT"
@@ -321,4 +339,5 @@ The scheduler is ready when:
 - the latest refresh artifact is visible through `runs`, `inspect`,
   `profile`, and `doctor`,
 - benchmark status is passed,
+- ask-suite status is passed when ask fixtures are configured,
 - retention and export choices are explicit for `.runs/`.
