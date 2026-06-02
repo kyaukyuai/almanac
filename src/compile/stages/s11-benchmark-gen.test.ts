@@ -755,6 +755,25 @@ describe("createBenchmarkGenRunner", () => {
     expect(persisted.set.negative.map((f) => f.id)).not.toContain("k8s-neg-live");
     expect(persisted.set.positive).toHaveLength(8);
     expect(persisted.set.negative).toHaveLength(5);
+    expect(persisted.stability).toEqual(
+      expect.objectContaining({
+        coverageFloor: { positive: 8, negative: 5, total: 13 },
+        finalCoverage: { positive: 8, negative: 5, total: 13 },
+        coverageOk: true,
+        preflight: {
+          enabled: true,
+          attempts: [
+            expect.objectContaining({
+              attempt: 1,
+              generatedCoverage: { positive: 9, negative: 6, total: 15 },
+              skippedFixtureIds: ["k8s-pos-live", "k8s-neg-live"],
+              droppedFixtureIds: ["k8s-pos-live", "k8s-neg-live"],
+              outcome: "stabilized",
+            }),
+          ],
+        },
+      }),
+    );
     expect(logs).toContainEqual(
       expect.objectContaining({
         event: "stage11:preflight:filtered",
@@ -766,6 +785,15 @@ describe("createBenchmarkGenRunner", () => {
         event: "stage11:preflight:stabilized",
         reason: "unverified-fixtures",
         dropped: ["k8s-pos-live", "k8s-neg-live"],
+      }),
+    );
+    expect(logs).toContainEqual(
+      expect.objectContaining({
+        event: "stage11:coverage:checked",
+        positive: 8,
+        negative: 5,
+        total: 13,
+        ok: true,
       }),
     );
   });
@@ -922,6 +950,7 @@ describe("createBenchmarkGenRunner", () => {
     expect(retryMessage).toContain("k8s-neg-001");
     expect(retryMessage).toContain("k8s-neg-live");
     expect(retryMessage).toContain("bad-input");
+    expect(retryMessage).toContain("do not substitute near-synonyms");
   });
 
   test("refuses final unpreflighted stabilization below minimum coverage", async () => {

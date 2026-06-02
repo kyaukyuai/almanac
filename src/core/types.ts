@@ -524,6 +524,40 @@ export const RejectedSourceSchema = z.object({
 });
 export type RejectedSource = z.infer<typeof RejectedSourceSchema>;
 
+export const SourceDiscoveryStabilitySchema = z.object({
+  previousAcceptedCount: z.number().int().nonnegative(),
+  currentAcceptedCount: z.number().int().nonnegative(),
+  preservedSourceIds: z.array(z.string().regex(SOURCE_ID)).max(12),
+  restoredSourceIds: z.array(z.string().regex(SOURCE_ID)).max(12),
+  replacedSources: z
+    .array(
+      z.object({
+        sourceId: z.string().regex(SOURCE_ID),
+        replacedSourceId: z.string().regex(SOURCE_ID),
+      }),
+    )
+    .max(12),
+  addedSourceIds: z.array(z.string().regex(SOURCE_ID)).max(12),
+  droppedSources: z
+    .array(
+      z.object({
+        sourceId: z.string().regex(SOURCE_ID),
+        url: z.string().url(),
+        reason: z.enum([
+          "not-fetchable",
+          "kind-changed",
+          "explicitly-rejected",
+          "policy-rejected",
+          "not-selected",
+        ]),
+      }),
+    )
+    .max(12),
+});
+export type SourceDiscoveryStability = z.infer<
+  typeof SourceDiscoveryStabilitySchema
+>;
+
 const ISO_8601 =
   /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})$/;
 const SHA256_HEX = /^[a-f0-9]{64}$/;
@@ -549,6 +583,7 @@ export const SourcesFileSchema = z
     }),
     coverage: CoverageMapSchema,
     warnings: z.array(z.string()),
+    stability: SourceDiscoveryStabilitySchema.optional(),
     sources: z.array(ApprovedSourceSchema).max(12),
     rejected: z.array(RejectedSourceSchema).max(50),
   })
@@ -3100,12 +3135,58 @@ export const BenchmarkSetSchema = z
   });
 export type BenchmarkSet = z.infer<typeof BenchmarkSetSchema>;
 
+export const BenchmarkFixtureCoverageSchema = z.object({
+  positive: z.number().int().nonnegative(),
+  negative: z.number().int().nonnegative(),
+  total: z.number().int().nonnegative(),
+});
+export type BenchmarkFixtureCoverage = z.infer<
+  typeof BenchmarkFixtureCoverageSchema
+>;
+
+export const Stage11PreflightAttemptSchema = z.object({
+  attempt: z.number().int().positive(),
+  generatedCoverage: BenchmarkFixtureCoverageSchema,
+  includedFixtureIds: z.array(z.string()).max(100),
+  skippedFixtureIds: z.array(z.string()).max(100),
+  failedFixtureIds: z.array(z.string()).max(100),
+  droppedFixtureIds: z.array(z.string()).max(100),
+  blockedReason: z.string().max(1_000).optional(),
+  outcome: z.enum([
+    "passed",
+    "skipped-no-deterministic-fixtures",
+    "retry-preflight-failed",
+    "retry-unverified-coverage",
+    "retry-coverage-minimum",
+    "stabilized",
+    "blocked",
+  ]),
+});
+export type Stage11PreflightAttempt = z.infer<
+  typeof Stage11PreflightAttemptSchema
+>;
+
+export const Stage11StabilitySchema = z.object({
+  coverageFloor: BenchmarkFixtureCoverageSchema,
+  finalCoverage: BenchmarkFixtureCoverageSchema,
+  coverageOk: z.boolean(),
+  preflight: z
+    .object({
+      enabled: z.boolean(),
+      attempts: z.array(Stage11PreflightAttemptSchema).max(10),
+    })
+    .optional(),
+});
+export type Stage11Stability = z.infer<typeof Stage11StabilitySchema>;
+
 /** Stage 11 output: just the benchmark set + a generation note. */
 export const Stage11OutputSchema = z.object({
   schemaVersion: z.literal("0.1.0"),
   set: BenchmarkSetSchema,
   /** What the LLM said about its choices (one paragraph). */
   rationale: z.string().min(10).max(2000),
+  /** Compiler-managed diagnostics for fixture stabilization and coverage. */
+  stability: Stage11StabilitySchema.optional(),
 });
 export type Stage11Output = z.infer<typeof Stage11OutputSchema>;
 

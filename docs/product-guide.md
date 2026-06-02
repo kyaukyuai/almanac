@@ -89,6 +89,14 @@ enough to trust:
 - ingestion mode and refresh interval
 - rationale
 - rejected candidate reasons when available
+- source-set drift when discovery was rerun against prior approved sources
+
+When Stage 2b runs with an existing approved `sources/sources.json`,
+`almanac sources` also prints a `drift` line. The JSON form includes
+`stability`, which records prior accepted count, current accepted count,
+preserved/restored/replaced source ids, newly added source ids, and dropped
+prior sources with reasons such as `not-fetchable`, `explicitly-rejected`, or
+`policy-rejected`.
 
 ## Refresh due checks
 
@@ -380,6 +388,13 @@ fixtures, Stage 11 retries if deterministic preflight filtering would leave the
 set below that floor. Human-owned benchmark files can still be smaller for a
 focused acceptance gate, but release smoke runs should preserve the generated
 coverage minimum.
+
+Stage 11 writes compiler-managed stability metadata into
+`.compile/stage11-output.json`. The `stability` object records the required
+coverage floor, final fixture coverage, and, when runtime preflight is enabled,
+each preflight attempt's included, skipped, failed, and dropped fixture ids.
+Use it to tell whether benchmark variance came from generated fixture coverage,
+live/network-backed fixtures, or deterministic runtime failures.
 
 ## Doctor
 
