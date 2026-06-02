@@ -140,6 +140,26 @@ Fixture rows are intentionally small. Stable fields are:
 Replay is an answer-mode regression surface. It complements Stage 11/12
 benchmarks; it does not replace them.
 
+## Ask Suite Gate
+
+`almanac ask-suite` runs the deterministic fixture suite as an ask-mode gate.
+It discovers the recognized fixture paths by default and does not call an LLM
+provider:
+
+```bash
+almanac ask-suite sqlite-demo --json --root "$tmp"
+```
+
+Use `--fixture <path>` one or more times to gate an explicit fixture set instead
+of the standard paths.
+
+Exit codes:
+
+- `0`: all replay cases and quality gates passed,
+- `1`: at least one replay case or quality gate failed,
+- `2`: suite setup failed, such as missing fixtures, malformed JSONL, duplicate
+  ids, or a missing almanac directory.
+
 ## Quality Gate
 
 Answer-mode quality checks are deterministic and operational. They are not a
