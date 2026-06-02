@@ -245,6 +245,71 @@ describe("ask replay saved artifacts", () => {
       }),
     );
   });
+
+  test("replays saved abstentions against the recorded final answer status", async () => {
+    const almanacDir = await buildAskReplayFixture("ask-replay-saved-abstain");
+    const saved = await saveAnswerArtifact({
+      almanacDir,
+      answerId: "answer-2026-01-02T00-00-00-000Z-00000002",
+      question: "What governance checks should precede rollout?",
+      status: "abstained",
+      exitCode: 1,
+      startedAt: "2026-01-02T00:00:00.000Z",
+      finishedAt: "2026-01-02T00:00:01.000Z",
+      label: "rc-real-provider",
+      abstentionReason: "no-citations",
+      toolCalls: [
+        {
+          toolName: "query_facts",
+          input: { q: "foreign keys" },
+          status: "ok",
+          durationMs: 10,
+          citationsCount: 1,
+        },
+      ],
+      citations: [],
+      freshness: {
+        class: "static",
+        maxAge: null,
+        staleness: "fresh",
+      },
+    });
+
+    const report = await runAskReplayFromSavedRuns({
+      almanacDir,
+      label: "rc-real-provider",
+    });
+
+    expect(report.mode).toBe("saved-runs");
+    expect(report.passed).toBe(1);
+    expect(report.failed).toBe(0);
+    expect(report.quality.status).toBe("pass");
+    expect(report.results[0]).toEqual(
+      expect.objectContaining({
+        fixtureId: saved.artifact.answerId,
+        status: "pass",
+        expected: expect.objectContaining({
+          status: "abstained",
+          abstentionReason: "no-citations",
+        }),
+        observed: expect.objectContaining({
+          status: "abstained",
+          citationsCount: 0,
+          abstentionReason: "no-citations",
+          toolCalls: [
+            expect.objectContaining({
+              toolName: "query_facts",
+              status: "ok",
+              citationsCount: 1,
+            }),
+          ],
+        }),
+        quality: expect.objectContaining({
+          status: "pass",
+        }),
+      }),
+    );
+  });
 });
 
 async function buildAskReplayFixture(almanacId: string): Promise<string> {
