@@ -406,6 +406,8 @@ For the v0.9 ask-suite operations release-candidate smoke sequence, see
 [`v0.9-rc-smoke.md`](./v0.9-rc-smoke.md).
 For the v0.10 answer trust and retrieval readiness release-candidate smoke
 sequence, see [`v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
+For the v0.11 first-run and failure-recovery release-candidate smoke sequence,
+see [`v0.11-rc-smoke.md`](./v0.11-rc-smoke.md).
 
 Minimal answer-mode smoke:
 

@@ -287,6 +287,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   ask-suite workflows
 - [v0.11 plan](./docs/v0.11-plan.md): source-first install, first successful
   almanac, demo handoff, and compile failure recovery
+- [v0.11 RC smoke](./docs/v0.11-rc-smoke.md): release-candidate validation for
+  first-run readiness, demo handoff, saved answer replay, and failure recovery
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
