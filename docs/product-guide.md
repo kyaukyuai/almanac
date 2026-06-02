@@ -290,10 +290,11 @@ set `unsupportedClaims`, `minCitations`, `maxStaleCitations`, and
 `expectedAbstentionReason` to make replay failures explicit.
 
 `profile` and `doctor` also expose answer readiness without calling a provider:
-ask fixture coverage, latest saved answer status, latest answer quality verdict,
-and stale citation warnings. Missing ask fixtures or missing saved answer
-quality gates are warnings so an otherwise compiled almanac can remain usable
-while answer mode still needs validation.
+ask fixture coverage by path, latest saved refresh ask-suite status, latest
+saved answer status, latest answer quality verdict, and stale citation
+warnings. Missing ask fixtures, missing saved ask-suite evidence, stale fixture
+coverage, or missing saved answer quality gates are warnings so an otherwise
+compiled almanac can remain usable while answer mode still needs validation.
 
 The output exit code is part of the contract: grounded `ok` answers exit `0`,
 abstentions and model/tool failures exit `1`, and usage or tool-input errors
