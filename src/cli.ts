@@ -5024,6 +5024,41 @@ interface DoctorReadinessItem {
   nextActions: string[];
 }
 
+interface RootHygieneReport {
+  status: Extract<DoctorReadinessStatus, "ready" | "setup" | "needs-validation">;
+  root: string;
+  almanacs: {
+    total: number;
+    ok: number;
+    attention: number;
+    failed: number;
+    broken: number;
+  };
+  cleanup: {
+    savedRuns: number;
+    savedRunAlmanacs: Array<{
+      almanacId: string;
+      runs: number;
+      nextAction: string;
+    }>;
+    exportArchives: string[];
+    orphanedMcpRegistrations: Array<{
+      client: RegisterClient;
+      almanacId: string;
+      serverName: string;
+      path: string;
+      nextAction: string;
+    }>;
+    staleRegistrations: Array<{
+      almanacId: string;
+      status: RegistrationOverallStatus;
+      nextActions: string[];
+    }>;
+  };
+  issues: string[];
+  nextActions: string[];
+}
+
 function addDoctorReadiness(
   readiness: DoctorReadinessItem[],
   item: DoctorReadinessItem,
@@ -5035,12 +5070,273 @@ function formatDoctorReadinessStatus(status: DoctorReadinessStatus): string {
   return status.padEnd(16);
 }
 
+async function readRootHygieneReport(root: string): Promise<RootHygieneReport> {
+  const rootSuffix = rootArg(root);
+  if (!existsSync(root)) {
+    return {
+      status: "setup",
+      root,
+      almanacs: emptyRootHygieneAlmanacCounts(),
+      cleanup: emptyRootHygieneCleanup(),
+      issues: [],
+      nextActions: [`almanac demo${rootSuffix}`],
+    };
+  }
+
+  const items = await readLifecycleInventory(root);
+  const almanacs = rootHygieneAlmanacCounts(items);
+  const installedIds = new Set(items.map((item) => item.almanacId));
+  const [savedRunAlmanacs, exportArchives, orphanedMcpRegistrations] =
+    await Promise.all([
+      readRootSavedRunCleanup(items, root),
+      readRootExportArchives(root),
+      readRootOrphanedMcpRegistrations(root, installedIds),
+    ]);
+  const staleRegistrations = items
+    .filter(
+      (item) =>
+        item.manifest !== null &&
+        (item.lifecycle.registration.status === "stale" ||
+          item.lifecycle.registration.status === "unreadable"),
+    )
+    .map((item) => ({
+      almanacId: item.almanacId,
+      status: item.lifecycle.registration.status,
+      nextActions: item.lifecycle.registration.clients.flatMap(
+        (client) => client.nextActions,
+      ),
+    }));
+  const issues = rootHygieneIssues({
+    items,
+    orphanedMcpRegistrations,
+    staleRegistrations,
+  });
+  const cleanup = {
+    savedRuns: savedRunAlmanacs.reduce((sum, item) => sum + item.runs, 0),
+    savedRunAlmanacs,
+    exportArchives,
+    orphanedMcpRegistrations,
+    staleRegistrations,
+  };
+  const nextActions = uniqueStrings([
+    ...(items.length === 0 ? [`almanac demo${rootSuffix}`] : []),
+    `almanac list${rootSuffix}`,
+    ...items
+      .filter((item) => item.lifecycle.status !== "ok")
+      .flatMap((item) => item.lifecycle.nextActions.slice(0, 1)),
+    ...staleRegistrations.flatMap((item) => item.nextActions),
+    ...orphanedMcpRegistrations.map((item) => item.nextAction),
+    ...savedRunAlmanacs.map((item) => item.nextAction),
+    ...(exportArchives.length === 0
+      ? []
+      : [`review exported archives in ${root}`]),
+  ]);
+
+  return {
+    status:
+      issues.length > 0
+        ? "needs-validation"
+        : items.length === 0
+          ? "setup"
+          : "ready",
+    root,
+    almanacs,
+    cleanup,
+    issues,
+    nextActions,
+  };
+}
+
+function emptyRootHygieneAlmanacCounts(): RootHygieneReport["almanacs"] {
+  return {
+    total: 0,
+    ok: 0,
+    attention: 0,
+    failed: 0,
+    broken: 0,
+  };
+}
+
+function emptyRootHygieneCleanup(): RootHygieneReport["cleanup"] {
+  return {
+    savedRuns: 0,
+    savedRunAlmanacs: [],
+    exportArchives: [],
+    orphanedMcpRegistrations: [],
+    staleRegistrations: [],
+  };
+}
+
+function rootHygieneAlmanacCounts(
+  items: LifecycleInventoryItem[],
+): RootHygieneReport["almanacs"] {
+  return {
+    total: items.length,
+    ok: items.filter((item) => item.lifecycle.status === "ok").length,
+    attention: items.filter((item) => item.lifecycle.status === "attention")
+      .length,
+    failed: items.filter((item) => item.lifecycle.status === "failed").length,
+    broken: items.filter((item) => item.lifecycle.status === "broken").length,
+  };
+}
+
+async function readRootSavedRunCleanup(
+  items: LifecycleInventoryItem[],
+  root: string,
+): Promise<RootHygieneReport["cleanup"]["savedRunAlmanacs"]> {
+  const rootSuffix = rootArg(root);
+  const out: RootHygieneReport["cleanup"]["savedRunAlmanacs"] = [];
+  for (const item of items) {
+    if (item.manifest === null) continue;
+    try {
+      const list = await listRunToolArtifacts({ almanacDir: item.almanacDir });
+      if (list.runs.length === 0) continue;
+      out.push({
+        almanacId: item.almanacId,
+        runs: list.runs.length,
+        nextAction: `almanac runs ${item.almanacId} --prune --keep-latest 20 --dry-run${rootSuffix}`,
+      });
+    } catch {
+      // Per-almanac status already reports unreadable .runs. Root hygiene keeps
+      // cleanup guidance best-effort so one bad directory does not hide others.
+    }
+  }
+  return out;
+}
+
+async function readRootExportArchives(root: string): Promise<string[]> {
+  try {
+    const entries = await readdir(root, { withFileTypes: true });
+    return entries
+      .filter(
+        (entry) =>
+          entry.isFile() &&
+          /^almanac-.+\.tar\.gz$/.test(entry.name),
+      )
+      .map((entry) => join(root, entry.name))
+      .sort();
+  } catch {
+    return [];
+  }
+}
+
+async function readRootOrphanedMcpRegistrations(
+  root: string,
+  installedIds: Set<string>,
+): Promise<RootHygieneReport["cleanup"]["orphanedMcpRegistrations"]> {
+  const rootPath = resolve(root);
+  const out: RootHygieneReport["cleanup"]["orphanedMcpRegistrations"] = [];
+  for (const profile of Object.values(CLIENT_PROFILES)) {
+    if (!existsSync(profile.mcpConfigPath)) continue;
+    let config: Record<string, unknown>;
+    try {
+      config = parseMcpConfig(
+        await readFile(profile.mcpConfigPath, "utf8"),
+        profile.format,
+      );
+    } catch {
+      continue;
+    }
+    const servers = config[profile.mcpServersKey];
+    if (servers === null || typeof servers !== "object" || Array.isArray(servers)) {
+      continue;
+    }
+    for (const [serverName, entry] of Object.entries(
+      servers as Record<string, unknown>,
+    )) {
+      if (!serverName.startsWith("almanac-")) continue;
+      const almanacId = serverName.slice("almanac-".length);
+      if (installedIds.has(almanacId)) continue;
+      const entryRoot = mcpEntryRootPath(entry);
+      if (entryRoot === null || resolve(entryRoot) !== rootPath) continue;
+      out.push({
+        client: profile.name,
+        almanacId,
+        serverName,
+        path: profile.mcpConfigPath,
+        nextAction: `remove ${profile.mcpServersKey}["${serverName}"] from ${profile.mcpConfigPath}`,
+      });
+    }
+  }
+  return out;
+}
+
+function mcpEntryRootPath(entry: unknown): string | null {
+  if (entry === null || typeof entry !== "object" || Array.isArray(entry)) {
+    return null;
+  }
+  const args = (entry as Record<string, unknown>)["args"];
+  if (!Array.isArray(args) || !args.every((arg) => typeof arg === "string")) {
+    return null;
+  }
+  const rootFlagIndex = args.indexOf("--root");
+  if (rootFlagIndex < 0) return null;
+  return args[rootFlagIndex + 1] ?? null;
+}
+
+function rootHygieneIssues(args: {
+  items: LifecycleInventoryItem[];
+  orphanedMcpRegistrations: RootHygieneReport["cleanup"]["orphanedMcpRegistrations"];
+  staleRegistrations: RootHygieneReport["cleanup"]["staleRegistrations"];
+}): string[] {
+  return uniqueStrings([
+    ...args.items
+      .filter((item) => item.lifecycle.status === "broken")
+      .map(
+        (item) =>
+          `${item.almanacId}: broken - ${
+            item.lifecycle.issues[0] ?? "almanac artifacts are broken"
+          }`,
+      ),
+    ...args.items
+      .filter((item) => item.lifecycle.status === "failed")
+      .map(
+        (item) =>
+          `${item.almanacId}: failed - ${
+            item.lifecycle.issues[0] ?? "almanac failed validation"
+          }`,
+      ),
+    ...args.items
+      .filter((item) => item.lifecycle.status === "attention")
+      .map(
+        (item) =>
+          `${item.almanacId}: attention - ${
+            item.lifecycle.issues[0] ?? "needs review"
+          }`,
+      ),
+    ...args.staleRegistrations.map(
+      (item) => `${item.almanacId}: registration ${item.status}`,
+    ),
+    ...args.orphanedMcpRegistrations.map(
+      (item) =>
+        `${item.client}: orphaned MCP registration ${item.serverName} points at missing ${item.almanacId}`,
+    ),
+  ]);
+}
+
+function formatRootHygieneCheck(report: RootHygieneReport): string {
+  const counts = report.almanacs;
+  if (counts.total === 0) return "no almanacs found";
+  return `${counts.total} almanac(s): ${counts.ok} ok, ${counts.attention} attention, ${counts.failed} failed, ${counts.broken} broken`;
+}
+
+function formatRootCleanupCheck(report: RootHygieneReport): string {
+  const parts = [
+    `${report.cleanup.savedRuns} saved run artifact(s)`,
+    `${report.cleanup.exportArchives.length} export archive(s)`,
+    `${report.cleanup.orphanedMcpRegistrations.length} orphaned MCP registration(s)`,
+    `${report.cleanup.staleRegistrations.length} stale registration set(s)`,
+  ];
+  return parts.join(", ");
+}
+
 async function cmdDoctor(
   id: string | undefined,
   opts: DoctorOptions,
 ): Promise<void> {
   const checks: DoctorCheck[] = [];
   const readiness: DoctorReadinessItem[] = [];
+  let rootHygiene: RootHygieneReport | null = null;
   const add = (level: DoctorLevel, name: string, message: string) => {
     checks.push({ level, name, message });
   };
@@ -5306,6 +5602,31 @@ async function cmdDoctor(
       }
     }
   } else {
+    rootHygiene = await readRootHygieneReport(opts.root);
+    add(
+      rootHygiene.status === "needs-validation" ? "warn" : "ok",
+      "root-hygiene",
+      formatRootHygieneCheck(rootHygiene),
+    );
+    add(
+      rootHygiene.cleanup.orphanedMcpRegistrations.length > 0 ||
+        rootHygiene.cleanup.staleRegistrations.length > 0
+        ? "warn"
+        : "ok",
+      "root-cleanup",
+      formatRootCleanupCheck(rootHygiene),
+    );
+    addDoctorReadiness(readiness, {
+      status: rootHygiene.status,
+      name: "hygiene",
+      message:
+        rootHygiene.status === "ready"
+          ? "root inventory has no blocking hygiene issues"
+          : rootHygiene.status === "setup"
+            ? "create or import an almanac before root hygiene can be validated"
+            : rootHygiene.issues[0] ?? "root has lifecycle hygiene issues",
+      nextActions: rootHygiene.nextActions,
+    });
     addDoctorReadiness(readiness, {
       status: "setup",
       name: "answer",
@@ -5343,7 +5664,16 @@ async function cmdDoctor(
 
   if (opts.json) {
     process.stdout.write(
-      JSON.stringify({ summary, checks, readiness }, null, 2) + "\n",
+      JSON.stringify(
+        {
+          summary,
+          checks,
+          readiness,
+          ...(rootHygiene === null ? {} : { rootHygiene }),
+        },
+        null,
+        2,
+      ) + "\n",
     );
   } else {
     process.stdout.write(
