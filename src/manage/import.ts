@@ -12,13 +12,26 @@ import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, rename, rm } from "node:fs/promises";
 import { dirname, isAbsolute, join, resolve } from "node:path";
 
+import {
+  markStageCompleted,
+  markStageSkipped,
+  sha256Hex,
+} from "../compile/pipeline.ts";
+import {
+  readCompileState,
+  writeCompileState,
+  writeManifest,
+} from "../compile/storage.ts";
 import type { Spawner } from "../compile/stages/s07/tsc-runner.ts";
 import { createBunSpawner } from "../compile/stages/s07/tsc-runner.ts";
 import {
   AlmanacManifestSchema,
+  initCompileState,
+  STAGE_IDS,
   type AlmanacManifest,
+  type CompileOptions,
+  type CompileState,
 } from "../core/types.ts";
-import { readCompileState, writeCompileState, writeManifest } from "../compile/storage.ts";
 
 export interface RunImportInput {
   /** Absolute path to the exported .tar.gz archive. */
@@ -81,6 +94,17 @@ interface ArchiveEntry {
   raw: string;
   normalized: string;
 }
+
+const IMPORTED_COMPILE_STATE_SKIP_REASON =
+  "imported-archive-omitted-compile-metadata";
+
+const IMPORTED_COMPILE_OPTIONS: CompileOptions = {
+  depth: "standard",
+  sourcesHint: [],
+  target: "both",
+  autoApprove: true,
+  language: "ts",
+};
 
 export async function inspectImportArchive(
   input: Pick<RunImportInput, "archivePath" | "tarBinary" | "spawner" | "log">,
@@ -376,8 +400,54 @@ async function rewriteImportedIdentity(
     });
   } catch {
     // Default exports exclude .compile/. Including it is optional debug state,
-    // so a missing or stale compile-state must not block a runtime import.
+    // so synthesize a minimal handoff state that keeps lifecycle commands usable.
+    await writeCompileState(extractedDir, synthesizeImportedCompileState(manifest));
   }
+}
+
+function synthesizeImportedCompileState(manifest: AlmanacManifest): CompileState {
+  const importedAt = importTimestamp(manifest);
+  let state = initCompileState({
+    runId: importedRunId(manifest.almanacId, importedAt),
+    almanacId: manifest.almanacId,
+    domain: manifest.domain,
+    forgerVersion: manifest.forgerVersion,
+    options: IMPORTED_COMPILE_OPTIONS,
+    now: importedAt,
+  });
+
+  state = markStageCompleted(state, "00-bootstrap", importedAt, {
+    outputHash: sha256Hex(
+      JSON.stringify({
+        almanacId: manifest.almanacId,
+        compiledAt: manifest.compiledAt,
+        imported: true,
+        stageId: "00-bootstrap",
+      }),
+    ),
+  });
+
+  for (const stageId of STAGE_IDS) {
+    if (stageId === "00-bootstrap") continue;
+    state = markStageSkipped(
+      state,
+      stageId,
+      importedAt,
+      IMPORTED_COMPILE_STATE_SKIP_REASON,
+    );
+  }
+
+  return state;
+}
+
+function importTimestamp(manifest: AlmanacManifest): Date {
+  const compiledAt = new Date(manifest.compiledAt);
+  return Number.isNaN(compiledAt.getTime()) ? new Date() : compiledAt;
+}
+
+function importedRunId(almanacId: string, importedAt: Date): string {
+  const ts = importedAt.toISOString().replace(/[:.]/g, "-");
+  return `import-${almanacId}-${ts}`.slice(0, 64);
 }
 
 function assertAbsolute(name: string, path: string): void {

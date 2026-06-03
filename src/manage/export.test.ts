@@ -397,9 +397,12 @@ async function runTar(args: readonly string[]): Promise<void> {
     stdout: "pipe",
     stderr: "pipe",
   });
-  const exit = await proc.exited;
+  const [exit, stdout, stderr] = await Promise.all([
+    proc.exited,
+    new Response(proc.stdout).text(),
+    new Response(proc.stderr).text(),
+  ]);
   if (exit !== 0) {
-    const stderr = await new Response(proc.stderr).text();
-    throw new Error(`tar exited ${exit}: ${stderr}`);
+    throw new Error(`tar exited ${exit}: ${stderr || stdout}`);
   }
 }

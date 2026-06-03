@@ -17,6 +17,7 @@
  * don't need a real TypeScript install on the test path.
  */
 
+import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,27 +39,51 @@ export interface Spawner {
 }
 
 /**
- * Default spawner backed by `Bun.spawn`. Captures both streams and resolves
- * once the child exits.
+ * Default spawner for short-lived CLI tools. Captures both streams while the
+ * child is running and resolves once the child closes.
  */
 export function createBunSpawner(): Spawner {
   return {
     async spawn(args, opts) {
       const [cmd, ...rest] = args;
       if (!cmd) throw new RangeError("spawn: args must not be empty");
-      const proc = Bun.spawn([cmd, ...rest], {
-        cwd: opts.cwd,
-        stdout: "pipe",
-        stderr: "pipe",
-      });
-      const [exitCode, stdout, stderr] = await Promise.all([
-        proc.exited,
-        new Response(proc.stdout).text(),
-        new Response(proc.stderr).text(),
-      ]);
-      return { exitCode, stdout, stderr };
+      return await spawnAndCapture(cmd, rest, opts.cwd);
     },
   };
+}
+
+function spawnAndCapture(
+  cmd: string,
+  args: readonly string[],
+  cwd: string,
+): Promise<SpawnResult> {
+  return new Promise((resolve, reject) => {
+    const proc = spawn(cmd, [...args], {
+      cwd,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let stdout = "";
+    let stderr = "";
+
+    proc.stdout.setEncoding("utf8");
+    proc.stderr.setEncoding("utf8");
+    proc.stdout.on("data", (chunk) => {
+      stdout += chunk;
+    });
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk;
+    });
+    proc.on("error", reject);
+    proc.on("close", (code, signal) => {
+      const signalMessage =
+        signal === null ? "" : `${stderr.length === 0 ? "" : "\n"}signal: ${signal}`;
+      resolve({
+        exitCode: code ?? 1,
+        stdout,
+        stderr: `${stderr}${signalMessage}`,
+      });
+    });
+  });
 }
 
 // ──────────────────────────────────────────────────────────────────────────────
