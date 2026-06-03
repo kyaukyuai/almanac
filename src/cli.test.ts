@@ -6,6 +6,7 @@
 
 import { spawnSync } from "node:child_process";
 import {
+  mkdir,
   mkdtemp,
   readFile,
   readdir,
@@ -286,6 +287,91 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("2*");
     expect(result.stdout).toContain(
       "legacy: manifest facts/tools 0 / 0, actual 7 / 2",
+    );
+  });
+
+  test("list --json includes lifecycle inventory fields", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(["list", "--json", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const items = JSON.parse(result.stdout) as Array<{
+      almanacId: string;
+      manifest: unknown;
+      lifecycle: {
+        status: string;
+        compile: { status: string; completed: number; failed: string[] };
+        knowledge: {
+          status: string;
+          facts: number;
+          tools: number;
+          manifestFacts: number;
+          manifestTools: number;
+          countsMatch: boolean;
+        };
+        benchmark: { status: string };
+        answer: { status: string };
+        refresh: { status: string; reasons: number };
+        issues: string[];
+        nextActions: string[];
+      };
+    }>;
+
+    const legacy = items.find((item) => item.almanacId === "legacy");
+    expect(legacy).toBeDefined();
+    expect(legacy?.manifest).not.toBeNull();
+    expect(legacy?.lifecycle.status).toBe("attention");
+    expect(legacy?.lifecycle.compile).toMatchObject({
+      status: "ok",
+      completed: STAGE_IDS.length,
+      failed: [],
+    });
+    expect(legacy?.lifecycle.knowledge).toMatchObject({
+      status: "present",
+      facts: 7,
+      tools: 2,
+      manifestFacts: 0,
+      manifestTools: 0,
+      countsMatch: false,
+    });
+    expect(legacy?.lifecycle.benchmark.status).toBe("missing");
+    expect(legacy?.lifecycle.answer.status).toBe("not-ready");
+    expect(legacy?.lifecycle.refresh.status).toBe("due");
+    expect(legacy?.lifecycle.refresh.reasons).toBeGreaterThan(0);
+    expect(legacy?.lifecycle.issues).toContain(
+      "manifest counts differ from actual artifacts",
+    );
+    expect(legacy?.lifecycle.nextActions.some((action) =>
+      action.includes("almanac benchmark legacy --init"),
+    )).toBe(true);
+  });
+
+  test("list reports partial and malformed almanac directories as broken", async () => {
+    await mkdir(join(root, "partial"), { recursive: true });
+    await mkdir(join(root, "malformed"), { recursive: true });
+    await writeFile(join(root, "malformed", "manifest.json"), "{", "utf8");
+
+    const result = runCli(["list", "--json", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const items = JSON.parse(result.stdout) as Array<{
+      almanacId: string;
+      manifest: unknown;
+      lifecycle: { status: string; issues: string[] };
+    }>;
+
+    const partial = items.find((item) => item.almanacId === "partial");
+    const malformed = items.find((item) => item.almanacId === "malformed");
+    expect(partial?.manifest).toBeNull();
+    expect(partial?.lifecycle.status).toBe("broken");
+    expect(partial?.lifecycle.issues).toContain("manifest.json missing");
+    expect(malformed?.manifest).toBeNull();
+    expect(malformed?.lifecycle.status).toBe("broken");
+    expect(malformed?.lifecycle.issues[0]?.startsWith("manifest unreadable:")).toBe(
+      true,
     );
   });
 

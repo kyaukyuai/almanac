@@ -33,6 +33,20 @@ tmp=$(mktemp -d)
 almanac demo --root "$tmp"
 ```
 
+## Installed inventory
+
+```bash
+almanac list --root "$tmp"
+almanac list --json --root "$tmp"
+```
+
+`list` is the root-level lifecycle inventory. The human table stays compact,
+showing ID, lifecycle status, name, actual fact/tool counts, profile, and
+compile time. `list --json` adds a stable `lifecycle` object per almanac with
+compile, knowledge, benchmark, answer, refresh, issues, and next-action
+summaries. Broken or partial directories are reported as `broken` entries
+instead of crashing the entire listing.
+
 ## Install sanity
 
 Before compiling anything, verify the source-first CLI path from the repository
