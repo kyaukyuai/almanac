@@ -303,6 +303,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   almanac, demo handoff, and compile failure recovery
 - [v0.11 RC smoke](./docs/v0.11-rc-smoke.md): release-candidate validation for
   first-run readiness, demo handoff, saved answer replay, and failure recovery
+- [v0.12 plan](./docs/v0.12-plan.md): installed almanac lifecycle, inventory,
+  status, import handoff, registration visibility, and cleanup
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
