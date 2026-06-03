@@ -162,6 +162,7 @@ a resident chat surface.
 | `almanac new <domain> [opts]`                      | compile from domain name                      | ✅   |
 | `almanac update <domain>`                          | TTL-based refresh of sources / facts          | ✅   |
 | `almanac list`                                     | list installed almanacs + lifecycle status    | ✅   |
+| `almanac status <domain>`                          | compact per-almanac lifecycle status          | v0.12 |
 | `almanac inspect <domain>`                         | DOMAIN.md, tool list, freshness, bench score  | ✅   |
 | `almanac run <domain> --tool <name>`                | invoke one compiled tool locally              | v0.5 |
 | `almanac ask <domain> <question>`                   | one-shot cited answer over compiled tools     | v0.7 |
