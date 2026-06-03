@@ -534,8 +534,12 @@ export function formatRunToolArtifactListHuman(
         run.maintenanceDueOnly === undefined
           ? ""
           : ` dueOnly=${run.maintenanceDueOnly}`;
+      const askSuite =
+        run.askSuiteStatus === undefined
+          ? ""
+          : ` askSuite=${run.askSuiteStatus}${run.askSuiteTotal === undefined ? "" : `/${run.askSuiteTotal}`}`;
       lines.push(
-        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  maintenance  exit=${run.exitCode}${steps}${dueOnly} duration=${run.durationMs}ms${label}`,
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  maintenance  exit=${run.exitCode}${steps}${dueOnly}${askSuite} duration=${run.durationMs}ms${label}`,
       );
     } else {
       lines.push(
@@ -836,6 +840,14 @@ function formatMaintenanceArtifactHuman(artifact: MaintenanceArtifact): string {
         : ` ${artifact.benchmark.passed ?? 0}/${artifact.benchmark.total} passed`;
     lines.push(`benchmark: ${artifact.benchmark.status}${counts}`);
   }
+  if (artifact.askSuite !== undefined) {
+    lines.push(`ask-suite: ${formatArtifactAskSuiteSummary(artifact.askSuite)}`);
+    if (artifact.askSuite.error !== undefined) {
+      lines.push(
+        `ask-suite-error: ${artifact.askSuite.error.code}: ${artifact.askSuite.error.message}`,
+      );
+    }
+  }
   lines.push("steps:");
   if (artifact.steps.length === 0) {
     lines.push("  (none)");
@@ -859,6 +871,24 @@ function formatMaintenanceArtifactHuman(artifact: MaintenanceArtifact): string {
     }
   }
   return lines.join("\n") + "\n";
+}
+
+function formatArtifactAskSuiteSummary(
+  askSuite: NonNullable<MaintenanceArtifact["askSuite"]>,
+): string {
+  const counts =
+    askSuite.total === undefined ? "" : `, ${askSuite.passed ?? 0}/${askSuite.total} passed`;
+  const quality = [
+    askSuite.unsupportedClaimCount === undefined
+      ? null
+      : `unsupported=${askSuite.unsupportedClaimCount}`,
+    askSuite.staleCitationCount === undefined ? null : `stale=${askSuite.staleCitationCount}`,
+    askSuite.abstentionMismatchCount === undefined
+      ? null
+      : `abstentionMismatch=${askSuite.abstentionMismatchCount}`,
+  ].filter((part): part is string => part !== null);
+  const qualityText = quality.length === 0 ? "" : `, ${quality.join(", ")}`;
+  return `${askSuite.status}${counts}${qualityText}`;
 }
 
 async function readRunToolManifest(almanacDir: string) {
@@ -1058,6 +1088,14 @@ function summarizeRunToolArtifact(
       ...(artifact.benchmark === undefined
         ? {}
         : { benchmarkStatus: artifact.benchmark.status }),
+      ...(artifact.askSuite === undefined
+        ? {}
+        : {
+            askSuiteStatus: artifact.askSuite.status,
+            ...(artifact.askSuite.total === undefined
+              ? {}
+              : { askSuiteTotal: artifact.askSuite.total }),
+          }),
     };
   }
   return {
