@@ -376,6 +376,153 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("doctor --json reports root hygiene without selecting one almanac", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    await mkdir(join(root, "partial"), { recursive: true });
+    await mkdir(join(root, "malformed"), { recursive: true });
+    await writeFile(join(root, "malformed", "manifest.json"), "{", "utf8");
+    await writeFile(join(root, "almanac-legacy-0.1.0.tar.gz"), "fake", "utf8");
+
+    const home = `${root}-home`;
+    const result = runCli(["doctor", "--json", "--root", root], {
+      HOME: home,
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      checks: Array<{ level: string; name: string; message: string }>;
+      readiness: Array<{ name: string; status: string; nextActions: string[] }>;
+      rootHygiene: {
+        status: string;
+        almanacs: {
+          total: number;
+          attention: number;
+          broken: number;
+        };
+        cleanup: {
+          exportArchives: string[];
+          orphanedMcpRegistrations: unknown[];
+        };
+        issues: string[];
+        nextActions: string[];
+      };
+    };
+
+    expect(parsed.checks).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        name: "root-hygiene",
+      }),
+    );
+    expect(parsed.rootHygiene.status).toBe("needs-validation");
+    expect(parsed.rootHygiene.almanacs.total).toBe(3);
+    expect(parsed.rootHygiene.almanacs.attention).toBe(1);
+    expect(parsed.rootHygiene.almanacs.broken).toBe(2);
+    expect(parsed.rootHygiene.cleanup.exportArchives).toEqual([
+      join(root, "almanac-legacy-0.1.0.tar.gz"),
+    ]);
+    expect(parsed.rootHygiene.cleanup.orphanedMcpRegistrations).toEqual([]);
+    expect(parsed.rootHygiene.issues).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("partial: broken"),
+        expect.stringContaining("malformed: broken"),
+        expect.stringContaining("legacy: attention"),
+      ]),
+    );
+    expect(parsed.rootHygiene.nextActions).toContain(`almanac list --root ${root}`);
+    expect(parsed.readiness).toContainEqual(
+      expect.objectContaining({
+        name: "hygiene",
+        status: "needs-validation",
+      }),
+    );
+  });
+
+  test("doctor detects MCP registrations orphaned from the selected root", async () => {
+    const almanacRoot = join(root, "almanacs");
+    const home = join(root, "home");
+    await mkdir(almanacRoot, { recursive: true });
+    await mkdir(home, { recursive: true });
+    await writeFile(
+      join(home, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          "almanac-missing": {
+            command: "bun",
+            args: [
+              "run",
+              "/tmp/almanac-cli.ts",
+              "serve",
+              "missing",
+              "--root",
+              almanacRoot,
+            ],
+          },
+          "almanac-other-root": {
+            command: "bun",
+            args: [
+              "run",
+              "/tmp/almanac-cli.ts",
+              "serve",
+              "other-root",
+              "--root",
+              join(root, "different-root"),
+            ],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = runCli(["doctor", "--json", "--root", almanacRoot], {
+      HOME: home,
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      checks: Array<{ level: string; name: string; message: string }>;
+      rootHygiene: {
+        status: string;
+        cleanup: {
+          orphanedMcpRegistrations: Array<{
+            client: string;
+            almanacId: string;
+            serverName: string;
+            path: string;
+            nextAction: string;
+          }>;
+        };
+        issues: string[];
+      };
+    };
+
+    expect(parsed.rootHygiene.status).toBe("needs-validation");
+    expect(parsed.rootHygiene.cleanup.orphanedMcpRegistrations).toEqual([
+      expect.objectContaining({
+        client: "claude-code",
+        almanacId: "missing",
+        serverName: "almanac-missing",
+        path: join(home, ".claude.json"),
+      }),
+    ]);
+    expect(
+      parsed.rootHygiene.cleanup.orphanedMcpRegistrations[0]?.nextAction,
+    ).toContain('remove mcpServers["almanac-missing"]');
+    expect(parsed.rootHygiene.issues).toContainEqual(
+      expect.stringContaining("orphaned MCP registration almanac-missing"),
+    );
+    expect(parsed.checks).toContainEqual(
+      expect.objectContaining({
+        level: "warn",
+        name: "root-cleanup",
+      }),
+    );
+  });
+
   test("status --json includes lifecycle usability and latest run summary", async () => {
     await writeLegacyCountFixture({ completed: true });
 
@@ -1093,6 +1240,35 @@ describe("almanac CLI product onboarding", () => {
     expect(doctorWithRefresh.stdout).toContain("ok   refresh");
     expect(doctorWithRefresh.stdout).toContain("last ok");
     expect(doctorWithRefresh.stdout).toContain("label=rc-smoke");
+
+    const rootDoctorJson = runCli(["doctor", "--json", "--root", root], {
+      HOME: join(root, "doctor-home"),
+    });
+    expect(rootDoctorJson.status).toBe(0);
+    expect(rootDoctorJson.stderr).toBe("");
+    expect(
+      (JSON.parse(rootDoctorJson.stdout) as {
+        rootHygiene: {
+          cleanup: {
+            savedRuns: number;
+            savedRunAlmanacs: Array<{
+              almanacId: string;
+              nextAction: string;
+            }>;
+          };
+        };
+      }).rootHygiene.cleanup,
+    ).toEqual(
+      expect.objectContaining({
+        savedRuns: expect.any(Number),
+        savedRunAlmanacs: expect.arrayContaining([
+          expect.objectContaining({
+            almanacId: "sqlite-demo",
+            nextAction: `almanac runs sqlite-demo --prune --keep-latest 20 --dry-run --root ${root}`,
+          }),
+        ]),
+      }),
+    );
 
     const refreshRuns = runCli([
       "runs",

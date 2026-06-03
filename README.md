@@ -186,7 +186,7 @@ before you open the host client.
 | `almanac export <id>` | Package a compiled almanac as a portable archive. |
 | `almanac import <archive>` | Validate or install an exported archive into a root. |
 | `almanac wiki <id>` | Export a Markdown inspection bundle for review and handoff. |
-| `almanac doctor [id]` | Diagnose local runtime, credentials, artifacts, and readiness. |
+| `almanac doctor [id]` | Diagnose local runtime, credentials, root hygiene, artifacts, and readiness. |
 
 ## Runtime Model
 

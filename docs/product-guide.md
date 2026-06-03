@@ -47,6 +47,22 @@ compile, knowledge, benchmark, answer, refresh, issues, and next-action
 summaries. Broken or partial directories are reported as `broken` entries
 instead of crashing the entire listing.
 
+`doctor` without an almanac id adds root hygiene on top of runtime and
+credential checks:
+
+```bash
+almanac doctor --root "$tmp"
+almanac doctor --json --root "$tmp"
+```
+
+The `rootHygiene` JSON object summarizes installed almanacs by lifecycle
+status, reports broken or attention-needed directories, detects MCP
+registrations that still point at this root after the almanac is gone, and
+lists cleanup opportunities. Cleanup remains explicit: use
+`almanac runs <id> --prune ... --dry-run` for saved run retention, inspect
+export archives before deleting them, and repair or remove orphaned MCP entries
+in the named client config.
+
 ## Per-almanac status
 
 ```bash
