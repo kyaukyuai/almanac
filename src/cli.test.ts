@@ -1385,6 +1385,38 @@ describe("almanac CLI product onboarding", () => {
     expect(importedStatus.status).toBe(0);
     expect(importedStatus.stderr).toBe("");
     expect(importedStatus.stdout).toContain("almanac status: sqlite-demo");
+    expect(importedStatus.stdout).not.toContain("compile state unreadable");
+    expect(importedStatus.stdout).not.toContain("status        broken");
+
+    const importedInspect = runCli([
+      "inspect",
+      "sqlite-demo",
+      "--root",
+      importRoot,
+    ]);
+    expect(importedInspect.status).toBe(0);
+    expect(importedInspect.stderr).toBe("");
+    expect(importedInspect.stdout).toContain("almanac: sqlite-demo");
+
+    const importedProfile = runCli([
+      "profile",
+      "sqlite-demo",
+      "--root",
+      importRoot,
+    ]);
+    expect(importedProfile.status).toBe(0);
+    expect(importedProfile.stderr).toBe("");
+    expect(importedProfile.stdout).toContain("expert profile: sqlite-demo");
+
+    const importedBenchmark = runCli([
+      "benchmark",
+      "sqlite-demo",
+      "--root",
+      importRoot,
+    ]);
+    expect(importedBenchmark.status).toBe(0);
+    expect(importedBenchmark.stderr).toBe("");
+    expect(importedBenchmark.stdout).toContain("benchmark: sqlite-demo");
 
     const importCollision = runCli([
       "import",
