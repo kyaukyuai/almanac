@@ -329,6 +329,8 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   status, import handoff, registration visibility, and cleanup
 - [v0.12 RC smoke](./docs/v0.12-rc-smoke.md): release-candidate validation for
   installed lifecycle, import handoff, registration visibility, and cleanup
+- [v0.13 plan](./docs/v0.13-plan.md): personal almanac maintenance, maintain
+  runner, repair/cleanup, scheduler handoff, and answer fixture upkeep
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
