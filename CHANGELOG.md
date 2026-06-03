@@ -11,6 +11,48 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.12.0] — 2026-06-03
+
+### Added
+
+- **Installed lifecycle inventory.** `almanac list` now reports lifecycle
+  readiness across a root, including compile health, facts/tools, benchmark
+  state, answer readiness, refresh state, saved-run signals, registration
+  state, and concrete next actions.
+- **Per-almanac status view.** `almanac status <id>` gives a compact operator
+  view over usability, compile state, knowledge, benchmark, answer mode,
+  refresh due state, registration drift, latest runs, and recovery guidance.
+- **Import handoff command.** `almanac import <archive>` validates exported
+  almanac archives, supports dry-run/apply flows, handles collisions
+  explicitly, and prints post-import inspection guidance.
+- **Registration visibility and root hygiene.** Registration status is visible
+  from lifecycle commands and `doctor` can report broken directories, partial
+  almanacs, orphaned registrations, and cleanup opportunities without
+  destructive defaults.
+- **v0.12 RC smoke runbook.** `docs/v0.12-rc-smoke.md` covers source and linked
+  CLI sanity, sqlite-demo lifecycle flow, export/import/wiki handoff,
+  registration visibility, cleanup dry-runs, and credentialed Enterprise AI
+  compile/ask validation.
+
+### Changed
+
+- **Installed almanac posture.** The product docs now present almanacs as local
+  assets that can be listed, inspected, refreshed, registered, exported,
+  imported, and removed as one lifecycle rather than as disconnected commands.
+- **Answer fixture promotion guidance.** Real-provider saved answers are
+  promoted to deterministic ask fixtures only when they are cited `ok` answers;
+  correct abstentions stay validated by saved-run replay.
+
+### Fixed
+
+- **Default import lifecycle handoff.** Importing default exports restores an
+  inspectable installed almanac without requiring compile artifacts that are
+  intentionally excluded from portable archives.
+- **Non-replayable abstention fixtures.** `ask-fixtures add-from-run` now
+  rejects saved abstentions that had cited tool evidence, avoiding mismatches
+  where provider-free fixture replay would infer `ok` from deterministic
+  citations.
+
 ## [0.11.0] — 2026-06-03
 
 ### Added
