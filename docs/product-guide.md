@@ -389,6 +389,9 @@ The wiki bundle writes `README.md`, `sources.md`, `facts.md`, `tools.md`,
 `benchmark.md`, and `artifacts.json`. `artifacts.json` includes its own
 manifest entry so reviewers can verify the exact file list and byte sizes.
 
+For the v0.12 installed lifecycle release-candidate smoke sequence, see
+[`docs/v0.12-rc-smoke.md`](./v0.12-rc-smoke.md).
+
 ## Answer mode
 
 `almanac ask` is the local answer gate. It is intentionally different
