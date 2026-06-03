@@ -84,10 +84,20 @@ Default export excludes `.compile/` and `.runs/`. Use `--include-compile` or
 `--include-runs` only when the receiver needs diagnostics or saved run/answer
 artifacts.
 
+Validate the handoff before writing files, then import it into a fresh root:
+
+```bash
+handoff_root="$(mktemp -d)"
+almanac import "$tmp/sqlite-demo.tar.gz" --root "$handoff_root"
+almanac import "$tmp/sqlite-demo.tar.gz" --root "$handoff_root" --apply
+almanac status sqlite-demo --root "$handoff_root"
+almanac benchmark sqlite-demo --root "$handoff_root"
+```
+
 ## Answer-Mode Sample
 
 To make the sample answer-ready without a live provider, use the mock provider
-from the v0.11 RC smoke:
+flow from the v0.12 RC smoke:
 
 ```bash
 export ALMANAC_LLM=mock
@@ -144,7 +154,7 @@ Enterprise AI remains the credentialed release sample because it exercises real
 provider compile, source discovery, generated tools, benchmark generation,
 real-provider ask, saved answer replay, and ask-suite promotion. The current
 commands are maintained in
-[`docs/v0.11-rc-smoke.md`](./v0.11-rc-smoke.md#6-enterprise-ai-fresh-compile-smoke).
+[`docs/v0.12-rc-smoke.md`](./v0.12-rc-smoke.md#7-enterprise-ai-fresh-compile-and-update-smoke).
 
 Keep the committed sample small and deterministic. Keep the Enterprise AI
 sample generated on demand because its sources, provider outputs, and costs are
