@@ -279,6 +279,19 @@ For recurring cron, GitHub Actions, or launchd usage, see
 codes, provider key requirements, lock conflicts, saved refresh artifacts,
 retention, and export behavior.
 
+To generate caller-owned handoff snippets instead of writing scheduler files by
+hand, use `schedule print`:
+
+```bash
+almanac schedule print sqlite-demo --target cron --root "$tmp"
+almanac schedule print sqlite-demo --target launchd --apply --root "$tmp"
+almanac schedule print sqlite-demo --target github-actions --json --root "$tmp"
+```
+
+The default snippet runs a read-only maintenance dry-run. `--apply` switches the
+rendered command to `maintain --apply --due-only` and should be reviewed before
+installation.
+
 ## Run artifacts
 
 Use `almanac run --save` when a local tool invocation should leave an audit
