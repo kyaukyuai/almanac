@@ -14,6 +14,8 @@
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac status <id> [opts]             show a compact lifecycle summary
  *   almanac maintain [id] [opts]           plan/apply due maintenance
+ *   almanac repair <id> [opts]             audit/apply low-risk repairs
+ *   almanac cleanup [opts]                 audit/apply root cleanup candidates
  *   almanac inspect <id> [opts]            print manifest + per-stage state
  *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
@@ -147,6 +149,7 @@ import {
   compileStatePath,
   ensureAlmanacLayout,
   knowledgeIndexManifestPath,
+  manifestPath,
   readCompileState,
   readImplementedToolCount,
   readKnowledgeIndexManifest,
@@ -1825,6 +1828,21 @@ interface MaintainOptions {
   note?: string;
 }
 
+interface RepairOptions {
+  root: string;
+  json?: boolean;
+  dryRun?: boolean;
+  apply?: boolean;
+}
+
+interface CleanupOptions {
+  root: string;
+  json?: boolean;
+  dryRun?: boolean;
+  apply?: boolean;
+  keepLatest?: string;
+}
+
 type McpServerEntry = {
   command: string;
   args: string[];
@@ -2113,6 +2131,96 @@ interface MaintenanceBatchResult {
   skipped: number;
   failed: number;
   results: MaintenanceBatchEntry[];
+}
+
+type RepairCandidateKind =
+  | "manifest-counts"
+  | "compile"
+  | "knowledge"
+  | "registration"
+  | "runs"
+  | "broken-directory";
+type RepairCandidateStatus = "planned" | "applied" | "skipped" | "failed";
+
+interface RepairCandidate {
+  id: string;
+  kind: RepairCandidateKind;
+  message: string;
+  risk: "low" | "medium";
+  applySupported: boolean;
+  command: string | null;
+  paths: string[];
+  client?: RegisterClient;
+  component?: "skill" | "mcp";
+}
+
+interface RepairCandidateResult extends RepairCandidate {
+  status: RepairCandidateStatus;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+interface RepairReport {
+  schemaVersion: "0.1.0";
+  almanacId: string;
+  version: string | null;
+  root: string;
+  almanacDir: string;
+  checkedAt: string;
+  mode: "dry-run" | "apply";
+  dryRun: boolean;
+  status: "clean" | "repairable" | "partial" | "failed";
+  candidates: RepairCandidateResult[];
+  applied: number;
+  skipped: number;
+  failed: number;
+  nextActions: string[];
+}
+
+type CleanupCandidateKind =
+  | "saved-runs"
+  | "export-archive"
+  | "orphaned-mcp-registration"
+  | "broken-directory";
+type CleanupCandidateStatus = "planned" | "applied" | "skipped" | "failed";
+
+interface CleanupCandidate {
+  id: string;
+  kind: CleanupCandidateKind;
+  message: string;
+  risk: "low" | "medium";
+  applySupported: boolean;
+  command: string | null;
+  paths: string[];
+  count: number;
+  almanacId?: string;
+  client?: RegisterClient;
+  serverName?: string;
+}
+
+interface CleanupCandidateResult extends CleanupCandidate {
+  status: CleanupCandidateStatus;
+  error?: {
+    code: string;
+    message: string;
+  };
+}
+
+interface CleanupReport {
+  schemaVersion: "0.1.0";
+  root: string;
+  checkedAt: string;
+  mode: "dry-run" | "apply";
+  dryRun: boolean;
+  keepLatest: number;
+  status: "clean" | "attention" | "partial" | "failed";
+  candidates: CleanupCandidateResult[];
+  applied: number;
+  skipped: number;
+  failed: number;
+  nextActions: string[];
 }
 
 async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
@@ -3979,6 +4087,794 @@ async function cmdMaintain(
     return;
   }
   process.stdout.write(formatMaintenanceReportHuman(report));
+}
+
+async function cmdRepair(id: string, opts: RepairOptions): Promise<void> {
+  validateRepairOptions(opts);
+  const report =
+    opts.apply === true
+      ? await applyRepair(id, opts)
+      : await readRepairReport(id, opts);
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(report, null, 2) + "\n"
+      : formatRepairReportHuman(report),
+  );
+  if (report.failed > 0) process.exitCode = 1;
+}
+
+async function readRepairReport(
+  id: string,
+  opts: RepairOptions,
+  now = new Date(),
+): Promise<RepairReport> {
+  const statusReport = await readAlmanacStatusReport(id, opts);
+  const candidates = await repairCandidatesForStatus(statusReport, opts);
+  const results = candidates.map<RepairCandidateResult>((candidate) => ({
+    ...candidate,
+    status: "planned",
+  }));
+  return repairReportFromResults({
+    statusReport,
+    opts,
+    checkedAt: now.toISOString(),
+    mode: "dry-run",
+    candidates: results,
+  });
+}
+
+async function applyRepair(
+  id: string,
+  opts: RepairOptions,
+  now = new Date(),
+): Promise<RepairReport> {
+  const statusReport = await readAlmanacStatusReport(id, opts);
+  const candidates = await repairCandidatesForStatus(statusReport, opts);
+  const results: RepairCandidateResult[] = [];
+  for (const candidate of candidates) {
+    results.push(await applyRepairCandidate(candidate, statusReport, opts));
+  }
+  return repairReportFromResults({
+    statusReport,
+    opts,
+    checkedAt: now.toISOString(),
+    mode: "apply",
+    candidates: results,
+  });
+}
+
+function repairReportFromResults(args: {
+  statusReport: AlmanacStatusReport;
+  opts: RepairOptions;
+  checkedAt: string;
+  mode: "dry-run" | "apply";
+  candidates: RepairCandidateResult[];
+}): RepairReport {
+  const applied = args.candidates.filter((candidate) =>
+    candidate.status === "applied"
+  ).length;
+  const skipped = args.candidates.filter((candidate) =>
+    candidate.status === "skipped"
+  ).length;
+  const failed = args.candidates.filter((candidate) =>
+    candidate.status === "failed"
+  ).length;
+  const nextActions = uniqueStrings([
+    ...args.candidates
+      .filter((candidate) =>
+        args.mode === "dry-run" ||
+        candidate.status === "skipped" ||
+        candidate.status === "failed"
+      )
+      .map((candidate) => candidate.command)
+      .filter((command): command is string => command !== null),
+    ...(args.candidates.length === 0
+      ? [`almanac status ${args.statusReport.almanacId}${rootArg(args.opts.root)}`]
+      : []),
+  ]);
+  return {
+    schemaVersion: "0.1.0",
+    almanacId: args.statusReport.almanacId,
+    version: args.statusReport.manifest?.version ?? null,
+    root: args.opts.root,
+    almanacDir: args.statusReport.almanacDir,
+    checkedAt: args.checkedAt,
+    mode: args.mode,
+    dryRun: args.mode === "dry-run",
+    status:
+      failed > 0
+        ? "failed"
+        : args.candidates.length === 0
+          ? "clean"
+          : args.mode === "apply" && skipped > 0
+            ? "partial"
+            : args.mode === "apply"
+              ? "clean"
+              : "repairable",
+    candidates: args.candidates,
+    applied,
+    skipped,
+    failed,
+    nextActions,
+  };
+}
+
+async function repairCandidatesForStatus(
+  statusReport: AlmanacStatusReport,
+  opts: RepairOptions,
+): Promise<RepairCandidate[]> {
+  const rootSuffix = rootArg(opts.root);
+  const candidates: RepairCandidate[] = [];
+
+  if (
+    statusReport.manifest !== null &&
+    statusReport.lifecycle.knowledge.countsMatch === false
+  ) {
+    candidates.push({
+      id: "manifest-counts",
+      kind: "manifest-counts",
+      message:
+        `manifest counts ${statusReport.lifecycle.knowledge.manifestFacts} / ${statusReport.lifecycle.knowledge.manifestTools}` +
+        ` differ from actual ${statusReport.lifecycle.knowledge.facts} / ${statusReport.lifecycle.knowledge.tools}`,
+      risk: "low",
+      applySupported: true,
+      command: `almanac repair ${statusReport.almanacId} --apply${rootSuffix}`,
+      paths: [
+        manifestPath(statusReport.almanacDir),
+        knowledgeIndexManifestPath(statusReport.almanacDir),
+      ],
+    });
+  }
+
+  for (const repair of maintenanceRepairCandidates(statusReport)) {
+    if (repair.kind === "registration") continue;
+    if (
+      repair.kind === "broken-directory" &&
+      candidates.some((candidate) => candidate.kind === "broken-directory")
+    ) {
+      continue;
+    }
+    candidates.push({
+      id: repair.kind,
+      kind: repair.kind,
+      message: repair.message,
+      risk: repair.risk,
+      applySupported: false,
+      command: repair.command,
+      paths: repairPathsForMaintenanceCandidate(statusReport, repair.kind),
+    });
+  }
+
+  if (statusReport.manifest !== null) {
+    for (const client of statusReport.lifecycle.registration.clients) {
+      if (!registrationClientRepairable(client)) continue;
+      candidates.push(
+        ...registrationRepairCandidatesForClient(statusReport, opts, client),
+      );
+    }
+  }
+
+  return candidates;
+}
+
+function repairPathsForMaintenanceCandidate(
+  statusReport: AlmanacStatusReport,
+  kind: MaintenanceRepairCandidate["kind"],
+): string[] {
+  if (kind === "compile") {
+    return [compileStatePath(statusReport.almanacDir)];
+  }
+  if (kind === "knowledge") {
+    return [knowledgeIndexManifestPath(statusReport.almanacDir)];
+  }
+  if (kind === "runs") {
+    return [join(statusReport.almanacDir, ".runs")];
+  }
+  return [statusReport.almanacDir];
+}
+
+function registrationClientRepairable(client: RegistrationClientState): boolean {
+  if (client.status === "stale" || client.status === "unreadable") return true;
+  if (client.status !== "missing") return false;
+  return [client.skill.status, client.mcp.status].some((status) =>
+    status === "current" ||
+    status === "stale" ||
+    status === "mismatched" ||
+    status === "unreadable"
+  );
+}
+
+function registrationRepairCandidatesForClient(
+  statusReport: AlmanacStatusReport,
+  opts: RepairOptions,
+  client: RegistrationClientState,
+): RepairCandidate[] {
+  const rootSuffix = rootArg(opts.root);
+  const candidates: RepairCandidate[] = [];
+  if (
+    client.skill.status !== "current" &&
+    client.skill.status !== "unsupported"
+  ) {
+    const srcPath = join(
+      statusReport.almanacDir,
+      "adapters",
+      "skill",
+      "SKILL.md",
+    );
+    const sourceMissing = client.skill.issues.some((issue) =>
+      issue.startsWith("source SKILL.md missing")
+    );
+    const applySupported = client.skill.status !== "unreadable" && !sourceMissing;
+    candidates.push({
+      id: `registration:${client.client}:skill`,
+      kind: "registration",
+      message: `${client.client} skill registration is ${client.skill.status}`,
+      risk: "low",
+      applySupported,
+      command:
+        registrationComponentCommand(client, "skill") ??
+        (sourceMissing
+          ? `almanac update ${statusReport.almanacId} --from-stage=10-adapter-generation --no-bump${rootSuffix}`
+          : `almanac register ${statusReport.almanacId} --client=${client.client} --target=skill --apply${rootSuffix}`),
+      paths: [srcPath, ...(client.skill.path === null ? [] : [client.skill.path])],
+      client: client.client,
+      component: "skill",
+    });
+  }
+  if (
+    client.mcp.status !== "current" &&
+    client.mcp.status !== "unsupported"
+  ) {
+    const applySupported = client.mcp.status !== "unreadable";
+    candidates.push({
+      id: `registration:${client.client}:mcp`,
+      kind: "registration",
+      message: `${client.client} MCP registration is ${client.mcp.status}`,
+      risk: "low",
+      applySupported,
+      command:
+        registrationComponentCommand(client, "mcp") ??
+        (applySupported
+          ? `almanac register ${statusReport.almanacId} --client=${client.client} --target=mcp --apply${rootSuffix}`
+          : `fix MCP config: ${client.mcp.path}`),
+      paths: client.mcp.path === null ? [] : [client.mcp.path],
+      client: client.client,
+      component: "mcp",
+    });
+  }
+  return candidates;
+}
+
+function registrationComponentCommand(
+  client: RegistrationClientState,
+  component: "skill" | "mcp",
+): string | null {
+  return (
+    client.nextActions.find((action) => action.includes(`--target=${component}`)) ??
+    client.nextActions.find((action) =>
+      component === "mcp"
+        ? action.startsWith("fix MCP config:")
+        : action.includes("10-adapter-generation")
+    ) ??
+    null
+  );
+}
+
+async function applyRepairCandidate(
+  candidate: RepairCandidate,
+  statusReport: AlmanacStatusReport,
+  opts: RepairOptions,
+): Promise<RepairCandidateResult> {
+  if (!candidate.applySupported) {
+    return { ...candidate, status: "skipped" };
+  }
+  try {
+    if (candidate.kind === "manifest-counts") {
+      if (statusReport.manifest === null) {
+        throw new Error("manifest is missing");
+      }
+      await writeManifestWithActualCounts(
+        statusReport.almanacDir,
+        statusReport.manifest,
+      );
+      return { ...candidate, status: "applied" };
+    }
+    if (candidate.kind === "registration") {
+      if (statusReport.manifest === null) {
+        throw new Error("manifest is missing");
+      }
+      if (candidate.client === undefined || candidate.component === undefined) {
+        throw new Error("registration candidate is missing client/component");
+      }
+      await applyRegistrationRepair({
+        almanacDir: statusReport.almanacDir,
+        manifest: statusReport.manifest,
+        root: opts.root,
+        client: candidate.client,
+        component: candidate.component,
+      });
+      return { ...candidate, status: "applied" };
+    }
+    return { ...candidate, status: "skipped" };
+  } catch (e) {
+    return {
+      ...candidate,
+      status: "failed",
+      error: {
+        code: "repair-failed",
+        message: unknownErrorMessage(e),
+      },
+    };
+  }
+}
+
+async function applyRegistrationRepair(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  root: string;
+  client: RegisterClient;
+  component: "skill" | "mcp";
+}): Promise<void> {
+  const profile = CLIENT_PROFILES[args.client];
+  if (profile === undefined) {
+    throw new Error(`unsupported client: ${args.client}`);
+  }
+  if (args.component === "skill") {
+    if (profile.skillsDir === null) {
+      throw new Error(`${args.client} has no skills directory`);
+    }
+    await writeSkillRegistration({
+      almanacDir: args.almanacDir,
+      almanacId: args.manifest.almanacId,
+      skillsDir: profile.skillsDir,
+    });
+    return;
+  }
+  await writeMcpRegistration({
+    serverName: mcpServerName(args.manifest.almanacId),
+    mcpConfigPath: profile.mcpConfigPath,
+    entry: expectedMcpEntry(args.manifest.almanacId, args.root),
+    format: profile.format,
+    mcpServersKey: profile.mcpServersKey,
+  });
+}
+
+async function writeSkillRegistration(args: {
+  almanacDir: string;
+  almanacId: string;
+  skillsDir: string;
+}): Promise<void> {
+  const srcPath = join(args.almanacDir, "adapters", "skill", "SKILL.md");
+  const destDir = join(args.skillsDir, `almanac-${args.almanacId}`);
+  const destPath = join(destDir, "SKILL.md");
+  if (!existsSync(srcPath)) {
+    throw new Error(`source SKILL.md not found at ${srcPath}`);
+  }
+  await mkdir(destDir, { recursive: true });
+  await copyFile(srcPath, destPath);
+}
+
+async function writeMcpRegistration(args: {
+  serverName: string;
+  mcpConfigPath: string;
+  entry: McpServerEntry;
+  format: McpConfigFormat;
+  mcpServersKey: string;
+}): Promise<{ existed: boolean }> {
+  let config: Record<string, unknown> = {};
+  if (existsSync(args.mcpConfigPath)) {
+    config = parseMcpConfig(
+      await readFile(args.mcpConfigPath, "utf8"),
+      args.format,
+    );
+  }
+  const currentServers = config[args.mcpServersKey];
+  const servers: Record<string, unknown> =
+    currentServers !== null &&
+    typeof currentServers === "object" &&
+    !Array.isArray(currentServers)
+      ? currentServers as Record<string, unknown>
+      : {};
+  const existed = args.serverName in servers;
+  servers[args.serverName] = args.entry;
+  config[args.mcpServersKey] = servers;
+  await writeMcpConfigAtomic({
+    path: args.mcpConfigPath,
+    config,
+    format: args.format,
+  });
+  return { existed };
+}
+
+function formatRepairReportHuman(report: RepairReport): string {
+  const lines = [
+    `repair: ${report.almanacId} (${report.version ?? "unknown"})`,
+    `  status        ${report.status}`,
+    `  mode          ${report.mode}`,
+    `  dir           ${report.almanacDir}`,
+    `  candidates    ${report.candidates.length}`,
+    `  applied       ${report.applied}`,
+    `  skipped       ${report.skipped}`,
+    `  failed        ${report.failed}`,
+    "",
+    "candidates:",
+  ];
+  if (report.candidates.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const candidate of report.candidates) {
+      const apply = candidate.applySupported ? "apply-supported" : "manual";
+      lines.push(
+        `  - ${candidate.status} ${candidate.id} (${candidate.risk}, ${apply}): ${candidate.message}`,
+      );
+      if (candidate.command !== null) {
+        lines.push(`    command: ${candidate.command}`);
+      }
+      for (const path of candidate.paths) {
+        lines.push(`    path: ${path}`);
+      }
+      if (candidate.error !== undefined) {
+        lines.push(`    error: ${candidate.error.message}`);
+      }
+    }
+  }
+  if (report.dryRun && report.candidates.length > 0) {
+    lines.push("", "Nothing was written. Re-run with --apply for supported repairs.");
+  }
+  if (report.nextActions.length > 0) {
+    lines.push("", "next actions:");
+    for (const action of report.nextActions) {
+      lines.push(`  - ${action}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function validateRepairOptions(opts: RepairOptions): void {
+  if (opts.apply === true && opts.dryRun === true) {
+    repairUsageError("--apply and --dry-run are mutually exclusive");
+  }
+}
+
+function repairUsageError(message: string): never {
+  process.stderr.write(`error: repair: ${message}\n`);
+  process.exit(2);
+}
+
+async function cmdCleanup(opts: CleanupOptions): Promise<void> {
+  validateCleanupOptions(opts);
+  const keepLatest = parseCleanupKeepLatest(opts.keepLatest);
+  const report =
+    opts.apply === true
+      ? await applyCleanup(opts, keepLatest)
+      : await readCleanupReport(opts, keepLatest);
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(report, null, 2) + "\n"
+      : formatCleanupReportHuman(report),
+  );
+  if (report.failed > 0) process.exitCode = 1;
+}
+
+async function readCleanupReport(
+  opts: CleanupOptions,
+  keepLatest: number,
+  now = new Date(),
+): Promise<CleanupReport> {
+  const candidates = await cleanupCandidatesForRoot(opts, keepLatest);
+  const results = candidates.map<CleanupCandidateResult>((candidate) => ({
+    ...candidate,
+    status: "planned",
+  }));
+  return cleanupReportFromResults({
+    opts,
+    keepLatest,
+    checkedAt: now.toISOString(),
+    mode: "dry-run",
+    candidates: results,
+  });
+}
+
+async function applyCleanup(
+  opts: CleanupOptions,
+  keepLatest: number,
+  now = new Date(),
+): Promise<CleanupReport> {
+  const candidates = await cleanupCandidatesForRoot(opts, keepLatest);
+  const results: CleanupCandidateResult[] = [];
+  for (const candidate of candidates) {
+    results.push(await applyCleanupCandidate(candidate, opts, keepLatest));
+  }
+  return cleanupReportFromResults({
+    opts,
+    keepLatest,
+    checkedAt: now.toISOString(),
+    mode: "apply",
+    candidates: results,
+  });
+}
+
+function cleanupReportFromResults(args: {
+  opts: CleanupOptions;
+  keepLatest: number;
+  checkedAt: string;
+  mode: "dry-run" | "apply";
+  candidates: CleanupCandidateResult[];
+}): CleanupReport {
+  const applied = args.candidates.filter((candidate) =>
+    candidate.status === "applied"
+  ).length;
+  const skipped = args.candidates.filter((candidate) =>
+    candidate.status === "skipped"
+  ).length;
+  const failed = args.candidates.filter((candidate) =>
+    candidate.status === "failed"
+  ).length;
+  const nextActions = uniqueStrings([
+    ...args.candidates
+      .filter((candidate) =>
+        args.mode === "dry-run" ||
+        candidate.status === "skipped" ||
+        candidate.status === "failed"
+      )
+      .map((candidate) => candidate.command)
+      .filter((command): command is string => command !== null),
+    ...(args.candidates.length === 0 ? [`almanac doctor${rootArg(args.opts.root)}`] : []),
+  ]);
+  return {
+    schemaVersion: "0.1.0",
+    root: args.opts.root,
+    checkedAt: args.checkedAt,
+    mode: args.mode,
+    dryRun: args.mode === "dry-run",
+    keepLatest: args.keepLatest,
+    status:
+      failed > 0
+        ? "failed"
+        : args.candidates.length === 0
+          ? "clean"
+          : args.mode === "apply" && skipped > 0
+            ? "partial"
+            : args.mode === "apply"
+              ? "clean"
+              : "attention",
+    candidates: args.candidates,
+    applied,
+    skipped,
+    failed,
+    nextActions,
+  };
+}
+
+async function cleanupCandidatesForRoot(
+  opts: CleanupOptions,
+  keepLatest: number,
+): Promise<CleanupCandidate[]> {
+  const rootSuffix = rootArg(opts.root);
+  const [items, rootHygiene] = await Promise.all([
+    readLifecycleInventory(opts.root),
+    readRootHygieneReport(opts.root),
+  ]);
+  const candidates: CleanupCandidate[] = [];
+
+  for (const item of items) {
+    if (item.manifest === null) continue;
+    try {
+      const pruned = await pruneRunToolArtifacts({
+        almanacDir: item.almanacDir,
+        keepLatest,
+        apply: false,
+      });
+      if (pruned.runs.length === 0) continue;
+      candidates.push({
+        id: `saved-runs:${item.almanacId}`,
+        kind: "saved-runs",
+        message:
+          `${pruned.runs.length} saved run artifact(s) exceed keep-latest ${keepLatest}`,
+        risk: "low",
+        applySupported: true,
+        command:
+          `almanac runs ${item.almanacId} --prune --keep-latest ${keepLatest} --dry-run${rootSuffix}`,
+        paths: pruned.runs.map((run) => join(item.almanacDir, run.artifactRelPath)),
+        count: pruned.runs.length,
+        almanacId: item.almanacId,
+      });
+    } catch {
+      // Per-almanac status already reports unreadable .runs. Cleanup should not
+      // hide other root-level candidates because one almanac cannot be pruned.
+    }
+  }
+
+  if (rootHygiene.cleanup.exportArchives.length > 0) {
+    candidates.push({
+      id: "export-archives",
+      kind: "export-archive",
+      message:
+        `${rootHygiene.cleanup.exportArchives.length} exported archive(s) are present in the root`,
+      risk: "low",
+      applySupported: false,
+      command: `review exported archives in ${rootHygiene.root}`,
+      paths: rootHygiene.cleanup.exportArchives,
+      count: rootHygiene.cleanup.exportArchives.length,
+    });
+  }
+
+  for (const orphan of rootHygiene.cleanup.orphanedMcpRegistrations) {
+    candidates.push({
+      id: `orphaned-mcp:${orphan.client}:${orphan.serverName}`,
+      kind: "orphaned-mcp-registration",
+      message:
+        `${orphan.client} MCP registration ${orphan.serverName} points at missing ${orphan.almanacId}`,
+      risk: "low",
+      applySupported: true,
+      command: orphan.nextAction,
+      paths: [orphan.path],
+      count: 1,
+      almanacId: orphan.almanacId,
+      client: orphan.client,
+      serverName: orphan.serverName,
+    });
+  }
+
+  for (const item of items.filter((entry) => entry.lifecycle.status === "broken")) {
+    candidates.push({
+      id: `broken-directory:${item.almanacId}`,
+      kind: "broken-directory",
+      message: item.lifecycle.issues[0] ?? "almanac directory is broken",
+      risk: "medium",
+      applySupported: false,
+      command:
+        item.manifest === null
+          ? `inspect or remove directory: ${item.almanacDir}`
+          : `almanac remove ${item.almanacId}${rootSuffix}`,
+      paths: [item.almanacDir],
+      count: 1,
+      almanacId: item.almanacId,
+    });
+  }
+
+  return candidates;
+}
+
+async function applyCleanupCandidate(
+  candidate: CleanupCandidate,
+  opts: CleanupOptions,
+  keepLatest: number,
+): Promise<CleanupCandidateResult> {
+  if (!candidate.applySupported) {
+    return { ...candidate, status: "skipped" };
+  }
+  try {
+    if (candidate.kind === "saved-runs") {
+      if (candidate.almanacId === undefined) {
+        throw new Error("saved-runs candidate is missing almanacId");
+      }
+      await pruneRunToolArtifacts({
+        almanacDir: almanacDirPath(opts.root, candidate.almanacId),
+        keepLatest,
+        apply: true,
+      });
+      return { ...candidate, status: "applied" };
+    }
+    if (candidate.kind === "orphaned-mcp-registration") {
+      if (candidate.client === undefined || candidate.serverName === undefined) {
+        throw new Error("orphaned MCP candidate is missing client/serverName");
+      }
+      const removed = await removeMcpRegistrationEntry({
+        client: candidate.client,
+        serverName: candidate.serverName,
+      });
+      return { ...candidate, status: removed ? "applied" : "skipped" };
+    }
+    return { ...candidate, status: "skipped" };
+  } catch (e) {
+    return {
+      ...candidate,
+      status: "failed",
+      error: {
+        code: "cleanup-failed",
+        message: unknownErrorMessage(e),
+      },
+    };
+  }
+}
+
+async function removeMcpRegistrationEntry(args: {
+  client: RegisterClient;
+  serverName: string;
+}): Promise<boolean> {
+  const profile = CLIENT_PROFILES[args.client];
+  if (profile === undefined || !existsSync(profile.mcpConfigPath)) {
+    return false;
+  }
+  const config = parseMcpConfig(
+    await readFile(profile.mcpConfigPath, "utf8"),
+    profile.format,
+  );
+  const servers = config[profile.mcpServersKey];
+  if (
+    servers === null ||
+    typeof servers !== "object" ||
+    Array.isArray(servers) ||
+    !(args.serverName in (servers as Record<string, unknown>))
+  ) {
+    return false;
+  }
+  delete (servers as Record<string, unknown>)[args.serverName];
+  await writeMcpConfigAtomic({
+    path: profile.mcpConfigPath,
+    config,
+    format: profile.format,
+  });
+  return true;
+}
+
+function formatCleanupReportHuman(report: CleanupReport): string {
+  const lines = [
+    `cleanup: ${report.root}`,
+    `  status        ${report.status}`,
+    `  mode          ${report.mode}`,
+    `  keep-latest   ${report.keepLatest}`,
+    `  candidates    ${report.candidates.length}`,
+    `  applied       ${report.applied}`,
+    `  skipped       ${report.skipped}`,
+    `  failed        ${report.failed}`,
+    "",
+    "candidates:",
+  ];
+  if (report.candidates.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const candidate of report.candidates) {
+      const apply = candidate.applySupported ? "apply-supported" : "manual";
+      lines.push(
+        `  - ${candidate.status} ${candidate.id} (${candidate.risk}, ${apply}): ${candidate.message}`,
+      );
+      if (candidate.command !== null) {
+        lines.push(`    command: ${candidate.command}`);
+      }
+      for (const path of candidate.paths) {
+        lines.push(`    path: ${path}`);
+      }
+      if (candidate.error !== undefined) {
+        lines.push(`    error: ${candidate.error.message}`);
+      }
+    }
+  }
+  if (report.dryRun && report.candidates.length > 0) {
+    lines.push("", "Nothing was written. Re-run with --apply for supported cleanup.");
+  }
+  if (report.nextActions.length > 0) {
+    lines.push("", "next actions:");
+    for (const action of report.nextActions) {
+      lines.push(`  - ${action}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function validateCleanupOptions(opts: CleanupOptions): void {
+  if (opts.apply === true && opts.dryRun === true) {
+    cleanupUsageError("--apply and --dry-run are mutually exclusive");
+  }
+}
+
+function parseCleanupKeepLatest(raw: string | undefined): number {
+  const value = raw ?? "20";
+  const keepLatest = Number.parseInt(value, 10);
+  if (
+    !Number.isInteger(keepLatest) ||
+    keepLatest < 0 ||
+    `${keepLatest}` !== value.trim()
+  ) {
+    cleanupUsageError(`--keep-latest must be a non-negative integer (got "${value}")`);
+  }
+  return keepLatest;
+}
+
+function cleanupUsageError(message: string): never {
+  process.stderr.write(`error: cleanup: ${message}\n`);
+  process.exit(2);
 }
 
 function validateMaintainOptions(
@@ -8112,8 +9008,11 @@ async function registerSkill(args: {
   process.stdout.write(`    from   ${srcPath}\n`);
   process.stdout.write(`    to     ${destPath}\n`);
   if (!args.apply) return;
-  await mkdir(destDir, { recursive: true });
-  await copyFile(srcPath, destPath);
+  await writeSkillRegistration({
+    almanacDir: args.almanacDir,
+    almanacId: args.almanacId,
+    skillsDir: args.skillsDir,
+  });
   process.stdout.write(`    ✓ copied\n`);
 }
 
@@ -8138,31 +9037,21 @@ async function registerMcp(args: {
   );
 
   if (!args.apply) return;
-
-  // Read-modify-write the config. If it doesn't exist yet, create a minimal one.
-  let config: Record<string, unknown> = {};
-  if (existsSync(args.mcpConfigPath)) {
-    const raw = await readFile(args.mcpConfigPath, "utf8");
-    try {
-      config = parseMcpConfig(raw, args.format);
-    } catch (e) {
-      fail(
-        `MCP config at ${args.mcpConfigPath} is not valid ${args.format.toUpperCase()}: ${(e as Error).message}\n` +
-          `       fix the file or pass --mcp-config=<path> to use a different one.`,
-      );
-    }
+  let existed = false;
+  try {
+    ({ existed } = await writeMcpRegistration({
+      serverName: args.serverName,
+      mcpConfigPath: args.mcpConfigPath,
+      entry,
+      format: args.format,
+      mcpServersKey: args.mcpServersKey,
+    }));
+  } catch (e) {
+    fail(
+      `MCP config at ${args.mcpConfigPath} is not valid ${args.format.toUpperCase()}: ${unknownErrorMessage(e)}\n` +
+        `       fix the file or pass --mcp-config=<path> to use a different one.`,
+    );
   }
-  const servers: Record<string, unknown> =
-    (config[args.mcpServersKey] as Record<string, unknown>) ?? {};
-  const existed = args.serverName in servers;
-  servers[args.serverName] = entry;
-  config[args.mcpServersKey] = servers;
-
-  await writeMcpConfigAtomic({
-    path: args.mcpConfigPath,
-    config,
-    format: args.format,
-  });
   process.stdout.write(
     `    ✓ ${existed ? "updated" : "added"} ${args.mcpServersKey}["${args.serverName}"]\n`,
   );
@@ -8256,6 +9145,29 @@ program
   .option("--note <text>", "Human note for saved maintenance artifacts")
   .addOption(rootOption)
   .action(cmdMaintain);
+
+program
+  .command("repair <id>")
+  .description("audit or apply low-risk repairs for one almanac")
+  .option("--apply", "Apply supported repairs")
+  .option("--dry-run", "Show repair candidates without writing files")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdRepair);
+
+program
+  .command("cleanup")
+  .description("audit or apply root-level cleanup candidates")
+  .option("--apply", "Apply supported cleanup actions")
+  .option("--dry-run", "Show cleanup candidates without writing files")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option(
+    "--keep-latest <n>",
+    "Saved run artifacts to keep per almanac before pruning",
+    "20",
+  )
+  .addOption(rootOption)
+  .action(cmdCleanup);
 
 program
   .command("inspect <id>")
