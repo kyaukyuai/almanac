@@ -375,6 +375,96 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("status --json includes lifecycle usability and latest run summary", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(["status", "legacy", "--json", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const status = JSON.parse(result.stdout) as {
+      almanacId: string;
+      status: string;
+      usability: { status: string; reason: string };
+      lifecycle: {
+        compile: { status: string; completed: number };
+        knowledge: {
+          status: string;
+          facts: number;
+          tools: number;
+          countsMatch: boolean;
+        };
+        benchmark: { status: string };
+        answer: { status: string };
+        refresh: { status: string };
+        issues: string[];
+        nextActions: string[];
+      };
+      runs: {
+        latest: unknown;
+        byKind: { tool: unknown; answer: unknown; refresh: unknown };
+        readError: string | null;
+      };
+    };
+
+    expect(status.almanacId).toBe("legacy");
+    expect(status.status).toBe("attention");
+    expect(status.usability.status).toBe("limited");
+    expect(status.usability.reason).toContain("benchmark missing");
+    expect(status.lifecycle.compile).toMatchObject({
+      status: "ok",
+      completed: STAGE_IDS.length,
+    });
+    expect(status.lifecycle.knowledge).toMatchObject({
+      status: "present",
+      facts: 7,
+      tools: 2,
+      countsMatch: false,
+    });
+    expect(status.lifecycle.benchmark.status).toBe("missing");
+    expect(status.lifecycle.answer.status).toBe("not-ready");
+    expect(status.lifecycle.refresh.status).toBe("due");
+    expect(status.lifecycle.nextActions.some((action) =>
+      action.includes("almanac inspect legacy"),
+    )).toBe(true);
+    expect(status.runs.latest).toBeNull();
+    expect(status.runs.byKind.answer).toBeNull();
+    expect(status.runs.readError).toBeNull();
+  });
+
+  test("status shows failed compile recovery as operator next action", async () => {
+    await writeFailedStageFixture({
+      almanacId: "failed-status",
+      stageId: "05-fact-extraction",
+      code: "schema-validation",
+      message: "bad fact payload",
+    });
+
+    const result = runCli(["status", "failed-status", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("almanac status: failed-status");
+    expect(result.stdout).toContain("status        failed");
+    expect(result.stdout).toContain("usability     not-usable");
+    expect(result.stdout).toContain("failed stages: 05-fact-extraction");
+    expect(result.stdout).toContain(
+      "almanac update failed-status --from-stage=05-fact-extraction --no-bump",
+    );
+  });
+
+  test("status reports partial almanac directories without crashing", async () => {
+    await mkdir(join(root, "partial"), { recursive: true });
+
+    const result = runCli(["status", "partial", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("almanac status: partial (partial)");
+    expect(result.stdout).toContain("status        broken");
+    expect(result.stdout).toContain("manifest.json missing");
+  });
+
   test("inspect shows actual counts first and the stale manifest counts below", async () => {
     await writeLegacyCountFixture();
 

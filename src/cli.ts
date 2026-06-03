@@ -12,6 +12,7 @@
  *                                          (resets stages from --from-stage
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
+ *   almanac status <id> [opts]             show a compact lifecycle summary
  *   almanac inspect <id> [opts]            print manifest + per-stage state
  *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
@@ -1795,6 +1796,11 @@ interface ListOptions {
   json?: boolean;
 }
 
+interface StatusOptions {
+  root: string;
+  json?: boolean;
+}
+
 type LifecycleOverallStatus = "ok" | "attention" | "failed" | "broken";
 type LifecycleCompileStatus = "ok" | "attention" | "failed" | "missing";
 type LifecycleKnowledgeStatus = "present" | "missing" | "unreadable";
@@ -1806,6 +1812,7 @@ type LifecycleBenchmarkStatus =
   | "needs-validation"
   | "unreadable";
 type LifecycleRefreshStatus = "due" | "not-due" | "unknown";
+type LifecycleUsabilityStatus = "usable" | "limited" | "not-usable";
 
 interface LifecycleInventoryItem {
   almanacId: string;
@@ -1864,6 +1871,33 @@ interface LifecycleInventoryItem {
   };
 }
 
+interface LifecycleUsability {
+  status: LifecycleUsabilityStatus;
+  reason: string;
+}
+
+interface LifecycleLatestRuns {
+  latest: RunToolArtifactSummary | null;
+  byKind: {
+    tool: RunToolArtifactSummary | null;
+    answer: RunToolArtifactSummary | null;
+    refresh: RunToolArtifactSummary | null;
+  };
+  readError: string | null;
+}
+
+interface AlmanacStatusReport {
+  almanacId: string;
+  almanacDir: string;
+  displayName: string;
+  manifest: AlmanacManifest | null;
+  status: LifecycleOverallStatus;
+  usability: LifecycleUsability;
+  lifecycle: LifecycleInventoryItem["lifecycle"];
+  runs: LifecycleLatestRuns;
+  nextActions: string[];
+}
+
 async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
   if (!existsSync(root)) return [];
   const entries = await readdir(root, { withFileTypes: true });
@@ -1874,6 +1908,75 @@ async function readLifecycleInventory(root: string): Promise<LifecycleInventoryI
   );
   items.sort((a, b) => a.almanacId.localeCompare(b.almanacId));
   return items;
+}
+
+async function readAlmanacStatusReport(
+  id: string,
+  opts: StatusOptions,
+): Promise<AlmanacStatusReport> {
+  const dir = almanacDirPath(opts.root, id);
+  if (!existsSync(dir)) {
+    fail(`almanac not found: ${dir}`);
+  }
+  const item = await readLifecycleInventoryItem(opts.root, id);
+  const runs = await readLifecycleLatestRuns(dir);
+  const runReadError =
+    runs.readError === null ? [] : [`saved runs unreadable: ${runs.readError}`];
+  const nextActions = uniqueStrings([
+    ...item.lifecycle.nextActions,
+    ...(runs.readError === null
+      ? [`view saved runs: almanac runs ${id}${rootArg(opts.root)}`]
+      : [`inspect runs directory: ${join(dir, ".runs")}`]),
+  ]);
+
+  return {
+    almanacId: item.almanacId,
+    almanacDir: item.almanacDir,
+    displayName: item.displayName,
+    manifest: item.manifest,
+    status: item.lifecycle.status,
+    usability: lifecycleUsability(item),
+    lifecycle: {
+      ...item.lifecycle,
+      issues: uniqueStrings([...item.lifecycle.issues, ...runReadError]),
+      nextActions,
+    },
+    runs,
+    nextActions,
+  };
+}
+
+async function readLifecycleLatestRuns(
+  almanacDir: string,
+): Promise<LifecycleLatestRuns> {
+  try {
+    const [latest, tool, answer, refresh] = await Promise.all([
+      listRunToolArtifacts({ almanacDir, limit: 1 }),
+      listRunToolArtifacts({ almanacDir, kind: "tool", limit: 1 }),
+      listRunToolArtifacts({ almanacDir, kind: "answer", limit: 1 }),
+      listRunToolArtifacts({ almanacDir, kind: "refresh", limit: 1 }),
+    ]);
+    return {
+      latest: latest.runs[0] ?? null,
+      byKind: {
+        tool: tool.runs[0] ?? null,
+        answer: answer.runs[0] ?? null,
+        refresh: refresh.runs[0] ?? null,
+      },
+      readError: null,
+    };
+  } catch (e) {
+    const message = unknownErrorMessage(e);
+    return {
+      latest: null,
+      byKind: {
+        tool: null,
+        answer: null,
+        refresh: null,
+      },
+      readError: message,
+    };
+  }
 }
 
 async function readLifecycleInventoryItem(
@@ -2336,6 +2439,131 @@ function lifecycleOverallStatus(args: {
   return "ok";
 }
 
+function lifecycleUsability(item: LifecycleInventoryItem): LifecycleUsability {
+  const lifecycle = item.lifecycle;
+  if (lifecycle.status === "broken") {
+    return {
+      status: "not-usable",
+      reason: lifecycle.issues[0] ?? "almanac artifacts are broken",
+    };
+  }
+  if (lifecycle.compile.status === "failed") {
+    return {
+      status: "not-usable",
+      reason: `compile failed at ${lifecycle.compile.failed.join(", ")}`,
+    };
+  }
+  if (lifecycle.compile.status !== "ok") {
+    return {
+      status: "not-usable",
+      reason: `compile ${lifecycle.compile.status}`,
+    };
+  }
+  if (lifecycle.knowledge.status !== "present") {
+    return {
+      status: "not-usable",
+      reason: `knowledge index ${lifecycle.knowledge.status}`,
+    };
+  }
+  if (
+    lifecycle.knowledge.facts === 0 ||
+    lifecycle.knowledge.tools === 0 ||
+    lifecycle.knowledge.toolsReadable === false
+  ) {
+    return {
+      status: "not-usable",
+      reason: "facts or tools are unavailable",
+    };
+  }
+  if (lifecycle.benchmark.status === "failed") {
+    return {
+      status: "not-usable",
+      reason: lifecycle.benchmark.issue ?? "benchmark failed",
+    };
+  }
+  if (
+    lifecycle.benchmark.status !== "passed" ||
+    lifecycle.answer.status !== "ready"
+  ) {
+    return {
+      status: "limited",
+      reason: `benchmark ${lifecycle.benchmark.status}, answer ${lifecycle.answer.status}`,
+    };
+  }
+  return {
+    status: "usable",
+    reason:
+      lifecycle.refresh.status === "due"
+        ? "usable, but refresh is due"
+        : "compile, knowledge, benchmark, and answer readiness are usable",
+  };
+}
+
+function compactRunSummary(run: RunToolArtifactSummary | null): string {
+  if (run === null) return "none";
+  const subject =
+    run.kind === "answer"
+      ? run.answer ?? run.question ?? run.runId
+      : run.toolName ?? run.fromStage ?? run.runId;
+  const label = run.label === undefined ? "" : ` label=${run.label}`;
+  return `${run.kind} ${run.runId}, ${run.status}, exit=${run.exitCode}, ${run.invokedAt}, ${subject}${label}`;
+}
+
+function formatLifecycleBenchmark(
+  benchmark: LifecycleInventoryItem["lifecycle"]["benchmark"],
+): string {
+  if (benchmark.status === "missing" || benchmark.status === "unreadable") {
+    return benchmark.issue === undefined
+      ? benchmark.status
+      : `${benchmark.status} (${benchmark.issue})`;
+  }
+  if (benchmark.status === "not-run") {
+    return `not-run (${benchmark.positiveFixtures} positive / ${benchmark.negativeFixtures} negative fixtures)`;
+  }
+  const result =
+    benchmark.total === null
+      ? benchmark.status
+      : `${benchmark.status}, ${benchmark.passed}/${benchmark.total} passed`;
+  const citation =
+    benchmark.citationRate === null
+      ? ""
+      : `, citationRate ${formatRate(benchmark.citationRate)}`;
+  const fixtures =
+    benchmark.positiveFixtures === null || benchmark.negativeFixtures === null
+      ? ""
+      : `, fixtures ${benchmark.positiveFixtures} positive / ${benchmark.negativeFixtures} negative`;
+  const issue = benchmark.issue === undefined ? "" : ` (${benchmark.issue})`;
+  return `${result}${citation}${fixtures}${issue}`;
+}
+
+function formatLifecycleAnswer(
+  answer: LifecycleInventoryItem["lifecycle"]["answer"],
+): string {
+  const parts = [
+    answer.status,
+    answer.fixtures === null ? null : `${answer.fixtures} fixture(s)`,
+    answer.latestSuite === null ? null : `suite=${answer.latestSuite}`,
+    answer.qualityGate === null ? null : `quality=${answer.qualityGate}`,
+  ].filter((part): part is string => part !== null);
+  const issue = answer.issue === undefined ? "" : ` (${answer.issue})`;
+  return `${parts.join(", ")}${issue}`;
+}
+
+function formatLifecycleRefresh(
+  refresh: LifecycleInventoryItem["lifecycle"]["refresh"],
+): string {
+  const parts = [
+    refresh.status,
+    refresh.reasons === null ? null : `${refresh.reasons} reason(s)`,
+    refresh.recommendedFromStage === null
+      ? null
+      : `from ${refresh.recommendedFromStage}`,
+    refresh.nextDueAt === null ? null : `nextDueAt ${refresh.nextDueAt}`,
+  ].filter((part): part is string => part !== null);
+  const issue = refresh.issue === undefined ? "" : ` (${refresh.issue})`;
+  return `${parts.join(", ")}${issue}`;
+}
+
 function lifecycleCountsDisplay(
   item: LifecycleInventoryItem,
   key: "facts" | "tools",
@@ -2414,6 +2642,80 @@ async function cmdList(opts: ListOptions): Promise<void> {
       process.stdout.write(
         `  ${r.id}: ${r.item.lifecycle.status} - ${issue}\n`,
       );
+    }
+  }
+}
+
+async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
+  const report = await readAlmanacStatusReport(id, opts);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(
+    `almanac status: ${report.almanacId} (${report.displayName})\n`,
+  );
+  process.stdout.write(`  status        ${report.status}\n`);
+  process.stdout.write(
+    `  usability     ${report.usability.status} - ${report.usability.reason}\n`,
+  );
+  process.stdout.write(`  dir           ${report.almanacDir}\n`);
+  if (report.manifest !== null) {
+    process.stdout.write(`  domain        ${report.manifest.domain}\n`);
+    process.stdout.write(`  version       ${report.manifest.version}\n`);
+    process.stdout.write(`  profile       ${report.manifest.freshnessProfileId}\n`);
+    process.stdout.write(`  compiled      ${report.manifest.compiledAt}\n`);
+  }
+  process.stdout.write(
+    `  compile       ${report.lifecycle.compile.status}` +
+      ` (${report.lifecycle.compile.completed} completed, ` +
+      `${report.lifecycle.compile.failed.length} failed, ` +
+      `${report.lifecycle.compile.pending.length} pending, ` +
+      `${report.lifecycle.compile.running.length} running)\n`,
+  );
+  process.stdout.write(
+    `  knowledge     ${report.lifecycle.knowledge.status}, ` +
+      `${report.lifecycle.knowledge.facts ?? "-"} facts, ` +
+      `${report.lifecycle.knowledge.tools ?? "-"} tools, ` +
+      `retrieval ${report.lifecycle.knowledge.retrieval ?? "unknown"}\n`,
+  );
+  if (report.lifecycle.knowledge.countsMatch === false) {
+    process.stdout.write(
+      `  manifest      facts/tools ${report.lifecycle.knowledge.manifestFacts} / ${report.lifecycle.knowledge.manifestTools}\n`,
+    );
+  }
+  process.stdout.write(
+    `  benchmark     ${formatLifecycleBenchmark(report.lifecycle.benchmark)}\n`,
+  );
+  process.stdout.write(
+    `  answer        ${formatLifecycleAnswer(report.lifecycle.answer)}\n`,
+  );
+  process.stdout.write(
+    `  refresh       ${formatLifecycleRefresh(report.lifecycle.refresh)}\n`,
+  );
+  if (report.runs.readError === null) {
+    process.stdout.write(`  latest run    ${compactRunSummary(report.runs.latest)}\n`);
+    process.stdout.write(
+      `  latest answer ${compactRunSummary(report.runs.byKind.answer)}\n`,
+    );
+    process.stdout.write(
+      `  latest refresh ${compactRunSummary(report.runs.byKind.refresh)}\n`,
+    );
+  } else {
+    process.stdout.write(`  saved runs    unreadable: ${report.runs.readError}\n`);
+  }
+
+  if (report.lifecycle.issues.length > 0) {
+    process.stdout.write(`\nissues:\n`);
+    for (const issue of report.lifecycle.issues) {
+      process.stdout.write(`  - ${issue}\n`);
+    }
+  }
+  if (report.nextActions.length > 0) {
+    process.stdout.write(`\nnext actions:\n`);
+    for (const action of report.nextActions) {
+      process.stdout.write(`  - ${action}\n`);
     }
   }
 }
@@ -5541,6 +5843,13 @@ program
   .option("--json", "Emit JSON instead of a table")
   .addOption(rootOption)
   .action(cmdList);
+
+program
+  .command("status <id>")
+  .description("show a compact lifecycle status for an almanac")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdStatus);
 
 program
   .command("inspect <id>")

@@ -97,6 +97,8 @@ Run the offline demo first. It does not require API keys.
 ```bash
 tmp=$(mktemp -d)
 almanac demo --root "$tmp"
+almanac list --root "$tmp"
+almanac status sqlite-demo --root "$tmp"
 almanac inspect sqlite-demo --root "$tmp"
 almanac profile sqlite-demo --root "$tmp"
 almanac benchmark sqlite-demo --root "$tmp"
@@ -157,6 +159,7 @@ and `codex`.
 | `almanac new <domain>` | Compile an almanac from a domain name. |
 | `almanac demo [id]` | Create a no-key offline demo almanac. |
 | `almanac list` | List installed almanacs with lifecycle status and readiness hints. |
+| `almanac status <id>` | Show whether one installed almanac is usable now and what to do next. |
 | `almanac update <id> --from-stage <stage>` | Re-run part of the compile pipeline. |
 | `almanac feed <id> <url> --apply` | Add one source and reindex without a full rebuild. |
 | `almanac inspect <id>` | Show manifest, stage health, sources, fixtures, and benchmark status. |

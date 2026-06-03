@@ -47,6 +47,20 @@ compile, knowledge, benchmark, answer, refresh, issues, and next-action
 summaries. Broken or partial directories are reported as `broken` entries
 instead of crashing the entire listing.
 
+## Per-almanac status
+
+```bash
+almanac status sqlite-demo --root "$tmp"
+almanac status sqlite-demo --json --root "$tmp"
+```
+
+`status` is the operator summary for one installed almanac. It combines compile
+state, actual fact/tool counts, benchmark coverage, answer readiness, refresh
+due state, latest saved runs, issues, and ordered next actions. It is
+provider-free and complements `inspect` and `profile`: use `status` to decide
+whether the almanac is usable now, then use the detailed commands when a next
+action points there.
+
 ## Install sanity
 
 Before compiling anything, verify the source-first CLI path from the repository
