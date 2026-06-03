@@ -584,6 +584,163 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.runs.readError).toBeNull();
   });
 
+  test("maintain --json emits a provider-free dry-run maintenance report", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    await writeFile(join(root, "almanac-legacy-0.1.0.tar.gz"), "fake", "utf8");
+
+    const result = runCli(
+      ["maintain", "legacy", "--json", "--dry-run", "--root", root],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+        VOYAGE_API_KEY: undefined,
+        OPENAI_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      schemaVersion: string;
+      almanacId: string;
+      dryRun: boolean;
+      status: string;
+      refresh: { due: boolean; status: string; recommendedFromStage: string };
+      benchmark: { status: string; planned: boolean };
+      answer: { status: string; planned: boolean };
+      registration: { clients: unknown[] };
+      artifacts: {
+        cleanupCandidates: Array<{ kind: string; count: number; paths: string[] }>;
+      };
+      plan: Array<{
+        id: string;
+        status: string;
+        command: string | null;
+        providerRequired: boolean;
+        expectedArtifact: string | null;
+      }>;
+      repairs: unknown[];
+      nextActions: string[];
+    };
+
+    expect(report.schemaVersion).toBe("0.1.0");
+    expect(report.almanacId).toBe("legacy");
+    expect(report.dryRun).toBe(true);
+    expect(report.status).toBe("due");
+    expect(report.refresh).toMatchObject({ due: true, status: "due" });
+    expect(report.benchmark).toMatchObject({
+      status: "missing",
+      planned: true,
+    });
+    expect(report.answer).toMatchObject({
+      status: "not-ready",
+      planned: true,
+    });
+    expect(report.registration.clients.length).toBeGreaterThan(0);
+    expect(report.repairs).toEqual([]);
+
+    const refreshStep = report.plan.find((step) => step.id === "refresh");
+    const benchmarkStep = report.plan.find((step) => step.id === "benchmark");
+    const askSuiteStep = report.plan.find((step) => step.id === "ask-suite");
+    const cleanupStep = report.plan.find((step) => step.id === "cleanup");
+    expect(refreshStep).toMatchObject({
+      status: "planned",
+      providerRequired: true,
+      expectedArtifact: ".runs/refresh-*.json",
+    });
+    expect(refreshStep?.command).toContain("almanac refresh run legacy");
+    expect(benchmarkStep?.command).toContain("almanac benchmark legacy --init");
+    expect(askSuiteStep?.command).toContain("almanac ask-fixtures init legacy");
+    expect(cleanupStep?.status).toBe("planned");
+    expect(report.artifacts.cleanupCandidates).toEqual([
+      expect.objectContaining({
+        kind: "export-archive",
+        count: 1,
+        paths: [join(root, "almanac-legacy-0.1.0.tar.gz")],
+      }),
+    ]);
+    expect(report.nextActions).toContainEqual(
+      expect.stringContaining("almanac refresh run legacy"),
+    );
+  });
+
+  test("maintain --json surfaces stale registration repair candidates", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    const almanacDir = almanacDirPath(root, "legacy");
+    const home = join(root, "home");
+    const skillSource = join(almanacDir, "adapters", "skill", "SKILL.md");
+    const skillDest = join(home, ".claude", "skills", "almanac-legacy", "SKILL.md");
+    await mkdir(join(almanacDir, "adapters", "skill"), { recursive: true });
+    await mkdir(join(home, ".claude", "skills", "almanac-legacy"), {
+      recursive: true,
+    });
+    await writeFile(skillSource, "# Legacy Skill\n", "utf8");
+    await writeFile(skillDest, "# Legacy Skill\n", "utf8");
+    await writeFile(
+      join(home, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          "almanac-legacy": {
+            command: "bun",
+            args: ["run", "/tmp/old-cli.ts", "serve", "legacy", "--root", "/tmp/old-root"],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = runCli(["maintain", "legacy", "--json", "--root", root], {
+      HOME: home,
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      status: string;
+      registration: { status: string };
+      repairs: Array<{
+        kind: string;
+        message: string;
+        command: string | null;
+        applyRequired: boolean;
+      }>;
+      nextActions: string[];
+    };
+
+    expect(report.status).toBe("repairable");
+    expect(report.registration.status).toBe("stale");
+    expect(report.repairs).toContainEqual(
+      expect.objectContaining({
+        kind: "registration",
+        message: "claude-code registration is stale",
+        applyRequired: true,
+      }),
+    );
+    expect(report.repairs[0]?.command).toContain(
+      "almanac register legacy --client=claude-code --target=mcp --apply",
+    );
+    expect(report.nextActions).toContainEqual(
+      expect.stringContaining("almanac register legacy --client=claude-code"),
+    );
+  });
+
+  test("maintain reports partial almanac directories as broken plans", async () => {
+    await mkdir(join(root, "partial"), { recursive: true });
+
+    const result = runCli(["maintain", "partial", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("maintenance: partial");
+    expect(result.stdout).toContain("status        broken");
+    expect(result.stdout).toContain("blocked refresh: almanac artifacts are broken");
+    expect(result.stdout).toContain("broken-directory");
+    expect(result.stdout).toContain("manifest.json missing");
+  });
+
   test("status shows failed compile recovery as operator next action", async () => {
     await writeFailedStageFixture({
       almanacId: "failed-status",
