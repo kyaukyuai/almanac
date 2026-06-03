@@ -13,6 +13,7 @@
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac status <id> [opts]             show a compact lifecycle summary
+ *   almanac maintain <id> [opts]           show a dry-run maintenance plan
  *   almanac inspect <id> [opts]            print manifest + per-stage state
  *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
@@ -1808,6 +1809,12 @@ interface StatusOptions {
   json?: boolean;
 }
 
+interface MaintainOptions {
+  root: string;
+  json?: boolean;
+  dryRun?: boolean;
+}
+
 type McpServerEntry = {
   command: string;
   args: string[];
@@ -1945,6 +1952,80 @@ interface AlmanacStatusReport {
   usability: LifecycleUsability;
   lifecycle: LifecycleInventoryItem["lifecycle"];
   runs: LifecycleLatestRuns;
+  nextActions: string[];
+}
+
+type MaintenanceStatus =
+  | "ready"
+  | "due"
+  | "needs-validation"
+  | "repairable"
+  | "blocked"
+  | "broken";
+
+type MaintenancePlanStepStatus = "planned" | "skipped" | "blocked";
+
+interface MaintenancePlanStep {
+  id: "refresh" | "benchmark" | "ask-suite" | "cleanup";
+  status: MaintenancePlanStepStatus;
+  reason: string;
+  command: string | null;
+  providerRequired: boolean;
+  expectedArtifact: string | null;
+}
+
+interface MaintenanceRepairCandidate {
+  kind: "compile" | "knowledge" | "registration" | "runs" | "broken-directory";
+  message: string;
+  command: string | null;
+  risk: "low" | "medium";
+  applyRequired: boolean;
+}
+
+interface MaintenanceCleanupCandidate {
+  kind: "saved-runs" | "export-archive";
+  message: string;
+  command: string | null;
+  count: number;
+  paths: string[];
+}
+
+interface MaintenanceReport {
+  schemaVersion: "0.1.0";
+  almanacId: string;
+  version: string | null;
+  root: string;
+  almanacDir: string;
+  checkedAt: string;
+  dryRun: true;
+  status: MaintenanceStatus;
+  usability: LifecycleUsability;
+  refresh: {
+    status: LifecycleRefreshStatus;
+    due: boolean;
+    recommendedFromStage: StageId | null;
+    reasons: number | null;
+    nextDueAt: string | null;
+    latestRun: RunToolArtifactSummary | null;
+    issue?: string;
+  };
+  benchmark: LifecycleInventoryItem["lifecycle"]["benchmark"] & {
+    planned: boolean;
+  };
+  answer: LifecycleInventoryItem["lifecycle"]["answer"] & {
+    planned: boolean;
+    latestRun: RunToolArtifactSummary | null;
+  };
+  registration: LifecycleRegistrationSummary;
+  artifacts: {
+    latestRun: RunToolArtifactSummary | null;
+    latestByKind: LifecycleLatestRuns["byKind"];
+    savedRunsReadError: string | null;
+    cleanupCandidates: MaintenanceCleanupCandidate[];
+  };
+  repairs: MaintenanceRepairCandidate[];
+  plan: MaintenancePlanStep[];
+  issues: string[];
   nextActions: string[];
 }
 
@@ -3137,6 +3218,489 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       process.stdout.write(`  - ${action}\n`);
     }
   }
+}
+
+async function readMaintenanceReport(
+  id: string,
+  opts: MaintainOptions,
+  now = new Date(),
+): Promise<MaintenanceReport> {
+  const statusReport = await readAlmanacStatusReport(id, opts);
+  const rootHygiene = await readRootHygieneReport(opts.root);
+  const cleanupCandidates = maintenanceCleanupCandidates(statusReport, rootHygiene);
+  const repairs = maintenanceRepairCandidates(statusReport);
+  const plan = maintenancePlanSteps(statusReport, cleanupCandidates, opts.root);
+  const nextActions = uniqueStrings([
+    ...plan
+      .filter((step) => step.status === "planned" && step.command !== null)
+      .map((step) => step.command!),
+    ...repairs
+      .map((candidate) => candidate.command)
+      .filter((command): command is string => command !== null),
+    ...cleanupCandidates
+      .map((candidate) => candidate.command)
+      .filter((command): command is string => command !== null),
+    ...statusReport.nextActions,
+  ]);
+
+  return {
+    schemaVersion: "0.1.0",
+    almanacId: statusReport.almanacId,
+    version: statusReport.manifest?.version ?? null,
+    root: opts.root,
+    almanacDir: statusReport.almanacDir,
+    checkedAt: now.toISOString(),
+    dryRun: true,
+    status: maintenanceOverallStatus(statusReport, repairs),
+    usability: statusReport.usability,
+    refresh: {
+      ...statusReport.lifecycle.refresh,
+      due: statusReport.lifecycle.refresh.status === "due",
+      latestRun: statusReport.runs.byKind.refresh,
+    },
+    benchmark: {
+      ...statusReport.lifecycle.benchmark,
+      planned: maintenanceStepPlanned(plan, "benchmark"),
+    },
+    answer: {
+      ...statusReport.lifecycle.answer,
+      planned: maintenanceStepPlanned(plan, "ask-suite"),
+      latestRun: statusReport.runs.byKind.answer,
+    },
+    registration: statusReport.lifecycle.registration,
+    artifacts: {
+      latestRun: statusReport.runs.latest,
+      latestByKind: statusReport.runs.byKind,
+      savedRunsReadError: statusReport.runs.readError,
+      cleanupCandidates,
+    },
+    repairs,
+    plan,
+    issues: statusReport.lifecycle.issues,
+    nextActions,
+  };
+}
+
+function maintenanceCleanupCandidates(
+  statusReport: AlmanacStatusReport,
+  rootHygiene: RootHygieneReport,
+): MaintenanceCleanupCandidate[] {
+  const candidates: MaintenanceCleanupCandidate[] = [];
+  const savedRuns = rootHygiene.cleanup.savedRunAlmanacs.find(
+    (item) => item.almanacId === statusReport.almanacId,
+  );
+  if (savedRuns !== undefined) {
+    candidates.push({
+      kind: "saved-runs",
+      message: `${savedRuns.runs} saved run artifact(s) can be reviewed for pruning`,
+      command: savedRuns.nextAction,
+      count: savedRuns.runs,
+      paths: [],
+    });
+  }
+
+  const exportArchives = rootHygiene.cleanup.exportArchives.filter((path) =>
+    path.includes(`almanac-${statusReport.almanacId}-`) ||
+    path.includes(statusReport.almanacId)
+  );
+  if (exportArchives.length > 0) {
+    candidates.push({
+      kind: "export-archive",
+      message: `${exportArchives.length} exported archive(s) are present in the root`,
+      command: `review exported archives in ${rootHygiene.root}`,
+      count: exportArchives.length,
+      paths: exportArchives,
+    });
+  }
+
+  return candidates;
+}
+
+function maintenanceRepairCandidates(
+  statusReport: AlmanacStatusReport,
+): MaintenanceRepairCandidate[] {
+  const lifecycle = statusReport.lifecycle;
+  const candidates: MaintenanceRepairCandidate[] = [];
+  if (statusReport.status === "broken") {
+    candidates.push({
+      kind: "broken-directory",
+      message: lifecycle.issues[0] ?? "almanac directory is broken",
+      command: lifecycle.nextActions[0] ?? null,
+      risk: "medium",
+      applyRequired: false,
+    });
+    return candidates;
+  }
+
+  if (lifecycle.compile.status === "failed") {
+    candidates.push({
+      kind: "compile",
+      message: `compile failed at ${lifecycle.compile.failed.join(", ")}`,
+      command: firstActionContaining(lifecycle.nextActions, "almanac update"),
+      risk: "medium",
+      applyRequired: false,
+    });
+  } else if (lifecycle.compile.status === "attention") {
+    candidates.push({
+      kind: "compile",
+      message: `compile requires attention (${[
+        ...lifecycle.compile.pending,
+        ...lifecycle.compile.running,
+      ].join(", ")})`,
+      command: firstActionContaining(lifecycle.nextActions, "almanac update"),
+      risk: "medium",
+      applyRequired: false,
+    });
+  }
+
+  if (
+    lifecycle.knowledge.status === "missing" ||
+    lifecycle.knowledge.status === "unreadable"
+  ) {
+    candidates.push({
+      kind: "knowledge",
+      message: `knowledge index ${lifecycle.knowledge.status}`,
+      command: firstActionContaining(lifecycle.nextActions, "08-knowledge-index"),
+      risk: "medium",
+      applyRequired: false,
+    });
+  }
+
+  for (const client of lifecycle.registration.clients) {
+    if (client.status !== "stale" && client.status !== "unreadable") continue;
+    const command = client.nextActions[0] ?? null;
+    candidates.push({
+      kind: "registration",
+      message: `${client.client} registration is ${client.status}`,
+      command,
+      risk: "low",
+      applyRequired: command?.includes("--apply") ?? false,
+    });
+  }
+
+  if (statusReport.runs.readError !== null) {
+    candidates.push({
+      kind: "runs",
+      message: `saved runs unreadable: ${statusReport.runs.readError}`,
+      command: `inspect runs directory: ${join(statusReport.almanacDir, ".runs")}`,
+      risk: "low",
+      applyRequired: false,
+    });
+  }
+
+  return candidates;
+}
+
+function maintenancePlanSteps(
+  statusReport: AlmanacStatusReport,
+  cleanupCandidates: MaintenanceCleanupCandidate[],
+  root: string,
+): MaintenancePlanStep[] {
+  const rootSuffix = rootArg(root);
+  return [
+    maintenanceRefreshStep(statusReport, rootSuffix),
+    maintenanceBenchmarkStep(statusReport, rootSuffix),
+    maintenanceAskSuiteStep(statusReport, rootSuffix),
+    maintenanceCleanupStep(cleanupCandidates),
+  ];
+}
+
+function maintenanceRefreshStep(
+  statusReport: AlmanacStatusReport,
+  rootSuffix: string,
+): MaintenancePlanStep {
+  const refresh = statusReport.lifecycle.refresh;
+  if (statusReport.status === "broken") {
+    return blockedMaintenanceStep(
+      "refresh",
+      "almanac artifacts are broken",
+    );
+  }
+  if (refresh.status === "unknown" || refresh.recommendedFromStage === null) {
+    return blockedMaintenanceStep(
+      "refresh",
+      refresh.issue ?? "refresh status is unavailable",
+    );
+  }
+  if (refresh.status !== "due") {
+    return {
+      id: "refresh",
+      status: "skipped",
+      reason: refresh.nextDueAt === null
+        ? "refresh is not due"
+        : `refresh is not due until ${refresh.nextDueAt}`,
+      command: null,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
+  return {
+    id: "refresh",
+    status: "planned",
+    reason: `${refresh.reasons ?? 0} refresh reason(s)`,
+    command:
+      `almanac refresh run ${statusReport.almanacId} --from-stage ${refresh.recommendedFromStage} --save${rootSuffix}`,
+    providerRequired: refresh.recommendedFromStage !== "12-benchmark-run",
+    expectedArtifact: ".runs/refresh-*.json",
+  };
+}
+
+function maintenanceBenchmarkStep(
+  statusReport: AlmanacStatusReport,
+  rootSuffix: string,
+): MaintenancePlanStep {
+  const benchmark = statusReport.lifecycle.benchmark;
+  if (statusReport.status === "broken") {
+    return blockedMaintenanceStep(
+      "benchmark",
+      "almanac artifacts are broken",
+    );
+  }
+  if (benchmark.status === "passed") {
+    return {
+      id: "benchmark",
+      status: "skipped",
+      reason: "benchmark is already passed",
+      command: null,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
+  if (benchmark.status === "unreadable") {
+    return blockedMaintenanceStep(
+      "benchmark",
+      benchmark.issue ?? "benchmark artifacts are unreadable",
+    );
+  }
+  if (benchmark.status === "missing") {
+    return {
+      id: "benchmark",
+      status: "planned",
+      reason: "benchmark fixtures are missing",
+      command: `almanac benchmark ${statusReport.almanacId} --init${rootSuffix}`,
+      providerRequired: false,
+      expectedArtifact: "tests/{positive,negative}.jsonl",
+    };
+  }
+  return {
+    id: "benchmark",
+    status: "planned",
+    reason: benchmark.issue ?? `benchmark is ${benchmark.status}`,
+    command: `almanac benchmark ${statusReport.almanacId}${rootSuffix}`,
+    providerRequired: false,
+    expectedArtifact: ".compile/benchmark-result.json",
+  };
+}
+
+function maintenanceAskSuiteStep(
+  statusReport: AlmanacStatusReport,
+  rootSuffix: string,
+): MaintenancePlanStep {
+  const answer = statusReport.lifecycle.answer;
+  if (statusReport.status === "broken" || answer.status === "unknown") {
+    return blockedMaintenanceStep(
+      "ask-suite",
+      answer.issue ?? "answer readiness is unavailable",
+    );
+  }
+  if (answer.status === "ready") {
+    return {
+      id: "ask-suite",
+      status: "skipped",
+      reason: "answer readiness is already ready",
+      command: null,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
+  if (answer.fixtures === 0) {
+    return {
+      id: "ask-suite",
+      status: "planned",
+      reason: "ask replay fixtures are missing",
+      command: `almanac ask-fixtures init ${statusReport.almanacId}${rootSuffix}`,
+      providerRequired: false,
+      expectedArtifact: "tests/ask.jsonl",
+    };
+  }
+  if (answer.latestSuite !== "passed") {
+    return {
+      id: "ask-suite",
+      status: "planned",
+      reason: answer.issue ?? `ask suite is ${answer.latestSuite}`,
+      command: `almanac ask-suite ${statusReport.almanacId}${rootSuffix}`,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
+  if (answer.qualityGate !== "pass") {
+    const latestAnswer = statusReport.runs.byKind.answer;
+    return {
+      id: "ask-suite",
+      status: "planned",
+      reason: answer.issue ?? `latest answer quality is ${answer.qualityGate}`,
+      command:
+        latestAnswer === null
+          ? `almanac ask ${statusReport.almanacId} "<question>" --save${rootSuffix}`
+          : `almanac runs ${statusReport.almanacId} ${latestAnswer.runId}${rootSuffix}`,
+      providerRequired: latestAnswer === null,
+      expectedArtifact: latestAnswer === null ? ".runs/answer-*.json" : null,
+    };
+  }
+  return blockedMaintenanceStep(
+    "ask-suite",
+    answer.issue ?? `answer readiness is ${answer.status}`,
+  );
+}
+
+function maintenanceCleanupStep(
+  cleanupCandidates: MaintenanceCleanupCandidate[],
+): MaintenancePlanStep {
+  if (cleanupCandidates.length === 0) {
+    return {
+      id: "cleanup",
+      status: "skipped",
+      reason: "no cleanup candidates",
+      command: null,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
+  return {
+    id: "cleanup",
+    status: "planned",
+    reason: `${cleanupCandidates.length} cleanup candidate(s)`,
+    command: cleanupCandidates[0]?.command ?? null,
+    providerRequired: false,
+    expectedArtifact: null,
+  };
+}
+
+function blockedMaintenanceStep(
+  id: MaintenancePlanStep["id"],
+  reason: string,
+): MaintenancePlanStep {
+  return {
+    id,
+    status: "blocked",
+    reason,
+    command: null,
+    providerRequired: false,
+    expectedArtifact: null,
+  };
+}
+
+function maintenanceOverallStatus(
+  statusReport: AlmanacStatusReport,
+  repairs: MaintenanceRepairCandidate[],
+): MaintenanceStatus {
+  if (statusReport.status === "broken") return "broken";
+  if (
+    statusReport.lifecycle.compile.status !== "ok" ||
+    statusReport.lifecycle.knowledge.status === "unreadable"
+  ) {
+    return "blocked";
+  }
+  if (repairs.length > 0) return "repairable";
+  if (statusReport.lifecycle.refresh.status === "due") return "due";
+  if (
+    statusReport.lifecycle.benchmark.status !== "passed" ||
+    statusReport.lifecycle.answer.status !== "ready"
+  ) {
+    return "needs-validation";
+  }
+  return "ready";
+}
+
+function maintenanceStepPlanned(
+  plan: MaintenancePlanStep[],
+  id: MaintenancePlanStep["id"],
+): boolean {
+  return plan.some((step) => step.id === id && step.status === "planned");
+}
+
+function firstActionContaining(
+  actions: string[],
+  needle: string,
+): string | null {
+  return actions.find((action) => action.includes(needle)) ?? null;
+}
+
+function formatMaintenanceReportHuman(report: MaintenanceReport): string {
+  const lines = [
+    `maintenance: ${report.almanacId} (${report.version ?? "unknown"})`,
+    `  status        ${report.status}`,
+    `  dry-run       ${report.dryRun ? "yes" : "no"}`,
+    `  usability     ${report.usability.status} - ${report.usability.reason}`,
+    `  dir           ${report.almanacDir}`,
+    `  refresh       ${formatLifecycleRefresh(report.refresh)}`,
+    `  benchmark     ${formatLifecycleBenchmark(report.benchmark)}`,
+    `  answer        ${formatLifecycleAnswer(report.answer)}`,
+    `  registration  ${formatLifecycleRegistration(report.registration)}`,
+    `  latest run    ${compactRunSummary(report.artifacts.latestRun)}`,
+    "",
+    "plan:",
+  ];
+  for (const step of report.plan) {
+    const provider = step.providerRequired ? ", provider required" : "";
+    const artifact =
+      step.expectedArtifact === null ? "" : `, artifact ${step.expectedArtifact}`;
+    lines.push(`  - ${step.status} ${step.id}: ${step.reason}${provider}${artifact}`);
+    if (step.command !== null) {
+      lines.push(`    ${step.command}`);
+    }
+  }
+
+  lines.push("", "repairs:");
+  if (report.repairs.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const repair of report.repairs) {
+      const apply = repair.applyRequired ? ", requires --apply" : "";
+      lines.push(`  - ${repair.kind} (${repair.risk}${apply}): ${repair.message}`);
+      if (repair.command !== null) {
+        lines.push(`    ${repair.command}`);
+      }
+    }
+  }
+
+  lines.push("", "cleanup:");
+  if (report.artifacts.cleanupCandidates.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const cleanup of report.artifacts.cleanupCandidates) {
+      lines.push(`  - ${cleanup.kind}: ${cleanup.message}`);
+      if (cleanup.command !== null) {
+        lines.push(`    ${cleanup.command}`);
+      }
+      for (const path of cleanup.paths) {
+        lines.push(`    ${path}`);
+      }
+    }
+  }
+
+  if (report.issues.length > 0) {
+    lines.push("", "issues:");
+    for (const issue of report.issues) {
+      lines.push(`  - ${issue}`);
+    }
+  }
+  if (report.nextActions.length > 0) {
+    lines.push("", "next actions:");
+    for (const action of report.nextActions) {
+      lines.push(`  - ${action}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+async function cmdMaintain(id: string, opts: MaintainOptions): Promise<void> {
+  const report = await readMaintenanceReport(id, opts);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write(formatMaintenanceReportHuman(report));
 }
 
 interface InspectOptions {
@@ -6772,6 +7336,14 @@ program
   .option("--json", "Emit JSON instead of a human-readable summary")
   .addOption(rootOption)
   .action(cmdStatus);
+
+program
+  .command("maintain <id>")
+  .description("show a provider-free dry-run maintenance plan for an almanac")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .option("--dry-run", "Show the maintenance plan without writing files")
+  .addOption(rootOption)
+  .action(cmdMaintain);
 
 program
   .command("inspect <id>")
