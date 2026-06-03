@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.11.0 shipped** · last updated 2026-06-03.
+Status: **v0.12.0 shipped** · last updated 2026-06-03.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1096,22 +1096,34 @@ handoff, default export/wiki generation, saved answer replay, ask fixture
 promotion, `ask-suite` pass, refresh-integrated ask validation, and mocked
 compile failure recovery printing actionable rerun guidance.
 
-### v0.12 planned — Installed almanac lifecycle
+### v0.12.0 — Installed almanac lifecycle
 
-v0.12 is planned as the installed almanac lifecycle release:
+v0.12.0 shipped the installed almanac lifecycle release:
 
-- upgrade root-level inventory so `almanac list` shows lifecycle readiness
-  rather than only identity and counts,
-- add a compact per-almanac status view over compile health, knowledge,
-  benchmark, answer readiness, refresh due state, saved runs, registration
-  state, and next actions,
-- define a safe import path for exported almanac archives,
-- make host-client registration state visible and repairable before users open
-  Claude Code, Claude Desktop, Cursor, or Codex,
-- improve root hygiene and cleanup guidance without destructive defaults.
+- `almanac list` now shows lifecycle readiness across a root rather than only
+  identity and counts.
+- `almanac status <id>` gives a compact per-almanac view over compile health,
+  knowledge, benchmark, answer readiness, refresh due state, saved runs,
+  registration state, and next actions.
+- `almanac import <archive>` provides a safe dry-run/apply path for exported
+  almanac archives with explicit collision handling and post-import guidance.
+- Host-client registration state is visible before users open Claude Code,
+  Claude Desktop, Cursor, or Codex.
+- `doctor` reports root hygiene and cleanup opportunities without destructive
+  defaults.
 
 See [`docs/v0.12-plan.md`](./v0.12-plan.md) for scope, non-goals, PR sequence,
-and planned release smoke targets.
+and the shipped implementation sequence. The concrete release-candidate runbook
+is [`docs/v0.12-rc-smoke.md`](./v0.12-rc-smoke.md).
+
+The v0.12 release gate passed on 2026-06-03 with `git diff --check`,
+`bun run typecheck`, `bun test`, source and linked CLI checks, sqlite-demo
+lifecycle status, export/import/wiki handoff, registration visibility using
+temporary client configs, root hygiene checks, dry-run remove guidance,
+Enterprise AI fresh compile benchmark at 305 facts and 15/15 passed fixtures,
+real-provider Enterprise AI ask with two citations, saved-run replay, fixture
+promotion, `ask-suite` pass, refresh-integrated ask validation, and
+doctor/profile reporting answer mode as ready.
 
 ### v0.13+ (long-tail)
 
@@ -1129,8 +1141,9 @@ The original v0.1 deliverables listed here have all shipped, as
 have the v0.3-era structural fixes, the v0.4 retrieval/transport/inspection
 feature set, the v0.5 local run workflow, the v0.6 refresh contract, the v0.7
 answer boundary, the v0.8 answer diagnostics/readiness gates, the v0.9 ask
-suite operations, the v0.10 answer-trust and compile-stability release, and
-the v0.11 install and first-success release documented in §8 above. Active
+suite operations, the v0.10 answer-trust and compile-stability release, the
+v0.11 install and first-success release, and the v0.12 installed lifecycle
+release documented in §8 above. Active
 questions carrying into future releases:
 
 1. **Embedding-model default.** Voyage `voyage-3-lite` vs OpenAI
