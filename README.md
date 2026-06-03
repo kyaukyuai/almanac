@@ -107,6 +107,10 @@ almanac run sqlite-demo \
   --input '{"q":"transactions atomic"}' \
   --root "$tmp"
 almanac export sqlite-demo --root "$tmp"
+handoff_root=$(mktemp -d)
+almanac import ./almanac-sqlite-demo-0.1.0.tar.gz --root "$handoff_root"
+almanac import ./almanac-sqlite-demo-0.1.0.tar.gz --root "$handoff_root" --apply
+almanac status sqlite-demo --root "$handoff_root"
 almanac wiki sqlite-demo --root "$tmp"
 ```
 
@@ -118,9 +122,11 @@ For a committed inspection snapshot and answer-mode handoff commands, see
 the [sample almanacs guide](./docs/sample-almanacs.md).
 
 `export` creates a portable archive that excludes saved `.runs/` records by
-default. Use `--include-runs` only when the receiver should get saved tool,
-refresh, and answer artifacts. `wiki` creates a Markdown inspection bundle for
-reviewing sources, facts, tools, benchmarks, and the generated file manifest.
+default. `import` validates that archive in dry-run mode before writing files;
+add `--apply` to install it into another root. Use `--include-runs` only when
+the receiver should get saved tool, refresh, and answer artifacts. `wiki`
+creates a Markdown inspection bundle for reviewing sources, facts, tools,
+benchmarks, and the generated file manifest.
 
 If you did not run `bun link`, replace `almanac` with `bun src/cli.ts` in the
 examples.
@@ -178,6 +184,7 @@ before you open the host client.
 | `almanac serve <id>` | Start the generic MCP server over stdio or Streamable HTTP/SSE. |
 | `almanac register <id>` | Inspect or install Skill and MCP config entries for supported clients. |
 | `almanac export <id>` | Package a compiled almanac as a portable archive. |
+| `almanac import <archive>` | Validate or install an exported archive into a root. |
 | `almanac wiki <id>` | Export a Markdown inspection bundle for review and handoff. |
 | `almanac doctor [id]` | Diagnose local runtime, credentials, artifacts, and readiness. |
 

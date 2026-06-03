@@ -343,6 +343,20 @@ almanac export sqlite-demo --root "$tmp"
 tar -tzf almanac-sqlite-demo-0.1.0.tar.gz | head
 ```
 
+The import side is dry-run by default. It validates the archive shape,
+manifest, target id, and collision policy before writing files:
+
+```bash
+handoff_root=$(mktemp -d)
+almanac import almanac-sqlite-demo-0.1.0.tar.gz --root "$handoff_root"
+almanac import almanac-sqlite-demo-0.1.0.tar.gz --root "$handoff_root" --apply
+almanac status sqlite-demo --root "$handoff_root"
+almanac benchmark sqlite-demo --root "$handoff_root"
+```
+
+Use `--replace` only when intentionally overwriting an existing almanac in the
+target root. Use `--as <id>` to install the archive under a different local id.
+
 Use `--include-runs` only when saved operational artifacts are part of the
 handoff. Saved runs may include tool inputs, tool outputs, answer text, labels,
 and notes.

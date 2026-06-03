@@ -5,6 +5,7 @@
  */
 
 import { spawnSync } from "node:child_process";
+import { existsSync } from "node:fs";
 import {
   mkdir,
   mkdtemp,
@@ -1179,6 +1180,69 @@ describe("almanac CLI product onboarding", () => {
     expect(defaultExport.stdout).toContain("exclude .runs/");
     expect(defaultExport.stdout).toContain("exclude .compile/");
     expect((await stat(defaultExportPath)).size).toBeGreaterThan(0);
+
+    const importRoot = join(root, "import-root");
+    const importDryRun = runCli([
+      "import",
+      defaultExportPath,
+      "--root",
+      importRoot,
+    ]);
+    expect(importDryRun.status).toBe(0);
+    expect(importDryRun.stderr).toBe("");
+    expect(importDryRun.stdout).toContain("dry-run (no files written)");
+    expect(importDryRun.stdout).toContain(`almanac status sqlite-demo --root ${importRoot}`);
+    expect(existsSync(almanacDirPath(importRoot, "sqlite-demo"))).toBe(false);
+
+    const importApply = runCli([
+      "import",
+      defaultExportPath,
+      "--root",
+      importRoot,
+      "--apply",
+    ]);
+    expect(importApply.status).toBe(0);
+    expect(importApply.stderr).toBe("");
+    expect(importApply.stdout).toContain("installed");
+    expect(existsSync(almanacDirPath(importRoot, "sqlite-demo"))).toBe(true);
+    const importedStatus = runCli(["status", "sqlite-demo", "--root", importRoot]);
+    expect(importedStatus.status).toBe(0);
+    expect(importedStatus.stderr).toBe("");
+    expect(importedStatus.stdout).toContain("almanac status: sqlite-demo");
+
+    const importCollision = runCli([
+      "import",
+      defaultExportPath,
+      "--root",
+      importRoot,
+      "--apply",
+    ]);
+    expect(importCollision.status).toBe(1);
+    expect(importCollision.stderr).toContain("target almanac already exists");
+
+    const importAsRoot = join(root, "import-as-root");
+    const importAs = runCli([
+      "import",
+      defaultExportPath,
+      "--root",
+      importAsRoot,
+      "--as",
+      "sqlite-copy",
+      "--apply",
+      "--json",
+    ]);
+    expect(importAs.status).toBe(0);
+    expect(importAs.stderr).toBe("");
+    const importAsJson = JSON.parse(importAs.stdout) as {
+      targetId: string;
+      mode: string;
+      targetDir: string;
+      manifest: { almanacId: string };
+    };
+    expect(importAsJson.targetId).toBe("sqlite-copy");
+    expect(importAsJson.mode).toBe("applied");
+    expect(importAsJson.manifest.almanacId).toBe("sqlite-copy");
+    expect(existsSync(importAsJson.targetDir)).toBe(true);
 
     const exported = runCli([
       "export",
