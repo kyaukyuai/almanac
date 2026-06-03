@@ -1086,7 +1086,24 @@ handoff, default export/wiki generation, saved answer replay, ask fixture
 promotion, `ask-suite` pass, refresh-integrated ask validation, and mocked
 compile failure recovery printing actionable rerun guidance.
 
-### v0.12+ (long-tail)
+### v0.12 planned — Installed almanac lifecycle
+
+v0.12 is planned as the installed almanac lifecycle release:
+
+- upgrade root-level inventory so `almanac list` shows lifecycle readiness
+  rather than only identity and counts,
+- add a compact per-almanac status view over compile health, knowledge,
+  benchmark, answer readiness, refresh due state, saved runs, registration
+  state, and next actions,
+- define a safe import path for exported almanac archives,
+- make host-client registration state visible and repairable before users open
+  Claude Code, Claude Desktop, Cursor, or Codex,
+- improve root hygiene and cleanup guidance without destructive defaults.
+
+See [`docs/v0.12-plan.md`](./v0.12-plan.md) for scope, non-goals, PR sequence,
+and planned release smoke targets.
+
+### v0.13+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
