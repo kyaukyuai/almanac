@@ -21,11 +21,13 @@ import {
 } from "../core/runtime.ts";
 import {
   AnswerArtifactSchema,
+  MaintenanceArtifactSchema,
   RefreshArtifactSchema,
   RunArtifactIdSchema,
   RunToolArtifactSchema,
   ToolResultSchema,
   type AnswerArtifact,
+  type MaintenanceArtifact,
   type RefreshArtifact,
   type RunArtifactEnvelope,
   type RunArtifactKind,
@@ -153,6 +155,9 @@ export interface RunToolArtifactSummary {
   benchmarkStatus?: "missing" | "passed" | "failed";
   askSuiteStatus?: "missing" | "passed" | "failed";
   askSuiteTotal?: number;
+  maintenanceStatus?: string;
+  maintenanceSteps?: number;
+  maintenanceDueOnly?: boolean;
   question?: string;
   answer?: string;
   abstentionReason?: string;
@@ -522,6 +527,16 @@ export function formatRunToolArtifactListHuman(
       lines.push(
         `  - ${run.invokedAt}  ${run.runId}  ${run.status}  refresh  fromStage=${run.fromStage}  exit=${run.exitCode}${benchmark}${askSuite} duration=${run.durationMs}ms${label}`,
       );
+    } else if (run.kind === "maintenance") {
+      const steps =
+        run.maintenanceSteps === undefined ? "" : ` steps=${run.maintenanceSteps}`;
+      const dueOnly =
+        run.maintenanceDueOnly === undefined
+          ? ""
+          : ` dueOnly=${run.maintenanceDueOnly}`;
+      lines.push(
+        `  - ${run.invokedAt}  ${run.runId}  ${run.status}  maintenance  exit=${run.exitCode}${steps}${dueOnly} duration=${run.durationMs}ms${label}`,
+      );
     } else {
       lines.push(
         `  - ${run.invokedAt}  ${run.runId}  ${run.status}  ${run.toolName}  exit=${run.exitCode} citations=${run.citationsCount} duration=${run.durationMs}ms${label}`,
@@ -587,6 +602,9 @@ export function formatRunToolArtifactHuman(artifact: RunArtifactEnvelope): strin
   }
   if (artifact.kind === "answer") {
     return formatAnswerArtifactHuman(artifact);
+  }
+  if (artifact.kind === "maintenance") {
+    return formatMaintenanceArtifactHuman(artifact);
   }
   const lines = [
     `run: ${artifact.runId}`,
@@ -779,6 +797,70 @@ function formatRefreshArtifactHuman(artifact: RefreshArtifact): string {
   return lines.join("\n") + "\n";
 }
 
+function formatMaintenanceArtifactHuman(artifact: MaintenanceArtifact): string {
+  const lines = [
+    `maintenance: ${artifact.maintenanceId}`,
+    `status: ${artifact.status}`,
+    `exit: ${artifact.exitCode}`,
+    `almanac: ${artifact.almanacId} (${artifact.version})`,
+    `started: ${artifact.startedAt}`,
+    `finished: ${artifact.finishedAt}`,
+    `duration: ${artifact.durationMs}ms`,
+    `dry-run: ${artifact.dryRun}`,
+    `due-only: ${artifact.dueOnly}`,
+    `pre-status: ${artifact.preStatus}`,
+    `artifact: ${artifact.artifactRelPath}`,
+  ];
+  if (artifact.postStatus !== undefined) {
+    lines.push(`post-status: ${artifact.postStatus}`);
+  }
+  if (artifact.label !== undefined) {
+    lines.push(`label: ${artifact.label}`);
+  }
+  if (artifact.note !== undefined) {
+    lines.push("note:");
+    lines.push(artifact.note);
+  }
+  if (artifact.refresh !== undefined) {
+    lines.push(
+      `refresh: ${artifact.refresh.status} ${artifact.refresh.refreshId} exit=${artifact.refresh.exitCode}`,
+    );
+    if (artifact.refresh.artifactRelPath !== undefined) {
+      lines.push(`refresh-artifact: ${artifact.refresh.artifactRelPath}`);
+    }
+  }
+  if (artifact.benchmark !== undefined) {
+    const counts =
+      artifact.benchmark.total === undefined
+        ? ""
+        : ` ${artifact.benchmark.passed ?? 0}/${artifact.benchmark.total} passed`;
+    lines.push(`benchmark: ${artifact.benchmark.status}${counts}`);
+  }
+  lines.push("steps:");
+  if (artifact.steps.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const step of artifact.steps) {
+      const exit = step.exitCode === undefined ? "" : ` exit=${step.exitCode}`;
+      const relPath =
+        step.artifactRelPath === undefined
+          ? ""
+          : ` artifact=${step.artifactRelPath}`;
+      lines.push(`  - ${step.id} ${step.status}${exit}${relPath}: ${step.reason}`);
+    }
+  }
+  if (artifact.error !== undefined) {
+    lines.push(`error: ${artifact.error.code}: ${artifact.error.message}`);
+  }
+  if (artifact.nextActions.length > 0) {
+    lines.push("next actions:");
+    for (const action of artifact.nextActions) {
+      lines.push(`  - ${action}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
 async function readRunToolManifest(almanacDir: string) {
   if (!isAbsolute(almanacDir)) {
     throw new RunToolSetupError(
@@ -816,7 +898,7 @@ async function readRunToolArtifactFiles(artifactsDir: string): Promise<string[]>
     return entries
       .filter((entry) => entry.isFile())
       .map((entry) => entry.name)
-      .filter((name) => /^(run|refresh|answer)-[A-Za-z0-9-]+\.json$/.test(name));
+      .filter((name) => /^(run|refresh|answer|maintain)-[A-Za-z0-9-]+\.json$/.test(name));
   } catch (e) {
     if (errorCode(e) === "ENOENT") {
       return [];
@@ -848,6 +930,9 @@ async function readAndParseRunToolArtifact(
     }
     if (isAnswerArtifactLike(parsed)) {
       return AnswerArtifactSchema.parse(parsed);
+    }
+    if (isMaintenanceArtifactLike(parsed)) {
+      return MaintenanceArtifactSchema.parse(parsed);
     }
     return RunToolArtifactSchema.parse(parsed);
   } catch (e) {
@@ -884,19 +969,30 @@ function isAnswerArtifactLike(value: unknown): boolean {
   );
 }
 
+function isMaintenanceArtifactLike(value: unknown): boolean {
+  return (
+    value !== null &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as { kind?: unknown }).kind === "maintenance"
+  );
+}
+
 function parseRunToolRunId(runId: string): string {
   const parsed = RunArtifactIdSchema.safeParse(runId);
   if (!parsed.success) {
     throw new RunToolSetupError(
       "bad-run-id",
-      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, refresh-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, or answer-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
+      `run id must look like run-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, refresh-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, answer-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx, or maintain-YYYY-MM-DDTHH-MM-SS-SSSZ-xxxxxxxx: ${runId}`,
     );
   }
   return parsed.data;
 }
 
 function runArtifactRelPath(runId: string): string {
-  return runId.startsWith("refresh-") || runId.startsWith("answer-")
+  return runId.startsWith("refresh-") ||
+    runId.startsWith("answer-") ||
+    runId.startsWith("maintain-")
     ? `.runs/${runId}.json`
     : runToolArtifactRelPath(runId);
 }
@@ -944,6 +1040,24 @@ function summarizeRunToolArtifact(
       ...(artifact.abstentionReason === undefined
         ? {}
         : { abstentionReason: artifact.abstentionReason }),
+    };
+  }
+  if (artifact.kind === "maintenance") {
+    return {
+      kind: "maintenance",
+      artifactRelPath: artifact.artifactRelPath,
+      runId: artifact.maintenanceId,
+      invokedAt: artifact.startedAt,
+      ...(artifact.label === undefined ? {} : { label: artifact.label }),
+      status: artifact.status,
+      exitCode: artifact.exitCode,
+      durationMs: artifact.durationMs,
+      maintenanceStatus: artifact.status,
+      maintenanceSteps: artifact.steps.length,
+      maintenanceDueOnly: artifact.dueOnly,
+      ...(artifact.benchmark === undefined
+        ? {}
+        : { benchmarkStatus: artifact.benchmark.status }),
     };
   }
   return {
@@ -1038,7 +1152,11 @@ function compareRunToolArtifactsNewestFirst(
 }
 
 function artifactTimestamp(artifact: RunArtifactEnvelope): string {
-  if (artifact.kind === "refresh" || artifact.kind === "answer") {
+  if (
+    artifact.kind === "refresh" ||
+    artifact.kind === "answer" ||
+    artifact.kind === "maintenance"
+  ) {
     return artifact.startedAt;
   }
   return artifact.invokedAt;
@@ -1047,6 +1165,7 @@ function artifactTimestamp(artifact: RunArtifactEnvelope): string {
 function artifactId(artifact: RunArtifactEnvelope): string {
   if (artifact.kind === "refresh") return artifact.refreshId;
   if (artifact.kind === "answer") return artifact.answerId;
+  if (artifact.kind === "maintenance") return artifact.maintenanceId;
   return artifact.runId;
 }
 

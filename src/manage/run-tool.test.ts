@@ -26,6 +26,7 @@ import {
 } from "../compile/storage.ts";
 import {
   AlmanacManifestSchema,
+  MaintenanceArtifactSchema,
   RefreshArtifactSchema,
   type FactRecord,
 } from "../core/types.ts";
@@ -307,6 +308,65 @@ describe("runTool", () => {
     expect(readRefresh.artifact.kind).toBe("refresh");
     expect(formatRunToolArtifactHuman(readRefresh.artifact)).toContain(
       `refresh: ${refreshArtifact.refreshId}`,
+    );
+  });
+
+  test("lists and reads maintenance artifacts alongside tool artifacts", async () => {
+    const almanacDir = await buildRunToolFixture("run-maintenance");
+    const execution = await runTool({
+      almanacDir,
+      toolName: "query_facts",
+      input: { q: "foreign" },
+    });
+    const savedTool = await saveRunToolArtifact({
+      almanacDir,
+      execution,
+      label: "tool-smoke",
+    });
+    const maintenanceArtifact = writeMaintenanceArtifact(almanacDir);
+
+    const allArtifacts = await listRunToolArtifacts({ almanacDir });
+    expect(allArtifacts.runs.map((run) => run.kind).sort()).toEqual([
+      "maintenance",
+      "tool",
+    ]);
+    expect(allArtifacts.runs.map((run) => run.runId).sort()).toEqual(
+      [savedTool.artifact.runId, maintenanceArtifact.maintenanceId].sort(),
+    );
+
+    const maintenanceOnly = await listRunToolArtifacts({
+      almanacDir,
+      kind: "maintenance",
+    });
+    expect(maintenanceOnly.runs).toEqual([
+      expect.objectContaining({
+        kind: "maintenance",
+        runId: maintenanceArtifact.maintenanceId,
+        status: "ok",
+        benchmarkStatus: "passed",
+        maintenanceStatus: "ok",
+        maintenanceSteps: 2,
+        maintenanceDueOnly: true,
+      }),
+    ]);
+    expect(formatRunToolArtifactListHuman(maintenanceOnly)).toContain(
+      "maintenance",
+    );
+    expect(formatRunToolArtifactListHuman(maintenanceOnly)).toContain(
+      "steps=2",
+    );
+    expect(formatRunToolArtifactListHuman(maintenanceOnly)).toContain(
+      "dueOnly=true",
+    );
+
+    const readMaintenance = await readRunToolArtifact({
+      almanacDir,
+      runId: maintenanceArtifact.maintenanceId,
+    });
+    expect(readMaintenance.relPath).toBe(maintenanceArtifact.artifactRelPath);
+    expect(readMaintenance.artifact.kind).toBe("maintenance");
+    expect(formatRunToolArtifactHuman(readMaintenance.artifact)).toContain(
+      `maintenance: ${maintenanceArtifact.maintenanceId}`,
     );
   });
 
@@ -611,6 +671,69 @@ function writeRefreshArtifact(almanacDir: string) {
       errored: 0,
       citationRate: 1,
     },
+    durationMs: 5000,
+  });
+  const path = join(almanacDir, artifact.artifactRelPath);
+  writeFileSync(path, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  return artifact;
+}
+
+function writeMaintenanceArtifact(almanacDir: string) {
+  const maintenanceId = "maintain-2026-01-04T00-00-00-000Z-00000005";
+  const refreshId = "refresh-2026-01-04T00-00-00-000Z-00000004";
+  const artifact = MaintenanceArtifactSchema.parse({
+    schemaVersion: "0.1.0",
+    kind: "maintenance",
+    artifactRelPath: `.runs/${maintenanceId}.json`,
+    maintenanceId,
+    startedAt: "2026-01-04T00:00:00.000Z",
+    finishedAt: "2026-01-04T00:00:05.000Z",
+    almanacId: "run-maintenance",
+    version: "0.1.0",
+    label: "nightly",
+    status: "ok",
+    exitCode: 0,
+    dryRun: false,
+    dueOnly: true,
+    preStatus: "due",
+    postStatus: "ready",
+    refresh: {
+      status: "ok",
+      refreshId,
+      artifactRelPath: `.runs/${refreshId}.json`,
+      exitCode: 0,
+    },
+    benchmark: {
+      status: "passed",
+      total: 2,
+      passed: 2,
+      failed: 0,
+      errored: 0,
+      citationRate: 1,
+    },
+    steps: [
+      {
+        id: "refresh",
+        status: "ok",
+        reason: "refresh ok",
+        command:
+          "almanac refresh run run-maintenance --from-stage 12-benchmark-run --save",
+        providerRequired: false,
+        expectedArtifact: ".runs/refresh-*.json",
+        artifactRelPath: `.runs/${refreshId}.json`,
+        exitCode: 0,
+      },
+      {
+        id: "benchmark",
+        status: "ok",
+        reason: "benchmark passed",
+        command: "almanac benchmark run-maintenance",
+        providerRequired: false,
+        expectedArtifact: ".compile/benchmark-result.json",
+        exitCode: 0,
+      },
+    ],
+    nextActions: [],
     durationMs: 5000,
   });
   const path = join(almanacDir, artifact.artifactRelPath);

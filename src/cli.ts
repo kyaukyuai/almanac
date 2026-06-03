@@ -13,7 +13,7 @@
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac status <id> [opts]             show a compact lifecycle summary
- *   almanac maintain <id> [opts]           show a dry-run maintenance plan
+ *   almanac maintain [id] [opts]           plan/apply due maintenance
  *   almanac inspect <id> [opts]            print manifest + per-stage state
  *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
@@ -171,6 +171,7 @@ import {
   BenchmarkSetSchema,
   DomainSpecSchema,
   FactRecordSchema,
+  MaintenanceArtifactSchema,
   NegativeFixtureSchema,
   PositiveFixtureSchema,
   SourcesFileSchema,
@@ -187,6 +188,9 @@ import {
   type FreshnessProfileId,
   type KnowledgeIndexManifest,
   type KnowledgeVectorIndexManifest,
+  type MaintenanceArtifact,
+  type MaintenanceArtifactStatus,
+  type MaintenanceStepResult,
   type SourcesFile,
   type StageId,
   type ToolDesignResult,
@@ -1813,6 +1817,11 @@ interface MaintainOptions {
   root: string;
   json?: boolean;
   dryRun?: boolean;
+  apply?: boolean;
+  all?: boolean;
+  dueOnly?: boolean;
+  label?: string;
+  note?: string;
 }
 
 type McpServerEntry = {
@@ -1939,6 +1948,7 @@ interface LifecycleLatestRuns {
     tool: RunToolArtifactSummary | null;
     answer: RunToolArtifactSummary | null;
     refresh: RunToolArtifactSummary | null;
+    maintenance: RunToolArtifactSummary | null;
   };
   readError: string | null;
 }
@@ -2029,6 +2039,60 @@ interface MaintenanceReport {
   nextActions: string[];
 }
 
+interface MaintenanceApplyResult {
+  schemaVersion: "0.1.0";
+  mode: "apply";
+  almanacId: string;
+  version: string | null;
+  root: string;
+  almanacDir: string;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  dueOnly: boolean;
+  status: MaintenanceArtifactStatus;
+  exitCode: RunToolExitCode;
+  reportBefore: MaintenanceReport;
+  reportAfter: MaintenanceReport | null;
+  steps: MaintenanceStepResult[];
+  refresh: {
+    status: string;
+    refreshId: string;
+    artifactRelPath?: string;
+    exitCode: RunToolExitCode;
+  } | null;
+  benchmark: MaintenanceArtifact["benchmark"] | null;
+  savedArtifact: {
+    path: string;
+    relPath: string;
+  } | null;
+  error?: {
+    code: string;
+    message: string;
+  };
+  nextActions: string[];
+}
+
+interface MaintenanceBatchEntry {
+  almanacId: string;
+  status: "applied" | "skipped" | "failed";
+  reason: string;
+  report?: MaintenanceReport;
+  result?: MaintenanceApplyResult;
+}
+
+interface MaintenanceBatchResult {
+  schemaVersion: "0.1.0";
+  mode: "dry-run" | "apply";
+  root: string;
+  dueOnly: boolean;
+  total: number;
+  applied: number;
+  skipped: number;
+  failed: number;
+  results: MaintenanceBatchEntry[];
+}
+
 async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
   if (!existsSync(root)) return [];
   const entries = await readdir(root, { withFileTypes: true });
@@ -2085,11 +2149,12 @@ async function readLifecycleLatestRuns(
   almanacDir: string,
 ): Promise<LifecycleLatestRuns> {
   try {
-    const [latest, tool, answer, refresh] = await Promise.all([
+    const [latest, tool, answer, refresh, maintenance] = await Promise.all([
       listRunToolArtifacts({ almanacDir, limit: 1 }),
       listRunToolArtifacts({ almanacDir, kind: "tool", limit: 1 }),
       listRunToolArtifacts({ almanacDir, kind: "answer", limit: 1 }),
       listRunToolArtifacts({ almanacDir, kind: "refresh", limit: 1 }),
+      listRunToolArtifacts({ almanacDir, kind: "maintenance", limit: 1 }),
     ]);
     return {
       latest: latest.runs[0] ?? null,
@@ -2097,6 +2162,7 @@ async function readLifecycleLatestRuns(
         tool: tool.runs[0] ?? null,
         answer: answer.runs[0] ?? null,
         refresh: refresh.runs[0] ?? null,
+        maintenance: maintenance.runs[0] ?? null,
       },
       readError: null,
     };
@@ -2108,6 +2174,7 @@ async function readLifecycleLatestRuns(
         tool: null,
         answer: null,
         refresh: null,
+        maintenance: null,
       },
       readError: message,
     };
@@ -3202,6 +3269,9 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
     process.stdout.write(
       `  latest refresh ${compactRunSummary(report.runs.byKind.refresh)}\n`,
     );
+    process.stdout.write(
+      `  latest maintenance ${compactRunSummary(report.runs.byKind.maintenance)}\n`,
+    );
   } else {
     process.stdout.write(`  saved runs    unreadable: ${report.runs.readError}\n`);
   }
@@ -3694,13 +3764,530 @@ function formatMaintenanceReportHuman(report: MaintenanceReport): string {
   return lines.join("\n") + "\n";
 }
 
-async function cmdMaintain(id: string, opts: MaintainOptions): Promise<void> {
-  const report = await readMaintenanceReport(id, opts);
+async function cmdMaintain(
+  id: string | undefined,
+  opts: MaintainOptions,
+): Promise<void> {
+  validateMaintainOptions(id, opts);
+  if (opts.all === true) {
+    const result = await runMaintainAll(opts);
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(result, null, 2) + "\n"
+        : formatMaintenanceBatchHuman(result),
+    );
+    if (result.failed > 0) process.exitCode = 1;
+    return;
+  }
+
+  const almanacId = id!;
+  if (opts.apply === true) {
+    const result = await applyMaintenanceForId(almanacId, opts);
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(result, null, 2) + "\n"
+        : formatMaintenanceApplyHuman(result),
+    );
+    process.exitCode = result.exitCode;
+    return;
+  }
+
+  const report = await readMaintenanceReport(almanacId, opts);
   if (opts.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     return;
   }
   process.stdout.write(formatMaintenanceReportHuman(report));
+}
+
+function validateMaintainOptions(
+  id: string | undefined,
+  opts: MaintainOptions,
+): void {
+  if (opts.all === true && id !== undefined) {
+    maintainUsageError("<id> cannot be combined with --all");
+  }
+  if (opts.all !== true && id === undefined) {
+    maintainUsageError("provide <id> or pass --all");
+  }
+  if (opts.apply === true && opts.dryRun === true) {
+    maintainUsageError("--apply and --dry-run are mutually exclusive");
+  }
+  if (
+    opts.all === true &&
+    opts.apply === true &&
+    opts.dueOnly !== true
+  ) {
+    maintainUsageError("--all --apply requires --due-only");
+  }
+  if (
+    opts.apply !== true &&
+    (opts.label !== undefined || opts.note !== undefined)
+  ) {
+    maintainUsageError("--label and --note require --apply");
+  }
+}
+
+async function runMaintainAll(
+  opts: MaintainOptions,
+): Promise<MaintenanceBatchResult> {
+  const items = await readLifecycleInventory(opts.root);
+  const results: MaintenanceBatchEntry[] = [];
+  for (const item of items) {
+    const report = await readMaintenanceReport(item.almanacId, opts);
+    if (opts.dueOnly === true && !maintenanceReportIsDue(report)) {
+      results.push({
+        almanacId: item.almanacId,
+        status: "skipped",
+        reason: "not due",
+        report,
+      });
+      continue;
+    }
+    if (opts.apply === true) {
+      const result = await applyMaintenanceForId(item.almanacId, opts, report);
+      results.push({
+        almanacId: item.almanacId,
+        status: result.exitCode === 0 ? "applied" : "failed",
+        reason: result.error?.message ?? result.status,
+        result,
+      });
+    } else {
+      results.push({
+        almanacId: item.almanacId,
+        status: "skipped",
+        reason: "dry-run",
+        report,
+      });
+    }
+  }
+  return {
+    schemaVersion: "0.1.0",
+    mode: opts.apply === true ? "apply" : "dry-run",
+    root: opts.root,
+    dueOnly: opts.dueOnly === true,
+    total: results.length,
+    applied: results.filter((entry) => entry.status === "applied").length,
+    skipped: results.filter((entry) => entry.status === "skipped").length,
+    failed: results.filter((entry) => entry.status === "failed").length,
+    results,
+  };
+}
+
+async function applyMaintenanceForId(
+  id: string,
+  opts: MaintainOptions,
+  precomputedReport?: MaintenanceReport,
+): Promise<MaintenanceApplyResult> {
+  const reportBefore = precomputedReport ?? await readMaintenanceReport(id, opts);
+  const started = new Date();
+  const startedAt = started.toISOString();
+  const maintenanceId = generateMaintenanceRunId(startedAt);
+  const steps: MaintenanceStepResult[] = [];
+  let refreshResult: Awaited<ReturnType<typeof runRefresh>> | null = null;
+  let reportAfter: MaintenanceReport | null = null;
+  let error: MaintenanceApplyResult["error"];
+  const refreshStep = reportBefore.plan.find((step) => step.id === "refresh");
+  const { runners, providerAvailable } = buildRunners();
+
+  if (opts.dueOnly === true && !maintenanceReportIsDue(reportBefore)) {
+    steps.push(
+      maintenanceStepResult(
+        refreshStep ?? blockedMaintenanceStep("refresh", "refresh status unavailable"),
+        "not-due",
+        "due-only skipped because refresh is not due",
+      ),
+    );
+    const finishedAt = new Date().toISOString();
+    return {
+      schemaVersion: "0.1.0",
+      mode: "apply",
+      almanacId: reportBefore.almanacId,
+      version: reportBefore.version,
+      root: opts.root,
+      almanacDir: reportBefore.almanacDir,
+      startedAt,
+      finishedAt,
+      durationMs: elapsedMs(startedAt, finishedAt),
+      dueOnly: true,
+      status: "skipped",
+      exitCode: 0,
+      reportBefore,
+      reportAfter: reportBefore,
+      steps,
+      refresh: null,
+      benchmark: null,
+      savedArtifact: null,
+      nextActions: reportBefore.nextActions,
+    };
+  }
+
+  try {
+    if (refreshStep?.status === "planned") {
+      if (refreshStep.providerRequired && !providerAvailable) {
+        error = {
+          code: "provider-required",
+          message:
+            "selected maintenance refresh starts before provider-backed stages; set ANTHROPIC_API_KEY or rerun after narrowing the plan",
+        };
+        steps.push(maintenanceStepResult(refreshStep, "blocked", error.message, {
+          error,
+        }));
+      } else {
+        refreshResult = await runRefresh({
+          almanacDir: reportBefore.almanacDir,
+          ...(reportBefore.refresh.recommendedFromStage === null
+            ? {}
+            : { fromStage: reportBefore.refresh.recommendedFromStage }),
+          runners,
+          forgerVersion: FORGER_VERSION,
+          persistManifest: (manifest) =>
+            writeManifestWithActualCounts(reportBefore.almanacDir, manifest),
+          save: true,
+          label: normalizeMaintenanceLabel(opts.label ?? "maintenance"),
+          ...(opts.note === undefined
+            ? {}
+            : { note: normalizeMaintenanceNote(opts.note) }),
+        });
+        steps.push(
+          maintenanceStepResult(
+            refreshStep,
+            maintenanceStepStatusFromRefresh(refreshResult.status),
+            `refresh ${refreshResult.status}`,
+            {
+              artifactRelPath: refreshResult.savedArtifact?.relPath,
+              exitCode: refreshResult.exitCode,
+              error: refreshResult.error,
+            },
+          ),
+        );
+      }
+    } else if (refreshStep !== undefined) {
+      steps.push(maintenanceStepResult(refreshStep, "skipped", refreshStep.reason));
+    }
+
+    const benchmarkStep = reportBefore.plan.find((step) => step.id === "benchmark");
+    if (benchmarkStep !== undefined) {
+      if (refreshResult !== null) {
+        const benchmarkStatus = refreshResult.benchmark.status;
+        steps.push(
+          maintenanceStepResult(
+            benchmarkStep,
+            benchmarkStatus === "passed" ? "ok" : "failed",
+            `benchmark ${benchmarkStatus}`,
+            { exitCode: refreshResult.exitCode },
+          ),
+        );
+      } else {
+        steps.push(
+          maintenanceStepResult(
+            benchmarkStep,
+            benchmarkStep.status === "planned" ? "blocked" : "skipped",
+            error?.message ?? benchmarkStep.reason,
+            error === undefined ? {} : { error },
+          ),
+        );
+      }
+    }
+
+    for (const step of reportBefore.plan.filter(
+      (step) => step.id !== "refresh" && step.id !== "benchmark",
+    )) {
+      steps.push(
+        maintenanceStepResult(
+          step,
+          step.status === "planned" ? "skipped" : step.status,
+          step.status === "planned"
+            ? "not applied by the due-only maintenance runner"
+            : step.reason,
+        ),
+      );
+    }
+
+    reportAfter =
+      refreshResult !== null && refreshResult.exitCode === 0
+        ? await readMaintenanceReport(id, opts)
+        : null;
+  } catch (cause) {
+    error = {
+      code: "maintenance-failed",
+      message: unknownErrorMessage(cause),
+    };
+  }
+
+  const finishedAt = new Date().toISOString();
+  const status = maintenanceArtifactStatus({
+    error,
+    refreshResult,
+    steps,
+  });
+  const exitCode = maintenanceExitCode(status);
+  const nextActions = uniqueStrings([
+    ...(reportAfter?.nextActions ?? reportBefore.nextActions),
+    ...(error === undefined ? [] : reportBefore.nextActions),
+  ]);
+  const artifact = await saveMaintenanceArtifact({
+    almanacDir: reportBefore.almanacDir,
+    maintenanceId,
+    startedAt,
+    finishedAt,
+    reportBefore,
+    reportAfter,
+    status,
+    exitCode,
+    dueOnly: opts.dueOnly === true,
+    steps,
+    refreshResult,
+    label: normalizeMaintenanceLabel(opts.label ?? "maintenance"),
+    ...(opts.note === undefined ? {} : { note: normalizeMaintenanceNote(opts.note) }),
+    ...(error === undefined ? {} : { error }),
+    nextActions,
+  });
+
+  return {
+    schemaVersion: "0.1.0",
+    mode: "apply",
+    almanacId: reportBefore.almanacId,
+    version: reportBefore.version,
+    root: opts.root,
+    almanacDir: reportBefore.almanacDir,
+    startedAt,
+    finishedAt,
+    durationMs: elapsedMs(startedAt, finishedAt),
+    dueOnly: opts.dueOnly === true,
+    status,
+    exitCode,
+    reportBefore,
+    reportAfter,
+    steps,
+    refresh:
+      refreshResult === null
+        ? null
+        : {
+            status: refreshResult.status,
+            refreshId: refreshResult.refreshId,
+            ...(refreshResult.savedArtifact === undefined
+              ? {}
+              : { artifactRelPath: refreshResult.savedArtifact.relPath }),
+            exitCode: refreshResult.exitCode,
+          },
+    benchmark: refreshResult?.benchmark ?? null,
+    savedArtifact: {
+      path: artifact.path,
+      relPath: artifact.relPath,
+    },
+    ...(error === undefined ? {} : { error }),
+    nextActions,
+  };
+}
+
+function maintenanceReportIsDue(report: MaintenanceReport): boolean {
+  return report.refresh.due || report.benchmark.planned;
+}
+
+function maintenanceStepResult(
+  step: MaintenancePlanStep,
+  status: MaintenanceStepResult["status"],
+  reason: string,
+  extras: Partial<
+    Pick<MaintenanceStepResult, "artifactRelPath" | "exitCode" | "error">
+  > = {},
+): MaintenanceStepResult {
+  return {
+    id: step.id,
+    status,
+    reason,
+    command: step.command,
+    providerRequired: step.providerRequired,
+    expectedArtifact: step.expectedArtifact,
+    ...extras,
+  };
+}
+
+function maintenanceStepStatusFromRefresh(
+  status: Awaited<ReturnType<typeof runRefresh>>["status"],
+): MaintenanceStepResult["status"] {
+  if (status === "ok") return "ok";
+  if (status === "not-due") return "not-due";
+  if (status === "locked") return "locked";
+  return "failed";
+}
+
+function maintenanceArtifactStatus(args: {
+  error?: MaintenanceApplyResult["error"];
+  refreshResult: Awaited<ReturnType<typeof runRefresh>> | null;
+  steps: MaintenanceStepResult[];
+}): MaintenanceArtifactStatus {
+  if (args.error !== undefined) return "failed";
+  if (args.steps.some((step) => step.status === "locked")) return "locked";
+  if (args.steps.some((step) => step.status === "failed" || step.status === "blocked")) {
+    return "failed";
+  }
+  if (args.refreshResult?.status === "not-due") return "not-due";
+  if (args.steps.every((step) => step.status === "skipped" || step.status === "not-due")) {
+    return "skipped";
+  }
+  return "ok";
+}
+
+function maintenanceExitCode(status: MaintenanceArtifactStatus): RunToolExitCode {
+  if (status === "ok" || status === "not-due" || status === "skipped") return 0;
+  if (status === "locked") return 2;
+  return 1;
+}
+
+async function saveMaintenanceArtifact(input: {
+  almanacDir: string;
+  maintenanceId: string;
+  startedAt: string;
+  finishedAt: string;
+  reportBefore: MaintenanceReport;
+  reportAfter: MaintenanceReport | null;
+  status: MaintenanceArtifactStatus;
+  exitCode: RunToolExitCode;
+  dueOnly: boolean;
+  steps: MaintenanceStepResult[];
+  refreshResult: Awaited<ReturnType<typeof runRefresh>> | null;
+  label?: string;
+  note?: string;
+  error?: MaintenanceApplyResult["error"];
+  nextActions: string[];
+}): Promise<{ artifact: MaintenanceArtifact; path: string; relPath: string }> {
+  const relPath = `.runs/${input.maintenanceId}.json`;
+  const path = join(input.almanacDir, relPath);
+  const artifact = MaintenanceArtifactSchema.parse({
+    schemaVersion: "0.1.0",
+    kind: "maintenance",
+    artifactRelPath: relPath,
+    maintenanceId: input.maintenanceId,
+    startedAt: input.startedAt,
+    finishedAt: input.finishedAt,
+    almanacId: input.reportBefore.almanacId,
+    version: input.reportBefore.version ?? "0.0.0",
+    ...(input.label === undefined ? {} : { label: input.label }),
+    ...(input.note === undefined ? {} : { note: input.note }),
+    status: input.status,
+    exitCode: input.exitCode,
+    dryRun: false,
+    dueOnly: input.dueOnly,
+    preStatus: input.reportBefore.status,
+    ...(input.reportAfter === null ? {} : { postStatus: input.reportAfter.status }),
+    ...(input.refreshResult === null
+      ? {}
+      : {
+          refresh: {
+            status: input.refreshResult.status,
+            refreshId: input.refreshResult.refreshId,
+            ...(input.refreshResult.savedArtifact === undefined
+              ? {}
+              : { artifactRelPath: input.refreshResult.savedArtifact.relPath }),
+            exitCode: input.refreshResult.exitCode,
+          },
+          benchmark: input.refreshResult.benchmark,
+        }),
+    steps: input.steps,
+    nextActions: input.nextActions,
+    durationMs: elapsedMs(input.startedAt, input.finishedAt),
+    ...(input.error === undefined ? {} : { error: input.error }),
+  });
+  await mkdir(dirname(path), { recursive: true });
+  await writeFile(path, JSON.stringify(artifact, null, 2) + "\n", "utf8");
+  return { artifact, path, relPath };
+}
+
+function generateMaintenanceRunId(invokedAt: string): string {
+  return `maintain-${invokedAt.replace(/[:.]/g, "-")}-${randomBytes(4).toString("hex")}`;
+}
+
+function elapsedMs(startedAt: string, finishedAt: string): number {
+  return Math.max(0, Date.parse(finishedAt) - Date.parse(startedAt));
+}
+
+function normalizeMaintenanceLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.length === 0 || normalized.length > 80) {
+    maintainUsageError("--label must be between 1 and 80 characters");
+  }
+  return normalized;
+}
+
+function normalizeMaintenanceNote(note: string): string {
+  const normalized = note.trim();
+  if (normalized.length === 0 || normalized.length > 1000) {
+    maintainUsageError("--note must be between 1 and 1000 characters");
+  }
+  return normalized;
+}
+
+function maintainUsageError(message: string): never {
+  process.stderr.write(`error: maintain: ${message}\n`);
+  process.exit(2);
+}
+
+function formatMaintenanceApplyHuman(result: MaintenanceApplyResult): string {
+  const lines = [
+    `maintenance apply: ${result.almanacId} (${result.version ?? "unknown"})`,
+    `status: ${result.status}`,
+    `exit: ${result.exitCode}`,
+    `started: ${result.startedAt}`,
+    `finished: ${result.finishedAt}`,
+    `duration: ${result.durationMs}ms`,
+    `due-only: ${result.dueOnly}`,
+  ];
+  if (result.refresh !== null) {
+    lines.push(
+      `refresh: ${result.refresh.status} ${result.refresh.refreshId} exit=${result.refresh.exitCode}`,
+    );
+    if (result.refresh.artifactRelPath !== undefined) {
+      lines.push(`refresh-artifact: ${result.refresh.artifactRelPath}`);
+    }
+  }
+  if (result.benchmark !== null) {
+    lines.push(`benchmark: ${result.benchmark?.status ?? "unknown"}`);
+  }
+  if (result.savedArtifact !== null) {
+    lines.push(`artifact: ${result.savedArtifact.path}`);
+  }
+  lines.push("steps:");
+  for (const step of result.steps) {
+    const exit = step.exitCode === undefined ? "" : ` exit=${step.exitCode}`;
+    const artifact =
+      step.artifactRelPath === undefined ? "" : ` artifact=${step.artifactRelPath}`;
+    lines.push(`  - ${step.id} ${step.status}${exit}${artifact}: ${step.reason}`);
+  }
+  if (result.error !== undefined) {
+    lines.push(`error: ${result.error.code}: ${result.error.message}`);
+  }
+  if (result.nextActions.length > 0) {
+    lines.push("next actions:");
+    for (const action of result.nextActions) {
+      lines.push(`  - ${action}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function formatMaintenanceBatchHuman(result: MaintenanceBatchResult): string {
+  const lines = [
+    `maintenance ${result.mode}: root ${result.root}`,
+    `due-only: ${result.dueOnly}`,
+    `total: ${result.total}`,
+    `applied: ${result.applied}`,
+    `skipped: ${result.skipped}`,
+    `failed: ${result.failed}`,
+    "results:",
+  ];
+  if (result.results.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const entry of result.results) {
+      lines.push(`  - ${entry.almanacId} ${entry.status}: ${entry.reason}`);
+      if (entry.result?.savedArtifact !== undefined && entry.result.savedArtifact !== null) {
+        lines.push(`    ${entry.result.savedArtifact.path}`);
+      }
+    }
+  }
+  return lines.join("\n") + "\n";
 }
 
 interface InspectOptions {
@@ -7338,10 +7925,15 @@ program
   .action(cmdStatus);
 
 program
-  .command("maintain <id>")
-  .description("show a provider-free dry-run maintenance plan for an almanac")
+  .command("maintain [id]")
+  .description("plan or apply provider-aware due maintenance")
+  .option("--all", "Plan or apply maintenance for every almanac under the root")
+  .option("--apply", "Run due maintenance and save a maintenance artifact")
+  .option("--due-only", "Skip almanacs that are not due for refresh or benchmark")
   .option("--json", "Emit JSON instead of a human-readable summary")
   .option("--dry-run", "Show the maintenance plan without writing files")
+  .option("--label <name>", "Short label for saved maintenance artifacts")
+  .option("--note <text>", "Human note for saved maintenance artifacts")
   .addOption(rootOption)
   .action(cmdMaintain);
 
@@ -7457,6 +8049,7 @@ program
       "tool",
       "refresh",
       "answer",
+      "maintenance",
     ]),
   )
   .option("--label <name>", "Filter list by saved artifact label")
@@ -7476,6 +8069,7 @@ program
         "tool-not-found",
         "failed",
         "not-due",
+        "skipped",
         "locked",
         "abstained",
         "bad-tool-input",

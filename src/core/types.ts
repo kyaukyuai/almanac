@@ -3555,13 +3555,32 @@ export const AnswerArtifactRelPathSchema = z
   .max(123)
   .regex(/^\.runs\/answer-[A-Za-z0-9-]+\.json$/);
 
+export const MaintenanceRunIdSchema = z
+  .string()
+  .max(86)
+  .regex(
+    /^maintain-\d{4}-\d{2}-\d{2}T\d{2}-\d{2}-\d{2}-\d{3}Z-[a-f0-9]{8}$/,
+    "must be maintain-<ISO timestamp with - separators>-<8 hex chars>",
+  );
+
+export const MaintenanceArtifactRelPathSchema = z
+  .string()
+  .max(126)
+  .regex(/^\.runs\/maintain-[A-Za-z0-9-]+\.json$/);
+
 export const RunArtifactIdSchema = z.union([
   RunToolRunIdSchema,
   RefreshRunIdSchema,
   AnswerRunIdSchema,
+  MaintenanceRunIdSchema,
 ]);
 
-export const RunArtifactKindSchema = z.enum(["tool", "refresh", "answer"]);
+export const RunArtifactKindSchema = z.enum([
+  "tool",
+  "refresh",
+  "answer",
+  "maintenance",
+]);
 export type RunArtifactKind = z.infer<typeof RunArtifactKindSchema>;
 
 export const RunToolArtifactLabelSchema = z
@@ -3619,10 +3638,22 @@ export const AnswerArtifactStatusSchema = z.enum([
 ]);
 export type AnswerArtifactStatus = z.infer<typeof AnswerArtifactStatusSchema>;
 
+export const MaintenanceArtifactStatusSchema = z.enum([
+  "ok",
+  "failed",
+  "not-due",
+  "skipped",
+  "locked",
+]);
+export type MaintenanceArtifactStatus = z.infer<
+  typeof MaintenanceArtifactStatusSchema
+>;
+
 export const RunArtifactStatusSchema = z.union([
   RunToolStatusSchema,
   RefreshArtifactStatusSchema,
   AnswerArtifactStatusSchema,
+  MaintenanceArtifactStatusSchema,
 ]);
 export type RunArtifactStatus = z.infer<typeof RunArtifactStatusSchema>;
 
@@ -3936,10 +3967,111 @@ export const AnswerArtifactSchema = z
   });
 export type AnswerArtifact = z.infer<typeof AnswerArtifactSchema>;
 
+export const MaintenancePlanStepIdSchema = z.enum([
+  "refresh",
+  "benchmark",
+  "ask-suite",
+  "cleanup",
+]);
+export type MaintenancePlanStepId = z.infer<typeof MaintenancePlanStepIdSchema>;
+
+export const MaintenanceStepResultStatusSchema = z.enum([
+  "ok",
+  "failed",
+  "skipped",
+  "blocked",
+  "not-due",
+  "locked",
+]);
+export type MaintenanceStepResultStatus = z.infer<
+  typeof MaintenanceStepResultStatusSchema
+>;
+
+export const MaintenanceStepResultSchema = z.object({
+  id: MaintenancePlanStepIdSchema,
+  status: MaintenanceStepResultStatusSchema,
+  reason: z.string().min(1).max(1000),
+  command: z.string().min(1).max(2000).nullable(),
+  providerRequired: z.boolean(),
+  expectedArtifact: z.string().min(1).max(500).nullable(),
+  artifactRelPath: z.string().min(1).max(500).optional(),
+  exitCode: RunToolExitCodeSchema.optional(),
+  error: z
+    .object({
+      code: z.string().min(1).max(80),
+      message: z.string().min(1).max(2000),
+    })
+    .optional(),
+});
+export type MaintenanceStepResult = z.infer<
+  typeof MaintenanceStepResultSchema
+>;
+
+export const MaintenanceArtifactSchema = z
+  .object({
+    schemaVersion: z.literal("0.1.0"),
+    kind: z.literal("maintenance"),
+    artifactRelPath: MaintenanceArtifactRelPathSchema,
+    maintenanceId: MaintenanceRunIdSchema,
+    startedAt: z.string().regex(ISO_8601),
+    finishedAt: z.string().regex(ISO_8601),
+    almanacId: z
+      .string()
+      .max(32)
+      .regex(CANONICAL_SLUG, "must be lowercase kebab-case"),
+    version: z.string().regex(SEMVER_RE, "must be semver"),
+    label: RunToolArtifactLabelSchema.optional(),
+    note: RunToolArtifactNoteSchema.optional(),
+    status: MaintenanceArtifactStatusSchema,
+    exitCode: RunToolExitCodeSchema,
+    dryRun: z.boolean(),
+    dueOnly: z.boolean(),
+    preStatus: z.string().min(1).max(80),
+    postStatus: z.string().min(1).max(80).optional(),
+    refresh: z
+      .object({
+        status: RefreshArtifactStatusSchema,
+        refreshId: RefreshRunIdSchema,
+        artifactRelPath: RefreshArtifactRelPathSchema.optional(),
+        exitCode: RunToolExitCodeSchema,
+      })
+      .optional(),
+    benchmark: z
+      .object({
+        status: z.enum(["missing", "passed", "failed"]),
+        total: z.number().int().nonnegative().optional(),
+        passed: z.number().int().nonnegative().optional(),
+        failed: z.number().int().nonnegative().optional(),
+        errored: z.number().int().nonnegative().optional(),
+        citationRate: z.number().min(0).max(1).optional(),
+      })
+      .optional(),
+    steps: z.array(MaintenanceStepResultSchema).max(20),
+    nextActions: z.array(z.string().min(1).max(2000)).max(80),
+    durationMs: z.number().int().nonnegative(),
+    error: z
+      .object({
+        code: z.string().min(1).max(80),
+        message: z.string().min(1).max(2000),
+      })
+      .optional(),
+  })
+  .superRefine((artifact, ctx) => {
+    if (Date.parse(artifact.finishedAt) < Date.parse(artifact.startedAt)) {
+      ctx.addIssue({
+        code: z.ZodIssueCode.custom,
+        path: ["finishedAt"],
+        message: "finishedAt must be >= startedAt",
+      });
+    }
+  });
+export type MaintenanceArtifact = z.infer<typeof MaintenanceArtifactSchema>;
+
 export const RunArtifactEnvelopeSchema = z.union([
   RunToolArtifactSchema,
   RefreshArtifactSchema,
   AnswerArtifactSchema,
+  MaintenanceArtifactSchema,
 ]);
 export type RunArtifactEnvelope = z.infer<typeof RunArtifactEnvelopeSchema>;
 

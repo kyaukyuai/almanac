@@ -20,7 +20,11 @@ import { join } from "node:path";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
-import { RefreshArtifactSchema, STAGE_IDS } from "./core/types.ts";
+import {
+  RefreshArtifactSchema,
+  STAGE_IDS,
+  buildSourceFetchManifest,
+} from "./core/types.ts";
 import {
   almanacDirPath,
   compileStatePath,
@@ -36,6 +40,7 @@ import {
   positiveJsonlPath,
   stage11OutputPath,
 } from "./compile/stages/s11-benchmark-gen.ts";
+import { benchmarkResultPath } from "./compile/stages/s12-benchmark-run-runner.ts";
 
 let root: string;
 
@@ -232,6 +237,81 @@ async function writeLegacyCountFixture(
     );
     await writeFile(join(toolsDir, `${name}.ts`), "export default async function() {}", "utf8");
   }
+}
+
+async function writeFreshSqliteDemoSourceFetchManifest(): Promise<void> {
+  const almanacDir = almanacDirPath(root, "sqlite-demo");
+  const fetchedAt = new Date();
+  const contentHash = "c".repeat(64);
+  const manifest = buildSourceFetchManifest({
+    almanacId: "sqlite-demo",
+    startedAt: new Date(fetchedAt.getTime() - 1000),
+    finishedAt: fetchedAt,
+    entries: [
+      {
+        sourceId: "sqlite-transactions",
+        status: "fetched",
+        fetchedAt: fetchedAt.toISOString(),
+        finalUrl: "https://www.sqlite.org/lang_transaction.html",
+        fetcher: "fixture",
+        documents: [
+          {
+            contentHash,
+            relPath: `sources/raw/${contentHash}.html`,
+            url: "https://www.sqlite.org/lang_transaction.html",
+            mediaType: "text/html",
+            byteLength: 120,
+            fetchedAt: fetchedAt.toISOString(),
+            sourceTimestamp: fetchedAt.toISOString(),
+            title: "SQLite Transactions",
+          },
+        ],
+      },
+      {
+        sourceId: "sqlite-query-plan",
+        status: "fetched",
+        fetchedAt: fetchedAt.toISOString(),
+        finalUrl: "https://www.sqlite.org/eqp.html",
+        fetcher: "fixture",
+        documents: [
+          {
+            contentHash: "d".repeat(64),
+            relPath: `sources/raw/${"d".repeat(64)}.html`,
+            url: "https://www.sqlite.org/eqp.html",
+            mediaType: "text/html",
+            byteLength: 100,
+            fetchedAt: fetchedAt.toISOString(),
+            sourceTimestamp: fetchedAt.toISOString(),
+            title: "SQLite Query Plan",
+          },
+        ],
+      },
+      {
+        sourceId: "sqlite-pragmas",
+        status: "fetched",
+        fetchedAt: fetchedAt.toISOString(),
+        finalUrl: "https://www.sqlite.org/pragma.html",
+        fetcher: "fixture",
+        documents: [
+          {
+            contentHash: "e".repeat(64),
+            relPath: `sources/raw/${"e".repeat(64)}.html`,
+            url: "https://www.sqlite.org/pragma.html",
+            mediaType: "text/html",
+            byteLength: 80,
+            fetchedAt: fetchedAt.toISOString(),
+            sourceTimestamp: fetchedAt.toISOString(),
+            title: "SQLite Pragmas",
+          },
+        ],
+      },
+    ],
+  });
+  await writeFile(
+    join(almanacDir, "sources", "manifest.summary.json"),
+    JSON.stringify(manifest, null, 2) + "\n",
+    "utf8",
+  );
 }
 
 async function writeFailedStageFixture(args: {
@@ -550,7 +630,12 @@ describe("almanac CLI legacy artifact counts", () => {
       };
       runs: {
         latest: unknown;
-        byKind: { tool: unknown; answer: unknown; refresh: unknown };
+        byKind: {
+          tool: unknown;
+          answer: unknown;
+          refresh: unknown;
+          maintenance: unknown;
+        };
         readError: string | null;
       };
     };
@@ -739,6 +824,225 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("blocked refresh: almanac artifacts are broken");
     expect(result.stdout).toContain("broken-directory");
     expect(result.stdout).toContain("manifest.json missing");
+  });
+
+  test("maintain --apply runs due provider-free refresh and saves a maintenance artifact", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+    const almanacDir = almanacDirPath(root, "sqlite-demo");
+    await rm(benchmarkResultPath(almanacDir), { force: true });
+
+    const dryRun = runCli(
+      ["maintain", "sqlite-demo", "--json", "--dry-run", "--root", root],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+    expect(dryRun.status).toBe(0);
+    const dryReport = JSON.parse(dryRun.stdout) as {
+      status: string;
+      plan: unknown[];
+      refresh: { due: boolean; recommendedFromStage: string };
+      benchmark: { planned: boolean; status: string };
+    };
+    expect(dryReport.status).toBe("due");
+    expect(dryReport.refresh).toMatchObject({
+      due: true,
+      recommendedFromStage: "12-benchmark-run",
+    });
+    expect(dryReport.benchmark).toMatchObject({
+      planned: true,
+      status: "not-run",
+    });
+
+    const applied = runCli(
+      [
+        "maintain",
+        "sqlite-demo",
+        "--apply",
+        "--json",
+        "--label",
+        "pr3-smoke",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(applied.status).toBe(0);
+    expect(applied.stderr).toBe("");
+    const result = JSON.parse(applied.stdout) as {
+      status: string;
+      exitCode: number;
+      dueOnly: boolean;
+      reportBefore: { plan: unknown[] };
+      reportAfter: { status: string } | null;
+      refresh: {
+        status: string;
+        artifactRelPath?: string;
+        exitCode: number;
+      } | null;
+      benchmark: { status: string; total?: number; passed?: number } | null;
+      savedArtifact: { relPath: string; path: string } | null;
+      steps: Array<{ id: string; status: string; artifactRelPath?: string }>;
+    };
+    expect(result.status).toBe("ok");
+    expect(result.exitCode).toBe(0);
+    expect(result.dueOnly).toBe(false);
+    expect(result.reportBefore.plan).toEqual(dryReport.plan);
+    expect(result.reportAfter?.status).toBe("needs-validation");
+    expect(result.refresh).toMatchObject({
+      status: "ok",
+      exitCode: 0,
+    });
+    expect(result.refresh?.artifactRelPath).toMatch(/^\.runs\/refresh-/);
+    expect(result.benchmark).toMatchObject({
+      status: "passed",
+      total: 2,
+      passed: 2,
+    });
+    expect(result.savedArtifact?.relPath).toMatch(/^\.runs\/maintain-/);
+    expect(existsSync(result.savedArtifact!.path)).toBe(true);
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        id: "refresh",
+        status: "ok",
+        artifactRelPath: result.refresh?.artifactRelPath,
+      }),
+    );
+
+    const runs = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "maintenance",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(runs.status).toBe(0);
+    const listed = JSON.parse(runs.stdout) as {
+      runs: Array<{
+        kind: string;
+        runId: string;
+        status: string;
+        label?: string;
+        maintenanceSteps?: number;
+        benchmarkStatus?: string;
+      }>;
+    };
+    expect(listed.runs).toEqual([
+      expect.objectContaining({
+        kind: "maintenance",
+        status: "ok",
+        label: "pr3-smoke",
+        benchmarkStatus: "passed",
+      }),
+    ]);
+    expect(listed.runs[0]?.maintenanceSteps).toBeGreaterThanOrEqual(2);
+
+    const status = runCli(["status", "sqlite-demo", "--root", root]);
+    expect(status.status).toBe(0);
+    expect(status.stdout).toContain("latest maintenance maintenance");
+    expect(status.stdout).toContain("label=pr3-smoke");
+  });
+
+  test("maintain --all --due-only --apply skips almanacs that are not due", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+
+    const result = runCli(
+      ["maintain", "--all", "--due-only", "--apply", "--json", "--root", root],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      mode: string;
+      dueOnly: boolean;
+      total: number;
+      applied: number;
+      skipped: number;
+      failed: number;
+      results: Array<{ almanacId: string; status: string; reason: string }>;
+    };
+    expect(parsed.mode).toBe("apply");
+    expect(parsed.dueOnly).toBe(true);
+    expect(parsed.total).toBe(1);
+    expect(parsed.applied).toBe(0);
+    expect(parsed.skipped).toBe(1);
+    expect(parsed.failed).toBe(0);
+    expect(parsed.results).toEqual([
+      expect.objectContaining({
+        almanacId: "sqlite-demo",
+        status: "skipped",
+        reason: "not due",
+      }),
+    ]);
+  });
+
+  test("maintain --apply records locked refresh attempts without hiding progress", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+    const almanacDir = almanacDirPath(root, "sqlite-demo");
+    await rm(benchmarkResultPath(almanacDir), { force: true });
+    await writeFile(
+      join(almanacDir, ".compile", "refresh.lock"),
+      JSON.stringify({
+        pid: 12345,
+        command: "almanac refresh run sqlite-demo",
+        acquiredAt: "2026-06-03T00:00:00.000Z",
+      }) + "\n",
+      "utf8",
+    );
+
+    const result = runCli(
+      ["maintain", "sqlite-demo", "--apply", "--json", "--root", root],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      exitCode: number;
+      refresh: { status: string; artifactRelPath?: string } | null;
+      savedArtifact: { path: string; relPath: string } | null;
+      steps: Array<{
+        id: string;
+        status: string;
+        artifactRelPath?: string;
+        exitCode?: number;
+      }>;
+    };
+    expect(parsed.status).toBe("locked");
+    expect(parsed.exitCode).toBe(2);
+    expect(parsed.refresh?.status).toBe("locked");
+    expect(parsed.refresh?.artifactRelPath).toMatch(/^\.runs\/refresh-/);
+    expect(parsed.savedArtifact?.relPath).toMatch(/^\.runs\/maintain-/);
+    expect(existsSync(parsed.savedArtifact!.path)).toBe(true);
+    expect(parsed.steps).toContainEqual(
+      expect.objectContaining({
+        id: "refresh",
+        status: "locked",
+        artifactRelPath: parsed.refresh?.artifactRelPath,
+        exitCode: 2,
+      }),
+    );
   });
 
   test("status shows failed compile recovery as operator next action", async () => {
