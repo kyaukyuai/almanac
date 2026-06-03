@@ -168,7 +168,7 @@ a resident chat surface.
 | `almanac ask <domain> <question>`                   | one-shot cited answer over compiled tools     | v0.7 |
 | `almanac runs <domain> [runId]`                     | view/prune saved run audit artifacts          | v0.5 |
 | `almanac serve <domain> [--transport=stdio\|http]` | start MCP server for one almanac              | ✅   |
-| `almanac register <domain> --client=<name>`        | write MCP config + place SKILL.md             | ✅   |
+| `almanac register <domain> --client=<name>`        | inspect/write MCP config + place SKILL.md     | ✅   |
 | `almanac feed <domain> <source>`                   | add a single source incrementally             | v0.2 |
 | `almanac remove <domain>`                          | delete almanac                                | ✅   |
 | `almanac export <domain>`                          | bundle as portable archive                    | v0.2 |
@@ -194,6 +194,11 @@ a resident chat surface.
 - `claude-desktop` — writes `claude_desktop_config.json` MCP server entry
 - `cursor` — writes Cursor MCP config entry
 - `codex` — writes Codex MCP config entry
+
+`almanac register --status` is the read-only registration visibility path. It
+reports client-specific Skill and MCP state, including missing installs,
+stale Skill files, unreadable config files, and MCP command/root/CLI path
+mismatches. Repair remains an explicit `register --apply` action.
 
 ---
 

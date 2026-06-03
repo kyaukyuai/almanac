@@ -30,7 +30,8 @@
  *   almanac serve <id> [opts]              start the MCP server (stdio or HTTP)
  *   almanac register <id> [opts]           install SKILL.md + merge MCP entry
  *                                          into a downstream client config
- *                                          (--client=claude-code|claude-desktop|cursor)
+ *                                          (--client=claude-code|claude-desktop|cursor|codex;
+ *                                          --status for read-only inspection)
  *   almanac remove <id> [opts]             delete an almanac dir + unregister
  *                                          it from any client configs (dry-run
  *                                          by default; --apply to commit)
@@ -1801,6 +1802,48 @@ interface StatusOptions {
   json?: boolean;
 }
 
+type McpServerEntry = {
+  command: string;
+  args: string[];
+};
+
+type RegistrationComponentStatus =
+  | "current"
+  | "missing"
+  | "stale"
+  | "mismatched"
+  | "unreadable"
+  | "unsupported";
+type RegistrationOverallStatus =
+  | "current"
+  | "missing"
+  | "stale"
+  | "unreadable"
+  | "unsupported";
+
+interface RegistrationComponentState {
+  status: RegistrationComponentStatus;
+  path: string | null;
+  issues: string[];
+}
+
+interface RegistrationClientState {
+  client: RegisterClient;
+  status: RegistrationOverallStatus;
+  skill: RegistrationComponentState;
+  mcp: RegistrationComponentState & {
+    serverName: string;
+    expected: McpServerEntry;
+    actual: unknown;
+  };
+  nextActions: string[];
+}
+
+interface LifecycleRegistrationSummary {
+  status: RegistrationOverallStatus;
+  clients: RegistrationClientState[];
+}
+
 type LifecycleOverallStatus = "ok" | "attention" | "failed" | "broken";
 type LifecycleCompileStatus = "ok" | "attention" | "failed" | "missing";
 type LifecycleKnowledgeStatus = "present" | "missing" | "unreadable";
@@ -1866,6 +1909,7 @@ interface LifecycleInventoryItem {
       nextDueAt: string | null;
       issue?: string;
     };
+    registration: LifecycleRegistrationSummary;
     issues: string[];
     nextActions: string[];
   };
@@ -1922,8 +1966,12 @@ async function readAlmanacStatusReport(
   const runs = await readLifecycleLatestRuns(dir);
   const runReadError =
     runs.readError === null ? [] : [`saved runs unreadable: ${runs.readError}`];
+  const registrationRepairActions = item.lifecycle.registration.clients
+    .filter((client) => client.status === "stale" || client.status === "unreadable")
+    .flatMap((client) => client.nextActions);
   const nextActions = uniqueStrings([
     ...item.lifecycle.nextActions,
+    ...registrationRepairActions,
     ...(runs.readError === null
       ? [`view saved runs: almanac runs ${id}${rootArg(opts.root)}`]
       : [`inspect runs directory: ${join(dir, ".runs")}`]),
@@ -2133,6 +2181,11 @@ async function readLifecycleInventoryItem(
     nextActions,
     rootSuffix,
   });
+  const registration = await readLifecycleRegistration({
+    almanacDir,
+    manifest,
+    root,
+  });
 
   nextActions.push(`inspect details: almanac inspect ${manifest.almanacId}${rootSuffix}`);
 
@@ -2175,6 +2228,7 @@ async function readLifecycleInventoryItem(
       benchmark,
       answer,
       refresh,
+      registration,
       issues: uniqueStrings(issues),
       nextActions: uniqueStrings(nextActions),
     },
@@ -2234,6 +2288,10 @@ function brokenLifecycleItem(args: {
         recommendedFromStage: null,
         reasons: null,
         nextDueAt: null,
+      },
+      registration: {
+        status: "unsupported",
+        clients: [],
       },
       issues: [args.issue],
       nextActions: [args.nextAction],
@@ -2412,6 +2470,348 @@ async function readLifecycleRefresh(args: {
   }
 }
 
+async function readLifecycleRegistration(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  root: string;
+}): Promise<LifecycleRegistrationSummary> {
+  const clients = await Promise.all(
+    Object.values(CLIENT_PROFILES).map((profile) =>
+      readRegistrationClientState({
+        almanacDir: args.almanacDir,
+        manifest: args.manifest,
+        root: args.root,
+        profile,
+        target: "both",
+      }),
+    ),
+  );
+  return {
+    status: aggregateRegistrationStatus(clients),
+    clients,
+  };
+}
+
+async function readRegistrationClientState(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  root: string;
+  profile: ClientProfile;
+  target: RegisterTarget;
+  skillsDir?: string | null;
+  mcpConfigPath?: string;
+}): Promise<RegistrationClientState> {
+  const skillsDir = args.skillsDir ?? args.profile.skillsDir;
+  const mcpConfigPath = args.mcpConfigPath ?? args.profile.mcpConfigPath;
+  const serverName = mcpServerName(args.manifest.almanacId);
+  const expected = expectedMcpEntry(args.manifest.almanacId, args.root);
+  const rootSuffix = rootArg(args.root);
+  const skill =
+    args.target === "mcp"
+      ? unsupportedRegistrationComponent("target mcp skips skill")
+      : await readSkillRegistrationState({
+          almanacDir: args.almanacDir,
+          almanacId: args.manifest.almanacId,
+          skillsDir,
+        });
+  const mcp =
+    args.target === "skill"
+      ? {
+          ...unsupportedRegistrationComponent("target skill skips mcp"),
+          serverName,
+          expected,
+          actual: null,
+        }
+      : await readMcpRegistrationState({
+          profile: args.profile,
+          mcpConfigPath,
+          serverName,
+          expected,
+        });
+  const status = registrationClientOverall(args.target, skill.status, mcp.status);
+  const nextActions = registrationRepairActions({
+    almanacId: args.manifest.almanacId,
+    client: args.profile.name,
+    target: args.target,
+    rootSuffix,
+    skill,
+    mcp,
+    skillsDirOverride:
+      args.skillsDir === undefined || args.skillsDir === args.profile.skillsDir
+        ? undefined
+        : args.skillsDir,
+    mcpConfigOverride:
+      args.mcpConfigPath === undefined ||
+      args.mcpConfigPath === args.profile.mcpConfigPath
+        ? undefined
+        : args.mcpConfigPath,
+  });
+  return {
+    client: args.profile.name,
+    status,
+    skill,
+    mcp,
+    nextActions,
+  };
+}
+
+function unsupportedRegistrationComponent(
+  reason: string,
+): RegistrationComponentState {
+  return {
+    status: "unsupported",
+    path: null,
+    issues: [reason],
+  };
+}
+
+async function readSkillRegistrationState(args: {
+  almanacDir: string;
+  almanacId: string;
+  skillsDir: string | null;
+}): Promise<RegistrationComponentState> {
+  if (args.skillsDir === null) {
+    return unsupportedRegistrationComponent("client has no skills concept");
+  }
+  const srcPath = join(args.almanacDir, "adapters", "skill", "SKILL.md");
+  const destPath = join(args.skillsDir, `almanac-${args.almanacId}`, "SKILL.md");
+  if (!existsSync(srcPath)) {
+    return {
+      status: "missing",
+      path: destPath,
+      issues: [`source SKILL.md missing at ${srcPath}`],
+    };
+  }
+  if (!existsSync(destPath)) {
+    return {
+      status: "missing",
+      path: destPath,
+      issues: [`skill not installed at ${destPath}`],
+    };
+  }
+  try {
+    const [src, dest] = await Promise.all([
+      readFile(srcPath, "utf8"),
+      readFile(destPath, "utf8"),
+    ]);
+    if (src === dest) {
+      return {
+        status: "current",
+        path: destPath,
+        issues: [],
+      };
+    }
+    return {
+      status: "stale",
+      path: destPath,
+      issues: [`installed skill differs from ${srcPath}`],
+    };
+  } catch (e) {
+    return {
+      status: "unreadable",
+      path: destPath,
+      issues: [`skill unreadable: ${unknownErrorMessage(e)}`],
+    };
+  }
+}
+
+async function readMcpRegistrationState(args: {
+  profile: ClientProfile;
+  mcpConfigPath: string;
+  serverName: string;
+  expected: McpServerEntry;
+}): Promise<RegistrationClientState["mcp"]> {
+  if (!existsSync(args.mcpConfigPath)) {
+    return {
+      status: "missing",
+      path: args.mcpConfigPath,
+      issues: [`MCP config missing at ${args.mcpConfigPath}`],
+      serverName: args.serverName,
+      expected: args.expected,
+      actual: null,
+    };
+  }
+  let config: Record<string, unknown>;
+  try {
+    config = parseMcpConfig(
+      await readFile(args.mcpConfigPath, "utf8"),
+      args.profile.format,
+    );
+  } catch (e) {
+    return {
+      status: "unreadable",
+      path: args.mcpConfigPath,
+      issues: [
+        `MCP config at ${args.mcpConfigPath} is not valid ${args.profile.format.toUpperCase()}: ${unknownErrorMessage(e)}`,
+      ],
+      serverName: args.serverName,
+      expected: args.expected,
+      actual: null,
+    };
+  }
+  const servers = config[args.profile.mcpServersKey];
+  if (typeof servers !== "object" || servers === null || Array.isArray(servers)) {
+    return {
+      status: "missing",
+      path: args.mcpConfigPath,
+      issues: [`${args.profile.mcpServersKey} table missing or invalid`],
+      serverName: args.serverName,
+      expected: args.expected,
+      actual: null,
+    };
+  }
+  const actual = (servers as Record<string, unknown>)[args.serverName];
+  if (actual === undefined) {
+    return {
+      status: "missing",
+      path: args.mcpConfigPath,
+      issues: [
+        `MCP server entry missing at ${args.profile.mcpServersKey}["${args.serverName}"]`,
+      ],
+      serverName: args.serverName,
+      expected: args.expected,
+      actual: null,
+    };
+  }
+  const issues = mcpEntryIssues(actual, args.expected);
+  return {
+    status: issues.length === 0 ? "current" : "mismatched",
+    path: args.mcpConfigPath,
+    issues,
+    serverName: args.serverName,
+    expected: args.expected,
+    actual,
+  };
+}
+
+function expectedMcpEntry(almanacId: string, root: string): McpServerEntry {
+  return {
+    command: "bun",
+    args: ["run", selfCliPath(), "serve", almanacId, "--root", resolve(root)],
+  };
+}
+
+function mcpEntryIssues(actual: unknown, expected: McpServerEntry): string[] {
+  if (typeof actual !== "object" || actual === null || Array.isArray(actual)) {
+    return [`MCP entry is not an object`];
+  }
+  const entry = actual as Record<string, unknown>;
+  const issues: string[] = [];
+  if (entry.command !== expected.command) {
+    issues.push(
+      `command mismatch: expected ${expected.command}, got ${String(entry.command)}`,
+    );
+  }
+  if (!Array.isArray(entry.args) || !entry.args.every((arg) => typeof arg === "string")) {
+    issues.push("args mismatch: expected a string array");
+    return issues;
+  }
+  const actualArgs = entry.args;
+  if (actualArgs[1] !== expected.args[1]) {
+    issues.push(
+      `CLI path mismatch: expected ${expected.args[1]}, got ${actualArgs[1] ?? "(missing)"}`,
+    );
+  }
+  if (actualArgs[3] !== expected.args[3]) {
+    issues.push(
+      `almanac id mismatch: expected ${expected.args[3]}, got ${actualArgs[3] ?? "(missing)"}`,
+    );
+  }
+  if (actualArgs[5] !== expected.args[5]) {
+    issues.push(
+      `root path mismatch: expected ${expected.args[5]}, got ${actualArgs[5] ?? "(missing)"}`,
+    );
+  }
+  if (
+    issues.length === 0 &&
+    JSON.stringify(actualArgs) !== JSON.stringify(expected.args)
+  ) {
+    issues.push(
+      `args mismatch: expected ${JSON.stringify(expected.args)}, got ${JSON.stringify(actualArgs)}`,
+    );
+  }
+  return issues;
+}
+
+function registrationClientOverall(
+  target: RegisterTarget,
+  skill: RegistrationComponentStatus,
+  mcp: RegistrationComponentStatus,
+): RegistrationOverallStatus {
+  const statuses = [
+    ...(target === "mcp" ? [] : [skill]),
+    ...(target === "skill" ? [] : [mcp]),
+  ].filter((status) => status !== "unsupported");
+  if (statuses.length === 0) return "unsupported";
+  if (statuses.includes("unreadable")) return "unreadable";
+  if (statuses.includes("stale") || statuses.includes("mismatched")) return "stale";
+  if (statuses.includes("missing")) return "missing";
+  return "current";
+}
+
+function aggregateRegistrationStatus(
+  clients: RegistrationClientState[],
+): RegistrationOverallStatus {
+  const statuses = clients
+    .map((client) => client.status)
+    .filter((status) => status !== "unsupported");
+  if (statuses.length === 0) return "unsupported";
+  if (statuses.includes("unreadable")) return "unreadable";
+  if (statuses.includes("stale")) return "stale";
+  if (statuses.includes("current")) return "current";
+  return "missing";
+}
+
+function registrationRepairActions(args: {
+  almanacId: string;
+  client: RegisterClient;
+  target: RegisterTarget;
+  rootSuffix: string;
+  skill: RegistrationComponentState;
+  mcp: RegistrationComponentState;
+  skillsDirOverride?: string | null;
+  mcpConfigOverride?: string;
+}): string[] {
+  const actions: string[] = [];
+  const skillsDir =
+    args.skillsDirOverride === undefined || args.skillsDirOverride === null
+      ? ""
+      : ` --skills-dir ${shellArg(args.skillsDirOverride)}`;
+  const mcpConfig =
+    args.mcpConfigOverride === undefined
+      ? ""
+      : ` --mcp-config ${shellArg(args.mcpConfigOverride)}`;
+  if (
+    args.target !== "mcp" &&
+    args.skill.status !== "current" &&
+    args.skill.status !== "unsupported"
+  ) {
+    if (args.skill.issues.some((issue) => issue.startsWith("source SKILL.md missing"))) {
+      actions.push(
+        `almanac update ${args.almanacId} --from-stage=10-adapter-generation --no-bump${args.rootSuffix}`,
+      );
+    } else if (args.skill.status !== "unreadable") {
+      actions.push(
+        `almanac register ${args.almanacId} --client=${args.client} --target=skill --apply${skillsDir}${args.rootSuffix}`,
+      );
+    }
+  }
+  if (
+    args.target !== "skill" &&
+    args.mcp.status !== "current" &&
+    args.mcp.status !== "unsupported"
+  ) {
+    if (args.mcp.status === "unreadable") {
+      actions.push(`fix MCP config: ${args.mcp.path}`);
+    } else {
+      actions.push(
+        `almanac register ${args.almanacId} --client=${args.client} --target=mcp --apply${mcpConfig}${args.rootSuffix}`,
+      );
+    }
+  }
+  return uniqueStrings(actions);
+}
+
 function lifecycleOverallStatus(args: {
   compileStatus: LifecycleCompileStatus;
   knowledgeStatus: LifecycleKnowledgeStatus;
@@ -2564,6 +2964,16 @@ function formatLifecycleRefresh(
   return `${parts.join(", ")}${issue}`;
 }
 
+function formatLifecycleRegistration(
+  registration: LifecycleRegistrationSummary,
+): string {
+  if (registration.clients.length === 0) return registration.status;
+  const clients = registration.clients
+    .map((client) => `${client.client}=${client.status}`)
+    .join(", ");
+  return `${registration.status} (${clients})`;
+}
+
 function lifecycleCountsDisplay(
   item: LifecycleInventoryItem,
   key: "facts" | "tools",
@@ -2693,6 +3103,9 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
   );
   process.stdout.write(
     `  refresh       ${formatLifecycleRefresh(report.lifecycle.refresh)}\n`,
+  );
+  process.stdout.write(
+    `  registration  ${formatLifecycleRegistration(report.lifecycle.registration)}\n`,
   );
   if (report.runs.readError === null) {
     process.stdout.write(`  latest run    ${compactRunSummary(report.runs.latest)}\n`);
@@ -5554,6 +5967,12 @@ interface RegisterOptions {
   root: string;
   client: RegisterClient;
   target: RegisterTarget;
+  /** Read client registration state without writing files. */
+  status?: boolean;
+  /** With --status, inspect every supported client. */
+  all?: boolean;
+  /** With --status, emit JSON instead of human-readable output. */
+  json?: boolean;
   /** If false (default), print what would happen but don't touch disk. */
   apply?: boolean;
   /** Override the destination skills directory. */
@@ -5640,6 +6059,94 @@ function selfCliPath(): string {
   return fileURLToPath(import.meta.url);
 }
 
+interface RegisterStatusReport {
+  almanacId: string;
+  almanacDir: string;
+  client: RegisterClient | "all";
+  target: RegisterTarget;
+  clients: RegistrationClientState[];
+  summary: RegistrationOverallStatus;
+}
+
+async function cmdRegisterStatus(
+  id: string,
+  opts: RegisterOptions,
+  manifest: AlmanacManifest,
+  almanacDir: string,
+  profile: ClientProfile,
+): Promise<void> {
+  if (opts.apply === true) {
+    fail("register: --status is read-only; omit --apply");
+  }
+  if (opts.all === true && (opts.skillsDir !== undefined || opts.mcpConfig !== undefined)) {
+    fail("register: --all cannot be combined with --skills-dir or --mcp-config");
+  }
+  const profiles =
+    opts.all === true ? Object.values(CLIENT_PROFILES) : [profile];
+  const clients = await Promise.all(
+    profiles.map((clientProfile) =>
+      readRegistrationClientState({
+        almanacDir,
+        manifest,
+        root: opts.root,
+        profile: clientProfile,
+        target: opts.target,
+        ...(opts.all === true
+          ? {}
+          : {
+              skillsDir: opts.skillsDir ?? clientProfile.skillsDir,
+              mcpConfigPath: opts.mcpConfig ?? clientProfile.mcpConfigPath,
+            }),
+      }),
+    ),
+  );
+  const report: RegisterStatusReport = {
+    almanacId: manifest.almanacId,
+    almanacDir,
+    client: opts.all === true ? "all" : opts.client,
+    target: opts.target,
+    clients,
+    summary: aggregateRegistrationStatus(clients),
+  };
+
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write(
+    `registration status: ${manifest.almanacId} (${manifest.displayName})\n` +
+      `  target        ${opts.target}\n` +
+      `  client        ${report.client}\n` +
+      `  summary       ${report.summary}\n` +
+      `  mode          READ ONLY\n\n`,
+  );
+  for (const client of report.clients) {
+    process.stdout.write(`◆ ${client.client}  ${client.status}\n`);
+    process.stdout.write(formatRegistrationComponent("skill", client.skill));
+    process.stdout.write(formatRegistrationComponent("mcp", client.mcp));
+    if (client.nextActions.length > 0) {
+      process.stdout.write(`  repair\n`);
+      for (const action of client.nextActions) {
+        process.stdout.write(`    - ${action}\n`);
+      }
+    }
+    process.stdout.write("\n");
+  }
+}
+
+function formatRegistrationComponent(
+  label: "skill" | "mcp",
+  component: RegistrationComponentState,
+): string {
+  const path = component.path === null ? "" : ` ${component.path}`;
+  let out = `  ${label.padEnd(6)} ${component.status}${path}\n`;
+  for (const issue of component.issues) {
+    out += `    - ${issue}\n`;
+  }
+  return out;
+}
+
 async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
   const profile = CLIENT_PROFILES[opts.client];
   if (profile === undefined) {
@@ -5652,6 +6159,16 @@ async function cmdRegister(id: string, opts: RegisterOptions): Promise<void> {
     fail(`almanac not found: ${almanacDir}`);
   }
   const manifest = await readManifest(almanacDir);
+  if (opts.json === true && opts.status !== true) {
+    fail("register: --json is only supported with --status");
+  }
+  if (opts.all === true && opts.status !== true) {
+    fail("register: --all requires --status");
+  }
+  if (opts.status === true) {
+    await cmdRegisterStatus(id, opts, manifest, almanacDir, profile);
+    return;
+  }
   const apply = opts.apply === true;
   const skillsDir = opts.skillsDir ?? profile.skillsDir;
   const mcpConfigPath = opts.mcpConfig ?? profile.mcpConfigPath;
@@ -6195,6 +6712,9 @@ program
       .choices(["skill", "mcp", "both"])
       .default("both"),
   )
+  .option("--status", "Inspect registration state without writing files")
+  .option("--all", "With --status, inspect every supported client")
+  .option("--json", "With --status, emit JSON")
   .option("--apply", "Actually perform the writes (default: dry-run)")
   .option(
     "--skills-dir <path>",

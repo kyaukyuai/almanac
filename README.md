@@ -145,12 +145,15 @@ almanac benchmark cooking
 Register it with a host client:
 
 ```bash
+almanac register cooking --client=claude-code --status
 almanac register cooking --client=claude-code --apply
 almanac serve cooking
 ```
 
 Supported registration targets are `claude-code`, `claude-desktop`, `cursor`,
-and `codex`.
+and `codex`. `register --status` is read-only and reports missing Skill files,
+missing MCP entries, stale installed Skills, and mismatched MCP command paths
+before you open the host client.
 
 ## Core Commands
 
@@ -173,7 +176,7 @@ and `codex`.
 | `almanac refresh due <id>` | Check refresh readiness without writing files or requiring keys. |
 | `almanac refresh run <id>` | Run a locked manual refresh over the update pipeline. |
 | `almanac serve <id>` | Start the generic MCP server over stdio or Streamable HTTP/SSE. |
-| `almanac register <id>` | Install Skill and MCP config entries for supported clients. |
+| `almanac register <id>` | Inspect or install Skill and MCP config entries for supported clients. |
 | `almanac export <id>` | Package a compiled almanac as a portable archive. |
 | `almanac wiki <id>` | Export a Markdown inspection bundle for review and handoff. |
 | `almanac doctor [id]` | Diagnose local runtime, credentials, artifacts, and readiness. |
