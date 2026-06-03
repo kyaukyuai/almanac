@@ -50,7 +50,7 @@
 import { spawnSync } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { existsSync, readFileSync, unlinkSync, writeFileSync } from "node:fs";
-import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { copyFile, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { homedir, tmpdir } from "node:os";
 import { createInterface } from "node:readline/promises";
 import { stdin as input, stdout as output } from "node:process";
@@ -143,7 +143,6 @@ import {
   compileStatePath,
   ensureAlmanacLayout,
   knowledgeIndexManifestPath,
-  listAlmanacs,
   readCompileState,
   readImplementedToolCount,
   readKnowledgeIndexManifest,
@@ -260,6 +259,7 @@ import {
   formatAnswerReadinessDoctor,
   getAnswerReadiness,
   type AnswerReadiness,
+  type AnswerReadinessStatus,
 } from "./manage/answer-readiness.ts";
 import {
   embeddingReadinessLevel,
@@ -1795,8 +1795,567 @@ interface ListOptions {
   json?: boolean;
 }
 
+type LifecycleOverallStatus = "ok" | "attention" | "failed" | "broken";
+type LifecycleCompileStatus = "ok" | "attention" | "failed" | "missing";
+type LifecycleKnowledgeStatus = "present" | "missing" | "unreadable";
+type LifecycleBenchmarkStatus =
+  | "passed"
+  | "failed"
+  | "missing"
+  | "not-run"
+  | "needs-validation"
+  | "unreadable";
+type LifecycleRefreshStatus = "due" | "not-due" | "unknown";
+
+interface LifecycleInventoryItem {
+  almanacId: string;
+  almanacDir: string;
+  displayName: string;
+  manifest: AlmanacManifest | null;
+  lifecycle: {
+    status: LifecycleOverallStatus;
+    compile: {
+      status: LifecycleCompileStatus;
+      completed: number;
+      failed: StageId[];
+      pending: StageId[];
+      running: StageId[];
+      skipped: number;
+      error?: string;
+    };
+    knowledge: {
+      status: LifecycleKnowledgeStatus;
+      facts: number | null;
+      tools: number | null;
+      manifestFacts: number | null;
+      manifestTools: number | null;
+      countsMatch: boolean | null;
+      toolsReadable: boolean;
+      retrieval: string | null;
+      error?: string;
+    };
+    benchmark: {
+      status: LifecycleBenchmarkStatus;
+      positiveFixtures: number | null;
+      negativeFixtures: number | null;
+      total: number | null;
+      passed: number | null;
+      failed: number | null;
+      errored: number | null;
+      citationRate: number | null;
+      issue?: string;
+    };
+    answer: {
+      status: AnswerReadinessStatus | "unknown";
+      fixtures: number | null;
+      latestSuite: AnswerReadiness["latestSuite"]["status"] | null;
+      qualityGate: AnswerReadiness["qualityGate"]["status"] | null;
+      issue?: string;
+    };
+    refresh: {
+      status: LifecycleRefreshStatus;
+      recommendedFromStage: StageId | null;
+      reasons: number | null;
+      nextDueAt: string | null;
+      issue?: string;
+    };
+    issues: string[];
+    nextActions: string[];
+  };
+}
+
+async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
+  if (!existsSync(root)) return [];
+  const entries = await readdir(root, { withFileTypes: true });
+  const items = await Promise.all(
+    entries
+      .filter((entry) => entry.isDirectory())
+      .map((entry) => readLifecycleInventoryItem(root, entry.name)),
+  );
+  items.sort((a, b) => a.almanacId.localeCompare(b.almanacId));
+  return items;
+}
+
+async function readLifecycleInventoryItem(
+  root: string,
+  dirName: string,
+): Promise<LifecycleInventoryItem> {
+  const almanacDir = almanacDirPath(root, dirName);
+  if (!existsSync(join(almanacDir, "manifest.json"))) {
+    return brokenLifecycleItem({
+      almanacId: dirName,
+      almanacDir,
+      issue: "manifest.json missing",
+      nextAction: `inspect or remove directory: ${almanacDir}`,
+    });
+  }
+
+  let manifest: AlmanacManifest;
+  try {
+    manifest = await readManifest(almanacDir);
+  } catch (e) {
+    return brokenLifecycleItem({
+      almanacId: dirName,
+      almanacDir,
+      issue: `manifest unreadable: ${unknownErrorMessage(e)}`,
+      nextAction: `repair or remove directory: ${almanacDir}`,
+    });
+  }
+
+  const rootSuffix = rootArg(root);
+  const issues: string[] = [];
+  const nextActions: string[] = [];
+
+  let state: CompileState | null = null;
+  let compileStatus: LifecycleCompileStatus = "missing";
+  let stageCounts: StageStatusSummary = {
+    completed: 0,
+    failed: 0,
+    pending: 0,
+    running: 0,
+    skipped: 0,
+  };
+  let failedStages: StageId[] = [];
+  let pendingStages: StageId[] = [];
+  let runningStages: StageId[] = [];
+  let compileError: string | undefined;
+  try {
+    state = await readCompileState(almanacDir);
+    stageCounts = stageStatusCounts(state);
+    failedStages = (STAGE_IDS as readonly StageId[]).filter(
+      (stageId) => state?.stages[stageId].status === "failed",
+    );
+    pendingStages = (STAGE_IDS as readonly StageId[]).filter(
+      (stageId) => state?.stages[stageId].status === "pending",
+    );
+    runningStages = (STAGE_IDS as readonly StageId[]).filter(
+      (stageId) => state?.stages[stageId].status === "running",
+    );
+    compileStatus =
+      failedStages.length > 0
+        ? "failed"
+        : pendingStages.length > 0 || runningStages.length > 0
+          ? "attention"
+          : "ok";
+  } catch (e) {
+    compileError = unknownErrorMessage(e);
+    issues.push(`compile state unreadable: ${compileError}`);
+    nextActions.push(`restore compile state: ${compileStatePath(almanacDir)}`);
+  }
+  if (failedStages.length > 0 && state !== null) {
+    issues.push(`failed stages: ${failedStages.join(", ")}`);
+    nextActions.push(
+      ...stageFailureNextActions(
+        buildStageFailureRecovery({
+          almanacId: manifest.almanacId,
+          root,
+          almanacDir,
+          state,
+          failedStages,
+        }),
+      ),
+    );
+  } else if (pendingStages.length > 0) {
+    issues.push(`pending stages: ${pendingStages.join(", ")}`);
+    nextActions.push(
+      `resume compile: almanac update ${manifest.almanacId} --from-stage ${pendingStages[0]} --no-bump${rootSuffix}`,
+    );
+  } else if (runningStages.length > 0) {
+    issues.push(`running stages: ${runningStages.join(", ")}`);
+    nextActions.push(`inspect compile state: ${compileStatePath(almanacDir)}`);
+  }
+
+  let knowledge: KnowledgeIndexManifest | null = null;
+  let knowledgeStatus: LifecycleKnowledgeStatus = "missing";
+  let knowledgeError: string | undefined;
+  try {
+    knowledge = await readKnowledgeIndexManifest(almanacDir);
+    knowledgeStatus = knowledge === null ? "missing" : "present";
+  } catch (e) {
+    knowledgeError = unknownErrorMessage(e);
+    knowledgeStatus = "unreadable";
+    issues.push(`knowledge index unreadable: ${knowledgeError}`);
+  }
+
+  let counts: DisplayCounts = {
+    facts: manifest.factCount,
+    tools: manifest.toolCount,
+    manifestFacts: manifest.factCount,
+    manifestTools: manifest.toolCount,
+    toolsReadable: false,
+  };
+  try {
+    counts = await readDisplayCounts(almanacDir, manifest, knowledge);
+  } catch (e) {
+    issues.push(`counts unreadable: ${unknownErrorMessage(e)}`);
+  }
+  if (knowledgeStatus === "missing") {
+    issues.push("knowledge index missing");
+    nextActions.push(
+      `rebuild knowledge index: almanac update ${manifest.almanacId} --from-stage 08-knowledge-index --no-bump${rootSuffix}`,
+    );
+  }
+  if (countsMismatch(counts)) {
+    issues.push("manifest counts differ from actual artifacts");
+  }
+
+  const embeddingConfig = resolveEmbeddingProviderConfig(process.env);
+  const retrieval = getRetrievalReadiness({
+    vectorIndex: knowledge?.vectorIndex ?? null,
+    embeddingConfig,
+  });
+  if (retrieval.status === "needs-attention") {
+    issues.push(`retrieval ${retrieval.summary}`);
+  }
+
+  const benchmark = await readLifecycleBenchmark({
+    almanacDir,
+    manifest,
+    state,
+    issues,
+    nextActions,
+    rootSuffix,
+  });
+  const answer = await readLifecycleAnswer({
+    almanacDir,
+    manifest,
+    issues,
+    nextActions,
+    rootSuffix,
+  });
+  const refresh = await readLifecycleRefresh({
+    almanacDir,
+    manifest,
+    issues,
+    nextActions,
+    rootSuffix,
+  });
+
+  nextActions.push(`inspect details: almanac inspect ${manifest.almanacId}${rootSuffix}`);
+
+  const overall = lifecycleOverallStatus({
+    compileStatus,
+    knowledgeStatus,
+    benchmarkStatus: benchmark.status,
+    answerStatus: answer.status,
+    refreshStatus: refresh.status,
+    issues,
+  });
+
+  return {
+    almanacId: manifest.almanacId,
+    almanacDir,
+    displayName: manifest.displayName,
+    manifest,
+    lifecycle: {
+      status: overall,
+      compile: {
+        status: compileStatus,
+        completed: stageCounts.completed,
+        failed: failedStages,
+        pending: pendingStages,
+        running: runningStages,
+        skipped: stageCounts.skipped,
+        ...(compileError === undefined ? {} : { error: compileError }),
+      },
+      knowledge: {
+        status: knowledgeStatus,
+        facts: counts.facts,
+        tools: counts.tools,
+        manifestFacts: counts.manifestFacts,
+        manifestTools: counts.manifestTools,
+        countsMatch: !countsMismatch(counts),
+        toolsReadable: counts.toolsReadable,
+        retrieval: retrieval.summary,
+        ...(knowledgeError === undefined ? {} : { error: knowledgeError }),
+      },
+      benchmark,
+      answer,
+      refresh,
+      issues: uniqueStrings(issues),
+      nextActions: uniqueStrings(nextActions),
+    },
+  };
+}
+
+function brokenLifecycleItem(args: {
+  almanacId: string;
+  almanacDir: string;
+  issue: string;
+  nextAction: string;
+}): LifecycleInventoryItem {
+  return {
+    almanacId: args.almanacId,
+    almanacDir: args.almanacDir,
+    displayName: args.almanacId,
+    manifest: null,
+    lifecycle: {
+      status: "broken",
+      compile: {
+        status: "missing",
+        completed: 0,
+        failed: [],
+        pending: [],
+        running: [],
+        skipped: 0,
+        error: args.issue,
+      },
+      knowledge: {
+        status: "missing",
+        facts: null,
+        tools: null,
+        manifestFacts: null,
+        manifestTools: null,
+        countsMatch: null,
+        toolsReadable: false,
+        retrieval: null,
+      },
+      benchmark: {
+        status: "missing",
+        positiveFixtures: null,
+        negativeFixtures: null,
+        total: null,
+        passed: null,
+        failed: null,
+        errored: null,
+        citationRate: null,
+      },
+      answer: {
+        status: "unknown",
+        fixtures: null,
+        latestSuite: null,
+        qualityGate: null,
+      },
+      refresh: {
+        status: "unknown",
+        recommendedFromStage: null,
+        reasons: null,
+        nextDueAt: null,
+      },
+      issues: [args.issue],
+      nextActions: [args.nextAction],
+    },
+  };
+}
+
+async function readLifecycleBenchmark(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  state: CompileState | null;
+  issues: string[];
+  nextActions: string[];
+  rootSuffix: string;
+}): Promise<LifecycleInventoryItem["lifecycle"]["benchmark"]> {
+  let set: BenchmarkSet | null = null;
+  let report: BenchmarkReport | null = null;
+  try {
+    set = await readBenchmarkSetIfPresent(args.almanacDir, args.manifest.almanacId);
+    report = await readBenchmarkReportIfPresent(args.almanacDir);
+  } catch (e) {
+    const issue = `benchmark artifacts unreadable: ${unknownErrorMessage(e)}`;
+    args.issues.push(issue);
+    return emptyLifecycleBenchmark("unreadable", issue);
+  }
+
+  if (set === null) {
+    args.issues.push("benchmark fixtures missing");
+    args.nextActions.push(
+      `create benchmark fixtures: almanac benchmark ${args.manifest.almanacId} --init${args.rootSuffix}`,
+    );
+    return emptyLifecycleBenchmark("missing");
+  }
+
+  if (report === null) {
+    args.issues.push("benchmark has not been run");
+    args.nextActions.push(
+      `run benchmark: almanac benchmark ${args.manifest.almanacId}${args.rootSuffix}`,
+    );
+    return {
+      status: "not-run",
+      positiveFixtures: set.positive.length,
+      negativeFixtures: set.negative.length,
+      total: null,
+      passed: null,
+      failed: null,
+      errored: null,
+      citationRate: null,
+    };
+  }
+
+  const coverage =
+    args.state === null
+      ? null
+      : benchmarkCoverageGate(args.almanacDir, args.state, set);
+  const issue =
+    report.summary.failed > 0 || report.summary.errored > 0
+      ? `benchmark has ${report.summary.failed} failed and ${report.summary.errored} errored fixture(s)`
+      : coverage?.issue ?? null;
+  if (issue !== null) {
+    args.issues.push(issue);
+    args.nextActions.push(
+      `rerun benchmark: almanac benchmark ${args.manifest.almanacId}${args.rootSuffix}`,
+    );
+  }
+
+  return {
+    status:
+      report.summary.failed > 0 || report.summary.errored > 0
+        ? "failed"
+        : coverage?.issue !== null && coverage?.issue !== undefined
+          ? "needs-validation"
+          : "passed",
+    positiveFixtures: set.positive.length,
+    negativeFixtures: set.negative.length,
+    total: report.summary.total,
+    passed: report.summary.passed,
+    failed: report.summary.failed,
+    errored: report.summary.errored,
+    citationRate: report.summary.citationRate,
+    ...(issue === null ? {} : { issue }),
+  };
+}
+
+function emptyLifecycleBenchmark(
+  status: "missing" | "unreadable",
+  issue?: string,
+): LifecycleInventoryItem["lifecycle"]["benchmark"] {
+  return {
+    status,
+    positiveFixtures: null,
+    negativeFixtures: null,
+    total: null,
+    passed: null,
+    failed: null,
+    errored: null,
+    citationRate: null,
+    ...(issue === undefined ? {} : { issue }),
+  };
+}
+
+async function readLifecycleAnswer(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  issues: string[];
+  nextActions: string[];
+  rootSuffix: string;
+}): Promise<LifecycleInventoryItem["lifecycle"]["answer"]> {
+  try {
+    const readiness = await getAnswerReadiness({ almanacDir: args.almanacDir });
+    const answerIssues = [
+      ...readiness.issues.blocking,
+      ...readiness.issues.validation,
+    ];
+    if (readiness.status !== "ready") {
+      args.issues.push(`answer mode ${readiness.status}`);
+      args.nextActions.push(
+        ...answerReadinessNextActions(
+          args.manifest.almanacId,
+          args.rootSuffix,
+          readiness,
+        ),
+      );
+    }
+    return {
+      status: readiness.status,
+      fixtures: readiness.fixtures.count,
+      latestSuite: readiness.latestSuite.status,
+      qualityGate: readiness.qualityGate.status,
+      ...(answerIssues.length === 0 ? {} : { issue: answerIssues.join("; ") }),
+    };
+  } catch (e) {
+    const issue = `answer readiness unreadable: ${unknownErrorMessage(e)}`;
+    args.issues.push(issue);
+    return {
+      status: "unknown",
+      fixtures: null,
+      latestSuite: null,
+      qualityGate: null,
+      issue,
+    };
+  }
+}
+
+async function readLifecycleRefresh(args: {
+  almanacDir: string;
+  manifest: AlmanacManifest;
+  issues: string[];
+  nextActions: string[];
+  rootSuffix: string;
+}): Promise<LifecycleInventoryItem["lifecycle"]["refresh"]> {
+  try {
+    const status = await getRefreshDueStatus({ almanacDir: args.almanacDir });
+    if (status.due) {
+      args.issues.push(`refresh due: ${status.reasons.length} reason(s)`);
+      args.nextActions.push(
+        `run refresh: almanac refresh run ${args.manifest.almanacId} --from-stage ${status.recommendedFromStage} --save${args.rootSuffix}`,
+      );
+    }
+    return {
+      status: status.due ? "due" : "not-due",
+      recommendedFromStage: status.recommendedFromStage,
+      reasons: status.reasons.length,
+      nextDueAt: status.sources.nextDueAt,
+    };
+  } catch (e) {
+    const issue = `refresh status unavailable: ${unknownErrorMessage(e)}`;
+    args.issues.push(issue);
+    return {
+      status: "unknown",
+      recommendedFromStage: null,
+      reasons: null,
+      nextDueAt: null,
+      issue,
+    };
+  }
+}
+
+function lifecycleOverallStatus(args: {
+  compileStatus: LifecycleCompileStatus;
+  knowledgeStatus: LifecycleKnowledgeStatus;
+  benchmarkStatus: LifecycleBenchmarkStatus;
+  answerStatus: AnswerReadinessStatus | "unknown";
+  refreshStatus: LifecycleRefreshStatus;
+  issues: string[];
+}): LifecycleOverallStatus {
+  if (args.compileStatus === "missing" || args.knowledgeStatus === "unreadable") {
+    return "broken";
+  }
+  if (args.compileStatus === "failed" || args.benchmarkStatus === "failed") {
+    return "failed";
+  }
+  if (
+    args.issues.length > 0 ||
+    args.compileStatus === "attention" ||
+    args.knowledgeStatus === "missing" ||
+    args.benchmarkStatus !== "passed" ||
+    args.answerStatus !== "ready" ||
+    args.refreshStatus !== "not-due"
+  ) {
+    return "attention";
+  }
+  return "ok";
+}
+
+function lifecycleCountsDisplay(
+  item: LifecycleInventoryItem,
+  key: "facts" | "tools",
+): string {
+  const value = item.lifecycle.knowledge[key];
+  if (value === null) return "-";
+  const countsMatch = item.lifecycle.knowledge.countsMatch;
+  return countsMatch === false ? `${value}*` : String(value);
+}
+
+function uniqueStrings(values: string[]): string[] {
+  return Array.from(new Set(values));
+}
+
+function unknownErrorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
 async function cmdList(opts: ListOptions): Promise<void> {
-  const items = await listAlmanacs(opts.root);
+  const items = await readLifecycleInventory(opts.root);
   if (opts.json) {
     process.stdout.write(JSON.stringify(items, null, 2) + "\n");
     return;
@@ -1806,28 +2365,19 @@ async function cmdList(opts: ListOptions): Promise<void> {
     return;
   }
   // Print a compact table.
-  const rows = await Promise.all(
-    items.map(async (it) => {
-      const counts = await readDisplayCounts(it.almanacDir, it.manifest);
-      return {
-        id: it.almanacId,
-        name: it.manifest.displayName,
-        facts:
-          counts.facts !== counts.manifestFacts
-            ? `${counts.facts}*`
-            : String(counts.facts),
-        tools:
-          counts.tools !== counts.manifestTools
-            ? `${counts.tools}*`
-            : String(counts.tools),
-        profile: it.manifest.freshnessProfileId,
-        compiledAt: it.manifest.compiledAt,
-        counts,
-      };
-    }),
-  );
+  const rows = items.map((it) => ({
+    id: it.almanacId,
+    status: it.lifecycle.status,
+    name: it.displayName,
+    facts: lifecycleCountsDisplay(it, "facts"),
+    tools: lifecycleCountsDisplay(it, "tools"),
+    profile: it.manifest?.freshnessProfileId ?? "-",
+    compiledAt: it.manifest?.compiledAt ?? "-",
+    item: it,
+  }));
   const widths = {
     id: Math.max(2, ...rows.map((r) => r.id.length)),
+    status: Math.max(6, ...rows.map((r) => r.status.length)),
     name: Math.max(4, ...rows.map((r) => r.name.length)),
     facts: Math.max(6, ...rows.map((r) => r.facts.length)),
     tools: Math.max(6, ...rows.map((r) => r.tools.length)),
@@ -1836,20 +2386,33 @@ async function cmdList(opts: ListOptions): Promise<void> {
   };
   const pad = (s: string, n: number) => (s + " ".repeat(n)).slice(0, n);
   const header =
-    `${pad("ID", widths.id)}  ${pad("NAME", widths.name)}  ${pad("FACTS", widths.facts)}  ${pad("TOOLS", widths.tools)}  ${pad("PROFILE", widths.profile)}  ${pad("COMPILED", widths.compiledAt)}`;
+    `${pad("ID", widths.id)}  ${pad("STATUS", widths.status)}  ${pad("NAME", widths.name)}  ${pad("FACTS", widths.facts)}  ${pad("TOOLS", widths.tools)}  ${pad("PROFILE", widths.profile)}  ${pad("COMPILED", widths.compiledAt)}`;
   process.stdout.write(header + "\n");
   process.stdout.write("-".repeat(header.length) + "\n");
   for (const r of rows) {
     process.stdout.write(
-      `${pad(r.id, widths.id)}  ${pad(r.name, widths.name)}  ${pad(r.facts, widths.facts)}  ${pad(r.tools, widths.tools)}  ${pad(r.profile, widths.profile)}  ${pad(r.compiledAt, widths.compiledAt)}\n`,
+      `${pad(r.id, widths.id)}  ${pad(r.status, widths.status)}  ${pad(r.name, widths.name)}  ${pad(r.facts, widths.facts)}  ${pad(r.tools, widths.tools)}  ${pad(r.profile, widths.profile)}  ${pad(r.compiledAt, widths.compiledAt)}\n`,
     );
   }
-  const mismatched = rows.filter((r) => countsMismatch(r.counts));
+  const mismatched = rows.filter(
+    (r) => r.item.lifecycle.knowledge.countsMatch === false,
+  );
   if (mismatched.length > 0) {
     process.stdout.write("\n* shown counts are actual filesystem/index counts; manifest differs:\n");
     for (const r of mismatched) {
+      const knowledge = r.item.lifecycle.knowledge;
       process.stdout.write(
-        `  ${r.id}: manifest facts/tools ${r.counts.manifestFacts} / ${r.counts.manifestTools}, actual ${r.counts.facts} / ${r.counts.tools}\n`,
+        `  ${r.id}: manifest facts/tools ${knowledge.manifestFacts} / ${knowledge.manifestTools}, actual ${knowledge.facts} / ${knowledge.tools}\n`,
+      );
+    }
+  }
+  const attention = rows.filter((r) => r.item.lifecycle.status !== "ok");
+  if (attention.length > 0) {
+    process.stdout.write("\nlifecycle attention:\n");
+    for (const r of attention) {
+      const issue = r.item.lifecycle.issues[0] ?? "needs review";
+      process.stdout.write(
+        `  ${r.id}: ${r.item.lifecycle.status} - ${issue}\n`,
       );
     }
   }

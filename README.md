@@ -156,6 +156,7 @@ and `codex`.
 | --- | --- |
 | `almanac new <domain>` | Compile an almanac from a domain name. |
 | `almanac demo [id]` | Create a no-key offline demo almanac. |
+| `almanac list` | List installed almanacs with lifecycle status and readiness hints. |
 | `almanac update <id> --from-stage <stage>` | Re-run part of the compile pipeline. |
 | `almanac feed <id> <url> --apply` | Add one source and reindex without a full rebuild. |
 | `almanac inspect <id>` | Show manifest, stage health, sources, fixtures, and benchmark status. |
