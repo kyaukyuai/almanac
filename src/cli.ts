@@ -16,6 +16,8 @@
  *   almanac maintain [id] [opts]           plan/apply due maintenance
  *   almanac repair <id> [opts]             audit/apply low-risk repairs
  *   almanac cleanup [opts]                 audit/apply root cleanup candidates
+ *   almanac schedule print <id> [opts]     print cron/launchd/GitHub Actions
+ *                                          maintenance handoff snippets
  *   almanac inspect <id> [opts]            print manifest + per-stage state
  *   almanac profile <id> [opts]            summarize expertise, evidence, and limits
  *   almanac sources <id> [opts]            review approved/rejected sources
@@ -1843,6 +1845,16 @@ interface CleanupOptions {
   keepLatest?: string;
 }
 
+type ScheduleTarget = "launchd" | "cron" | "github-actions";
+
+interface SchedulePrintOptions {
+  root: string;
+  target: ScheduleTarget;
+  json?: boolean;
+  apply?: boolean;
+  label?: string;
+}
+
 type McpServerEntry = {
   command: string;
   args: string[];
@@ -2221,6 +2233,36 @@ interface CleanupReport {
   skipped: number;
   failed: number;
   nextActions: string[];
+}
+
+interface ScheduleEnvironmentItem {
+  name: string;
+  value: string | null;
+  required: boolean;
+  note: string;
+}
+
+interface SchedulePrintReport {
+  schemaVersion: "0.1.0";
+  almanacId: string;
+  version: string | null;
+  root: string;
+  almanacDir: string;
+  target: ScheduleTarget;
+  mode: "dry-run" | "due-only-apply";
+  schedule: {
+    cron: string;
+    localTime: string;
+  };
+  command: string;
+  inspectCommand: string;
+  logPath: string;
+  scriptPath: string | null;
+  plistPath: string | null;
+  workflowPath: string | null;
+  environment: ScheduleEnvironmentItem[];
+  snippet: string;
+  notes: string[];
 }
 
 async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
@@ -4874,6 +4916,383 @@ function parseCleanupKeepLatest(raw: string | undefined): number {
 
 function cleanupUsageError(message: string): never {
   process.stderr.write(`error: cleanup: ${message}\n`);
+  process.exit(2);
+}
+
+async function cmdSchedulePrint(
+  id: string,
+  opts: SchedulePrintOptions,
+): Promise<void> {
+  validateSchedulePrintOptions(opts);
+  const report = await readSchedulePrintReport(id, opts);
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(report, null, 2) + "\n"
+      : formatSchedulePrintHuman(report),
+  );
+}
+
+async function readSchedulePrintReport(
+  id: string,
+  opts: SchedulePrintOptions,
+): Promise<SchedulePrintReport> {
+  const statusReport = await readAlmanacStatusReport(id, opts);
+  const target = opts.target;
+  const safeId = safeScheduleId(statusReport.almanacId);
+  const mode = opts.apply === true ? "due-only-apply" : "dry-run";
+  const label = normalizeScheduleLabel(
+    opts.label ?? `schedule-${target}`,
+  );
+  const command = scheduleMaintenanceCommand({
+    almanacId: statusReport.almanacId,
+    rootRef: "$ALMANAC_ROOT",
+    apply: opts.apply === true,
+    label,
+  });
+  const inspectCommand =
+    `almanac runs ${statusReport.almanacId} --kind maintenance --latest --root "$ALMANAC_ROOT"`;
+  const paths = schedulePaths(safeId, target);
+  const environment = scheduleEnvironment(opts.root, opts.apply === true);
+  const schedule = {
+    cron: "17 3 * * *",
+    localTime:
+      target === "github-actions" ? "03:17 UTC in GitHub Actions" : "03:17 local time",
+  };
+  const base: Omit<SchedulePrintReport, "snippet"> = {
+    schemaVersion: "0.1.0",
+    almanacId: statusReport.almanacId,
+    version: statusReport.manifest?.version ?? null,
+    root: opts.root,
+    almanacDir: statusReport.almanacDir,
+    target,
+    mode,
+    schedule,
+    command,
+    inspectCommand,
+    logPath: paths.logPath,
+    scriptPath: paths.scriptPath,
+    plistPath: paths.plistPath,
+    workflowPath: paths.workflowPath,
+    environment,
+    notes: scheduleNotes(opts.apply === true),
+  };
+  return {
+    ...base,
+    snippet: scheduleSnippet(base),
+  };
+}
+
+function scheduleMaintenanceCommand(args: {
+  almanacId: string;
+  rootRef: string;
+  apply: boolean;
+  label: string;
+}): string {
+  if (args.apply) {
+    return (
+      `almanac maintain ${args.almanacId} --apply --due-only --json ` +
+      `--label ${shellArg(args.label)} --root "${args.rootRef}"`
+    );
+  }
+  return `almanac maintain ${args.almanacId} --dry-run --json --root "${args.rootRef}"`;
+}
+
+function schedulePaths(
+  safeId: string,
+  target: ScheduleTarget,
+): {
+  scriptPath: string | null;
+  logPath: string;
+  plistPath: string | null;
+  workflowPath: string | null;
+} {
+  const baseHome = homedir();
+  const logPath = join(
+    baseHome,
+    ".local",
+    "state",
+    "almanac",
+    "logs",
+    `${safeId}-${target}.log`,
+  );
+  const scriptPath =
+    target === "github-actions"
+      ? null
+      : join(baseHome, ".local", "bin", `almanac-maintain-${safeId}.sh`);
+  const plistPath =
+    target === "launchd"
+      ? join(
+          baseHome,
+          "Library",
+          "LaunchAgents",
+          `com.almanac.maintain.${safeId}.plist`,
+        )
+      : null;
+  const workflowPath =
+    target === "github-actions"
+      ? `.github/workflows/almanac-maintain-${safeId}.yml`
+      : null;
+  return {
+    scriptPath,
+    logPath,
+    plistPath,
+    workflowPath,
+  };
+}
+
+function scheduleEnvironment(
+  root: string,
+  apply: boolean,
+): ScheduleEnvironmentItem[] {
+  return [
+    {
+      name: "ALMANAC_ROOT",
+      value: root,
+      required: true,
+      note: "compiled almanac root used by the generated command",
+    },
+    {
+      name: "ANTHROPIC_API_KEY",
+      value: null,
+      required: apply,
+      note: apply
+        ? "required when due maintenance reaches provider-backed compile stages"
+        : "not required for the default dry-run handoff",
+    },
+    {
+      name: "BRAVE_SEARCH_API_KEY",
+      value: null,
+      required: false,
+      note: "needed only when source discovery/web search stages are run",
+    },
+    {
+      name: "GITHUB_TOKEN",
+      value: null,
+      required: false,
+      note: "optional, but recommended for GitHub source discovery and snapshots",
+    },
+  ];
+}
+
+function scheduleNotes(apply: boolean): string[] {
+  return [
+    "No scheduler is installed by this command; review and paste the snippet yourself.",
+    apply
+      ? "The generated command uses maintain --apply --due-only so not-due almanacs are skipped."
+      : "The generated command is read-only; add --apply to schedule print when you want a due-only mutating snippet.",
+    "If running from a source checkout instead of an installed CLI, replace almanac with bun src/cli.ts.",
+    "Inspect saved maintenance artifacts with the printed runs command.",
+  ];
+}
+
+function scheduleSnippet(report: Omit<SchedulePrintReport, "snippet">): string {
+  if (report.target === "cron") return cronScheduleSnippet(report);
+  if (report.target === "launchd") return launchdScheduleSnippet(report);
+  return githubActionsScheduleSnippet(report);
+}
+
+function shellScheduleScript(report: Omit<SchedulePrintReport, "snippet">): string {
+  return [
+    "#!/usr/bin/env bash",
+    "set -euo pipefail",
+    "",
+    `export ALMANAC_ROOT=${shellArg(report.root)}`,
+    "",
+    "# Provider keys are needed only when due maintenance reaches provider-backed stages.",
+    "# export ANTHROPIC_API_KEY=...",
+    "# export BRAVE_SEARCH_API_KEY=...",
+    "# export GITHUB_TOKEN=...",
+    "",
+    report.command,
+    `${report.inspectCommand} || true`,
+  ].join("\n");
+}
+
+function cronScheduleSnippet(
+  report: Omit<SchedulePrintReport, "snippet">,
+): string {
+  const scriptPath = report.scriptPath ?? "";
+  return [
+    `# Almanac ${report.mode} scheduler handoff for ${report.almanacId}`,
+    `# Root: ${report.root}`,
+    `# Log: ${report.logPath}`,
+    `mkdir -p ${shellArg(dirname(scriptPath))} ${shellArg(dirname(report.logPath))}`,
+    `cat > ${shellArg(scriptPath)} <<'SH'`,
+    shellScheduleScript(report),
+    "SH",
+    `chmod +x ${shellArg(scriptPath)}`,
+    "",
+    "# Add this line with crontab -e:",
+    `${report.schedule.cron} ${shellArg(scriptPath)} >> ${shellArg(report.logPath)} 2>&1`,
+  ].join("\n");
+}
+
+function launchdScheduleSnippet(
+  report: Omit<SchedulePrintReport, "snippet">,
+): string {
+  const scriptPath = report.scriptPath ?? "";
+  const plistPath = report.plistPath ?? "";
+  return [
+    `# Almanac ${report.mode} launchd handoff for ${report.almanacId}`,
+    `# Root: ${report.root}`,
+    `# Log: ${report.logPath}`,
+    `mkdir -p ${shellArg(dirname(scriptPath))} ${shellArg(dirname(report.logPath))} ${shellArg(dirname(plistPath))}`,
+    `cat > ${shellArg(scriptPath)} <<'SH'`,
+    shellScheduleScript(report),
+    "SH",
+    `chmod +x ${shellArg(scriptPath)}`,
+    "",
+    `cat > ${shellArg(plistPath)} <<'PLIST'`,
+    launchdPlist({
+      label: `com.almanac.maintain.${safeScheduleId(report.almanacId)}`,
+      scriptPath,
+      stdoutPath: report.logPath,
+      stderrPath: report.logPath.replace(/\.log$/, ".err.log"),
+    }),
+    "PLIST",
+    `launchctl load ${shellArg(plistPath)}`,
+  ].join("\n");
+}
+
+function launchdPlist(args: {
+  label: string;
+  scriptPath: string;
+  stdoutPath: string;
+  stderrPath: string;
+}): string {
+  return [
+    `<?xml version="1.0" encoding="UTF-8"?>`,
+    `<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"`,
+    `  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">`,
+    `<plist version="1.0">`,
+    `<dict>`,
+    `  <key>Label</key>`,
+    `  <string>${xmlEscape(args.label)}</string>`,
+    `  <key>ProgramArguments</key>`,
+    `  <array>`,
+    `    <string>${xmlEscape(args.scriptPath)}</string>`,
+    `  </array>`,
+    `  <key>StartCalendarInterval</key>`,
+    `  <dict>`,
+    `    <key>Hour</key>`,
+    `    <integer>3</integer>`,
+    `    <key>Minute</key>`,
+    `    <integer>17</integer>`,
+    `  </dict>`,
+    `  <key>StandardOutPath</key>`,
+    `  <string>${xmlEscape(args.stdoutPath)}</string>`,
+    `  <key>StandardErrorPath</key>`,
+    `  <string>${xmlEscape(args.stderrPath)}</string>`,
+    `</dict>`,
+    `</plist>`,
+  ].join("\n");
+}
+
+function githubActionsScheduleSnippet(
+  report: Omit<SchedulePrintReport, "snippet">,
+): string {
+  const workflowPath = report.workflowPath ?? "";
+  return [
+    `# Save as ${workflowPath}`,
+    `# Local root used to generate this handoff: ${report.root}`,
+    `name: almanac maintain ${report.almanacId}`,
+    "",
+    "on:",
+    "  schedule:",
+    `    - cron: "${report.schedule.cron}"`,
+    "  workflow_dispatch:",
+    "",
+    "jobs:",
+    "  maintain:",
+    "    runs-on: ubuntu-latest",
+    "    env:",
+    `      ALMANAC_ROOT: ${JSON.stringify(report.root)}`,
+    `      LOG_PATH: ${JSON.stringify(report.logPath)}`,
+    "      ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}",
+    "      BRAVE_SEARCH_API_KEY: ${{ secrets.BRAVE_SEARCH_API_KEY }}",
+    "      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}",
+    "    steps:",
+    "      - uses: actions/checkout@v4",
+    "      - uses: oven-sh/setup-bun@v2",
+    "      - run: bun install --frozen-lockfile",
+    "      - name: Run Almanac maintenance",
+    "        run: |",
+    "          mkdir -p \"$(dirname \"$LOG_PATH\")\"",
+    `          ${report.command} 2>&1 | tee "$LOG_PATH"`,
+    "      - name: Inspect latest maintenance",
+    "        if: always()",
+    "        run: |",
+    `          ${report.inspectCommand} || true`,
+    "      - uses: actions/upload-artifact@v4",
+    "        if: always()",
+    "        with:",
+    "          name: almanac-maintenance-log",
+    "          path: ${{ env.LOG_PATH }}",
+  ].join("\n");
+}
+
+function formatSchedulePrintHuman(report: SchedulePrintReport): string {
+  const lines = [
+    `schedule handoff: ${report.almanacId} (${report.version ?? "unknown"})`,
+    `  target        ${report.target}`,
+    `  mode          ${report.mode}`,
+    `  root          ${report.root}`,
+    `  almanac dir   ${report.almanacDir}`,
+    `  cadence       ${report.schedule.cron} (${report.schedule.localTime})`,
+    `  command       ${report.command}`,
+    `  inspect       ${report.inspectCommand}`,
+    `  log           ${report.logPath}`,
+  ];
+  if (report.scriptPath !== null) lines.push(`  script        ${report.scriptPath}`);
+  if (report.plistPath !== null) lines.push(`  plist         ${report.plistPath}`);
+  if (report.workflowPath !== null) {
+    lines.push(`  workflow      ${report.workflowPath}`);
+  }
+  lines.push("", "environment:");
+  for (const env of report.environment) {
+    const value = env.value === null ? "(set outside Almanac)" : env.value;
+    lines.push(
+      `  - ${env.required ? "required" : "optional"} ${env.name}=${value} - ${env.note}`,
+    );
+  }
+  lines.push("", "snippet:", "```", report.snippet, "```", "", "notes:");
+  for (const note of report.notes) {
+    lines.push(`  - ${note}`);
+  }
+  return lines.join("\n") + "\n";
+}
+
+function validateSchedulePrintOptions(opts: SchedulePrintOptions): void {
+  if (opts.label !== undefined && opts.apply !== true) {
+    scheduleUsageError("--label requires --apply because dry-run snippets do not save artifacts");
+  }
+}
+
+function normalizeScheduleLabel(label: string): string {
+  const normalized = label.trim();
+  if (normalized.length === 0 || normalized.length > 80) {
+    scheduleUsageError("--label must be between 1 and 80 characters");
+  }
+  return normalized;
+}
+
+function safeScheduleId(almanacId: string): string {
+  return (
+    almanacId.replace(/[^a-z0-9-]+/gi, "-").replace(/^-+|-+$/g, "") ||
+    "almanac"
+  );
+}
+
+function xmlEscape(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function scheduleUsageError(message: string): never {
+  process.stderr.write(`error: schedule: ${message}\n`);
   process.exit(2);
 }
 
@@ -9168,6 +9587,24 @@ program
   )
   .addOption(rootOption)
   .action(cmdCleanup);
+
+const scheduleCommand = program
+  .command("schedule")
+  .description("print caller-owned scheduler handoff snippets");
+
+scheduleCommand
+  .command("print <id>")
+  .description("print cron, launchd, or GitHub Actions maintenance handoff")
+  .addOption(
+    new Option("--target <target>", "Scheduler target")
+      .choices(["cron", "launchd", "github-actions"])
+      .default("cron"),
+  )
+  .option("--apply", "Render a due-only apply snippet; default is read-only dry-run")
+  .option("--label <name>", "Label for saved maintenance artifacts when --apply is used")
+  .option("--json", "Emit JSON report instead of a human-readable snippet")
+  .addOption(rootOption)
+  .action(cmdSchedulePrint);
 
 program
   .command("inspect <id>")

@@ -842,6 +842,126 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("schedule print emits a dry-run cron handoff by default", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(["schedule", "print", "legacy", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("schedule handoff: legacy (0.1.0)");
+    expect(result.stdout).toContain("target        cron");
+    expect(result.stdout).toContain("mode          dry-run");
+    expect(result.stdout).toContain(`root          ${root}`);
+    expect(result.stdout).toContain(
+      'command       almanac maintain legacy --dry-run --json --root "$ALMANAC_ROOT"',
+    );
+    expect(result.stdout).toContain(`export ALMANAC_ROOT=${root}`);
+    expect(result.stdout).toContain("17 3 * * *");
+    expect(result.stdout).toContain("No scheduler is installed");
+    expect(result.stdout).not.toContain("--apply --due-only");
+  });
+
+  test("schedule print --apply emits launchd due-only handoff", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(
+      [
+        "schedule",
+        "print",
+        "legacy",
+        "--target",
+        "launchd",
+        "--apply",
+        "--label",
+        "launchd-test",
+        "--root",
+        root,
+      ],
+      { ANTHROPIC_API_KEY: undefined },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("target        launchd");
+    expect(result.stdout).toContain("mode          due-only-apply");
+    expect(result.stdout).toContain(
+      'almanac maintain legacy --apply --due-only --json --label launchd-test --root "$ALMANAC_ROOT"',
+    );
+    expect(result.stdout).toContain("<key>StartCalendarInterval</key>");
+    expect(result.stdout).toContain("com.almanac.maintain.legacy.plist");
+    expect(result.stdout).toContain("launchctl load");
+  });
+
+  test("schedule print --target github-actions --json emits workflow handoff", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(
+      [
+        "schedule",
+        "print",
+        "legacy",
+        "--target",
+        "github-actions",
+        "--json",
+        "--root",
+        root,
+      ],
+      { ANTHROPIC_API_KEY: undefined },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      almanacId: string;
+      target: string;
+      mode: string;
+      root: string;
+      workflowPath: string | null;
+      command: string;
+      environment: Array<{ name: string; value: string | null; required: boolean }>;
+      snippet: string;
+    };
+
+    expect(report.almanacId).toBe("legacy");
+    expect(report.target).toBe("github-actions");
+    expect(report.mode).toBe("dry-run");
+    expect(report.root).toBe(root);
+    expect(report.workflowPath).toBe(
+      ".github/workflows/almanac-maintain-legacy.yml",
+    );
+    expect(report.command).toBe(
+      'almanac maintain legacy --dry-run --json --root "$ALMANAC_ROOT"',
+    );
+    expect(report.environment).toContainEqual(
+      expect.objectContaining({
+        name: "ALMANAC_ROOT",
+        value: root,
+        required: true,
+      }),
+    );
+    expect(report.snippet).toContain("workflow_dispatch:");
+    expect(report.snippet).toContain("actions/upload-artifact@v4");
+    expect(report.snippet).toContain(
+      'almanac maintain legacy --dry-run --json --root "$ALMANAC_ROOT"',
+    );
+  });
+
+  test("schedule print rejects labels without apply", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(
+      ["schedule", "print", "legacy", "--label", "nightly", "--root", root],
+      { ANTHROPIC_API_KEY: undefined },
+    );
+
+    expect(result.status).toBe(2);
+    expect(result.stdout).toBe("");
+    expect(result.stderr).toContain("error: schedule: --label requires --apply");
+  });
+
   test("maintain reports partial almanac directories as broken plans", async () => {
     await mkdir(join(root, "partial"), { recursive: true });
 

@@ -48,6 +48,49 @@ The recommended default for routine refreshes is `04-source-fetch`. Earlier
 source discovery stages are available, but should be explicit because they are
 LLM-heavy and can change the accepted source set.
 
+## Generated Handoff Snippets
+
+Use `schedule print` when you want Almanac to render a scheduler handoff
+without installing anything into the host system:
+
+```bash
+almanac schedule print <id> --target cron --root "$ALMANAC_ROOT"
+almanac schedule print <id> --target launchd --root "$ALMANAC_ROOT"
+almanac schedule print <id> --target github-actions --root "$ALMANAC_ROOT"
+```
+
+The default handoff is read-only and runs:
+
+```bash
+almanac maintain <id> --dry-run --json --root "$ALMANAC_ROOT"
+```
+
+Add `--apply` only after reviewing the snippet. The generated command then uses
+`maintain --apply --due-only --json`, so not-due almanacs are skipped and
+maintenance artifacts are saved:
+
+```bash
+almanac schedule print <id> \
+  --target launchd \
+  --apply \
+  --label launchd-nightly \
+  --root "$ALMANAC_ROOT"
+```
+
+For machine-readable handoff metadata, including log paths, required
+environment variables, and the rendered snippet, use:
+
+```bash
+almanac schedule print <id> --target github-actions --json --root "$ALMANAC_ROOT"
+```
+
+The generated output is intentionally caller-owned. Review paths, provider
+credentials, artifact retention, and the command prefix before installing it.
+If running from a source checkout, replace `almanac` with `bun src/cli.ts`.
+GitHub Actions snippets assume the almanac root is restored in the workflow;
+adjust `ALMANAC_ROOT` and log paths to match your cache, artifact download, or
+deployment storage strategy.
+
 ## Exit Codes
 
 `almanac refresh due` exits `0` when it can produce a status, whether the
