@@ -314,6 +314,38 @@ async function writeFreshSqliteDemoSourceFetchManifest(): Promise<void> {
   );
 }
 
+async function writeSqliteDemoAskFixture(
+  opts: { unsupported?: boolean } = {},
+): Promise<void> {
+  const almanacDir = almanacDirPath(root, "sqlite-demo");
+  await mkdir(join(almanacDir, "tests"), { recursive: true });
+  const fixture = {
+    id: opts.unsupported === true
+      ? "sqlite-transactions-unsupported"
+      : "sqlite-transactions-ok",
+    question: "Are SQLite transactions atomic?",
+    answer: "SQLite transactions are atomic.",
+    toolCalls: [
+      {
+        tool: "query_facts",
+        input: { q: "transactions atomic", limit: 3 },
+        expectedStatus: "ok",
+      },
+    ],
+    expectedStatus: "ok",
+    minCitations: 1,
+    maxStaleCitations: 0,
+    ...(opts.unsupported === true
+      ? { unsupportedClaims: ["SQLite encrypts every page by default."] }
+      : {}),
+  };
+  await writeFile(
+    join(almanacDir, "tests", "ask.jsonl"),
+    JSON.stringify(fixture) + "\n",
+    "utf8",
+  );
+}
+
 async function writeFailedStageFixture(args: {
   almanacId: string;
   stageId: (typeof STAGE_IDS)[number];
@@ -950,6 +982,299 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.status).toBe(0);
     expect(status.stdout).toContain("latest maintenance maintenance");
     expect(status.stdout).toContain("label=pr3-smoke");
+  });
+
+  test("maintain --apply runs ask-suite with provider-free refresh when fixtures exist", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+    await writeSqliteDemoAskFixture();
+    const almanacDir = almanacDirPath(root, "sqlite-demo");
+    await rm(benchmarkResultPath(almanacDir), { force: true });
+
+    const dryRun = runCli(
+      ["maintain", "sqlite-demo", "--json", "--dry-run", "--root", root],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+    expect(dryRun.status).toBe(0);
+    const dryReport = JSON.parse(dryRun.stdout) as {
+      plan: Array<{ id: string; status: string; command: string | null }>;
+      answer: {
+        planned: boolean;
+        suite: {
+          status: string;
+          unsupportedClaimCount?: number;
+          staleCitationCount?: number;
+          abstentionMismatchCount?: number;
+        } | null;
+      };
+    };
+    expect(
+      dryReport.plan.find((step) => step.id === "refresh")?.command,
+    ).toContain("--ask-suite");
+    expect(
+      dryReport.plan.find((step) => step.id === "ask-suite"),
+    ).toMatchObject({
+      status: "planned",
+      command: expect.stringContaining("--ask-suite"),
+    });
+    expect(dryReport.answer.planned).toBe(true);
+
+    const applied = runCli(
+      [
+        "maintain",
+        "sqlite-demo",
+        "--apply",
+        "--json",
+        "--label",
+        "pr4-ask-suite",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(applied.status).toBe(0);
+    expect(applied.stderr).toBe("");
+    const result = JSON.parse(applied.stdout) as {
+      status: string;
+      exitCode: number;
+      reportAfter: {
+        answer: {
+          suite: {
+            status: string;
+            total: number;
+            passed: number;
+            unsupportedClaimCount: number;
+            staleCitationCount: number;
+            abstentionMismatchCount: number;
+          };
+        };
+      } | null;
+      refresh: { artifactRelPath?: string } | null;
+      benchmark: { status: string; total?: number; passed?: number } | null;
+      askSuite: {
+        status: string;
+        total: number;
+        passed: number;
+        unsupportedClaimCount: number;
+        staleCitationCount: number;
+        abstentionMismatchCount: number;
+      } | null;
+      savedArtifact: { path: string; relPath: string } | null;
+      steps: Array<{ id: string; status: string; artifactRelPath?: string }>;
+    };
+    expect(result.status).toBe("ok");
+    expect(result.exitCode).toBe(0);
+    expect(result.benchmark).toMatchObject({
+      status: "passed",
+      total: 2,
+      passed: 2,
+    });
+    expect(result.askSuite).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        total: 1,
+        passed: 1,
+        unsupportedClaimCount: 0,
+        staleCitationCount: 0,
+        abstentionMismatchCount: 0,
+      }),
+    );
+    expect(result.reportAfter?.answer.suite).toEqual(
+      expect.objectContaining({
+        status: "passed",
+        total: 1,
+        passed: 1,
+        unsupportedClaimCount: 0,
+      }),
+    );
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        id: "ask-suite",
+        status: "ok",
+        artifactRelPath: result.refresh?.artifactRelPath,
+      }),
+    );
+    const savedArtifact = JSON.parse(
+      await readFile(result.savedArtifact!.path, "utf8"),
+    ) as { askSuite?: { status: string; total: number } };
+    expect(savedArtifact.askSuite).toEqual(
+      expect.objectContaining({ status: "passed", total: 1 }),
+    );
+
+    const runs = runCli([
+      "runs",
+      "sqlite-demo",
+      "--kind",
+      "maintenance",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(runs.status).toBe(0);
+    expect(
+      (JSON.parse(runs.stdout) as {
+        runs: Array<{ askSuiteStatus?: string; askSuiteTotal?: number }>;
+      }).runs[0],
+    ).toEqual(
+      expect.objectContaining({
+        askSuiteStatus: "passed",
+        askSuiteTotal: 1,
+      }),
+    );
+  });
+
+  test("maintain --apply records ask-suite quality failure without losing benchmark result", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+    await writeSqliteDemoAskFixture({ unsupported: true });
+    const almanacDir = almanacDirPath(root, "sqlite-demo");
+    await rm(benchmarkResultPath(almanacDir), { force: true });
+
+    const applied = runCli(
+      [
+        "maintain",
+        "sqlite-demo",
+        "--apply",
+        "--json",
+        "--label",
+        "pr4-ask-suite-fail",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(applied.status).toBe(1);
+    expect(applied.stderr).toBe("");
+    const result = JSON.parse(applied.stdout) as {
+      status: string;
+      exitCode: number;
+      reportAfter: {
+        status: string;
+        answer: {
+          suite: {
+            status: string;
+            unsupportedClaimCount: number;
+          };
+        };
+      } | null;
+      refresh: { status: string; artifactRelPath?: string } | null;
+      benchmark: { status: string; total?: number; passed?: number } | null;
+      askSuite: {
+        status: string;
+        total: number;
+        failed: number;
+        unsupportedClaimCount: number;
+        error?: { code: string };
+      } | null;
+      steps: Array<{ id: string; status: string; reason: string }>;
+    };
+    expect(result.status).toBe("failed");
+    expect(result.exitCode).toBe(1);
+    expect(result.refresh?.status).toBe("failed");
+    expect(result.benchmark).toMatchObject({
+      status: "passed",
+      total: 2,
+      passed: 2,
+    });
+    expect(result.askSuite).toEqual(
+      expect.objectContaining({
+        status: "failed",
+        total: 1,
+        failed: 1,
+        unsupportedClaimCount: 1,
+        error: expect.objectContaining({ code: "ask-suite-failed" }),
+      }),
+    );
+    expect(result.reportAfter).toEqual(
+      expect.objectContaining({
+        status: "needs-validation",
+        answer: expect.objectContaining({
+          suite: expect.objectContaining({
+            status: "failed",
+            unsupportedClaimCount: 1,
+          }),
+        }),
+      }),
+    );
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({ id: "refresh", status: "ok" }),
+    );
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({ id: "benchmark", status: "ok" }),
+    );
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        id: "ask-suite",
+        status: "failed",
+        reason: expect.stringContaining("unsupported=1"),
+      }),
+    );
+  });
+
+  test("maintain --no-ask-suite keeps refresh and benchmark apply provider-free", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    await writeFreshSqliteDemoSourceFetchManifest();
+    await writeSqliteDemoAskFixture({ unsupported: true });
+    const almanacDir = almanacDirPath(root, "sqlite-demo");
+    await rm(benchmarkResultPath(almanacDir), { force: true });
+
+    const applied = runCli(
+      [
+        "maintain",
+        "sqlite-demo",
+        "--apply",
+        "--json",
+        "--no-ask-suite",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(applied.status).toBe(0);
+    expect(applied.stderr).toBe("");
+    const result = JSON.parse(applied.stdout) as {
+      status: string;
+      refresh: { artifactRelPath?: string } | null;
+      benchmark: { status: string; total?: number; passed?: number } | null;
+      askSuite: unknown;
+      steps: Array<{ id: string; status: string; reason: string }>;
+    };
+    expect(result.status).toBe("ok");
+    expect(result.benchmark).toMatchObject({
+      status: "passed",
+      total: 2,
+      passed: 2,
+    });
+    expect(result.askSuite).toBeNull();
+    expect(result.steps).toContainEqual(
+      expect.objectContaining({
+        id: "ask-suite",
+        status: "skipped",
+        reason: "ask-suite validation disabled",
+      }),
+    );
+    const refreshArtifact = JSON.parse(
+      await readFile(join(almanacDir, result.refresh!.artifactRelPath!), "utf8"),
+    ) as { askSuite?: unknown };
+    expect(refreshArtifact.askSuite).toBeUndefined();
   });
 
   test("maintain --all --due-only --apply skips almanacs that are not due", async () => {

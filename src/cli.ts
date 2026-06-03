@@ -1820,6 +1820,7 @@ interface MaintainOptions {
   apply?: boolean;
   all?: boolean;
   dueOnly?: boolean;
+  askSuite?: boolean;
   label?: string;
   note?: string;
 }
@@ -1864,6 +1865,25 @@ interface RegistrationClientState {
 interface LifecycleRegistrationSummary {
   status: RegistrationOverallStatus;
   clients: RegistrationClientState[];
+}
+
+interface LifecycleAnswerSuiteSummary {
+  status: AnswerReadiness["latestSuite"]["status"];
+  refreshId?: string;
+  startedAt?: string;
+  artifactRelPath?: string;
+  label?: string;
+  total?: number;
+  passed?: number;
+  failed?: number;
+  errored?: number;
+  citationRate?: number;
+  unsupportedClaimCount?: number;
+  staleCitationCount?: number;
+  abstentionMismatchCount?: number;
+  fixtureFiles: Array<{ relPath: string; count: number }>;
+  error?: { code: string; message: string };
+  readError?: string;
 }
 
 type LifecycleOverallStatus = "ok" | "attention" | "failed" | "broken";
@@ -1921,6 +1941,7 @@ interface LifecycleInventoryItem {
       status: AnswerReadinessStatus | "unknown";
       fixtures: number | null;
       latestSuite: AnswerReadiness["latestSuite"]["status"] | null;
+      suite: LifecycleAnswerSuiteSummary | null;
       qualityGate: AnswerReadiness["qualityGate"]["status"] | null;
       issue?: string;
     };
@@ -2062,6 +2083,7 @@ interface MaintenanceApplyResult {
     exitCode: RunToolExitCode;
   } | null;
   benchmark: MaintenanceArtifact["benchmark"] | null;
+  askSuite: MaintenanceArtifact["askSuite"] | null;
   savedArtifact: {
     path: string;
     relPath: string;
@@ -2435,6 +2457,7 @@ function brokenLifecycleItem(args: {
         status: "unknown",
         fixtures: null,
         latestSuite: null,
+        suite: null,
         qualityGate: null,
       },
       refresh: {
@@ -2574,6 +2597,7 @@ async function readLifecycleAnswer(args: {
       status: readiness.status,
       fixtures: readiness.fixtures.count,
       latestSuite: readiness.latestSuite.status,
+      suite: lifecycleAnswerSuiteSummary(readiness.latestSuite),
       qualityGate: readiness.qualityGate.status,
       ...(answerIssues.length === 0 ? {} : { issue: answerIssues.join("; ") }),
     };
@@ -2584,10 +2608,42 @@ async function readLifecycleAnswer(args: {
       status: "unknown",
       fixtures: null,
       latestSuite: null,
+      suite: null,
       qualityGate: null,
       issue,
     };
   }
+}
+
+function lifecycleAnswerSuiteSummary(
+  suite: AnswerReadiness["latestSuite"],
+): LifecycleAnswerSuiteSummary {
+  return {
+    status: suite.status,
+    ...(suite.refreshId === undefined ? {} : { refreshId: suite.refreshId }),
+    ...(suite.startedAt === undefined ? {} : { startedAt: suite.startedAt }),
+    ...(suite.artifactRelPath === undefined
+      ? {}
+      : { artifactRelPath: suite.artifactRelPath }),
+    ...(suite.label === undefined ? {} : { label: suite.label }),
+    ...(suite.total === undefined ? {} : { total: suite.total }),
+    ...(suite.passed === undefined ? {} : { passed: suite.passed }),
+    ...(suite.failed === undefined ? {} : { failed: suite.failed }),
+    ...(suite.errored === undefined ? {} : { errored: suite.errored }),
+    ...(suite.citationRate === undefined ? {} : { citationRate: suite.citationRate }),
+    ...(suite.unsupportedClaimCount === undefined
+      ? {}
+      : { unsupportedClaimCount: suite.unsupportedClaimCount }),
+    ...(suite.staleCitationCount === undefined
+      ? {}
+      : { staleCitationCount: suite.staleCitationCount }),
+    ...(suite.abstentionMismatchCount === undefined
+      ? {}
+      : { abstentionMismatchCount: suite.abstentionMismatchCount }),
+    fixtureFiles: suite.fixtureFiles,
+    ...(suite.error === undefined ? {} : { error: suite.error }),
+    ...(suite.readError === undefined ? {} : { readError: suite.readError }),
+  };
 }
 
 async function readLifecycleRefresh(args: {
@@ -3093,14 +3149,36 @@ function formatLifecycleBenchmark(
 function formatLifecycleAnswer(
   answer: LifecycleInventoryItem["lifecycle"]["answer"],
 ): string {
+  const suite =
+    answer.suite === null
+      ? answer.latestSuite === null
+        ? null
+        : `suite=${answer.latestSuite}`
+      : formatLifecycleAnswerSuite(answer.suite);
   const parts = [
     answer.status,
     answer.fixtures === null ? null : `${answer.fixtures} fixture(s)`,
-    answer.latestSuite === null ? null : `suite=${answer.latestSuite}`,
+    suite,
     answer.qualityGate === null ? null : `quality=${answer.qualityGate}`,
   ].filter((part): part is string => part !== null);
   const issue = answer.issue === undefined ? "" : ` (${answer.issue})`;
   return `${parts.join(", ")}${issue}`;
+}
+
+function formatLifecycleAnswerSuite(suite: LifecycleAnswerSuiteSummary): string {
+  const counts =
+    suite.total === undefined ? "" : ` ${suite.passed ?? 0}/${suite.total}`;
+  const quality = [
+    suite.unsupportedClaimCount === undefined
+      ? null
+      : `unsupported=${suite.unsupportedClaimCount}`,
+    suite.staleCitationCount === undefined ? null : `stale=${suite.staleCitationCount}`,
+    suite.abstentionMismatchCount === undefined
+      ? null
+      : `abstentionMismatch=${suite.abstentionMismatchCount}`,
+  ].filter((part): part is string => part !== null);
+  const qualitySuffix = quality.length === 0 ? "" : ` (${quality.join(", ")})`;
+  return `suite=${suite.status}${counts}${qualitySuffix}`;
 }
 
 function formatLifecycleRefresh(
@@ -3299,7 +3377,7 @@ async function readMaintenanceReport(
   const rootHygiene = await readRootHygieneReport(opts.root);
   const cleanupCandidates = maintenanceCleanupCandidates(statusReport, rootHygiene);
   const repairs = maintenanceRepairCandidates(statusReport);
-  const plan = maintenancePlanSteps(statusReport, cleanupCandidates, opts.root);
+  const plan = maintenancePlanSteps(statusReport, cleanupCandidates, opts);
   const nextActions = uniqueStrings([
     ...plan
       .filter((step) => step.status === "planned" && step.command !== null)
@@ -3464,13 +3542,29 @@ function maintenanceRepairCandidates(
 function maintenancePlanSteps(
   statusReport: AlmanacStatusReport,
   cleanupCandidates: MaintenanceCleanupCandidate[],
-  root: string,
+  opts: MaintainOptions,
 ): MaintenancePlanStep[] {
-  const rootSuffix = rootArg(root);
+  const rootSuffix = rootArg(opts.root);
+  const refreshStepWithoutAskSuite = maintenanceRefreshStep(
+    statusReport,
+    rootSuffix,
+    false,
+  );
+  const benchmarkStep = maintenanceBenchmarkStep(statusReport, rootSuffix);
+  const shouldRunAskSuite = maintenanceShouldPlanAskSuite(
+    statusReport,
+    opts,
+    refreshStepWithoutAskSuite.status === "planned" ||
+      benchmarkStep.status === "planned",
+  );
+  const refreshStep =
+    refreshStepWithoutAskSuite.status === "planned"
+      ? maintenanceRefreshStep(statusReport, rootSuffix, shouldRunAskSuite)
+      : refreshStepWithoutAskSuite;
   return [
-    maintenanceRefreshStep(statusReport, rootSuffix),
-    maintenanceBenchmarkStep(statusReport, rootSuffix),
-    maintenanceAskSuiteStep(statusReport, rootSuffix),
+    refreshStep,
+    benchmarkStep,
+    maintenanceAskSuiteStep(statusReport, rootSuffix, opts, shouldRunAskSuite),
     maintenanceCleanupStep(cleanupCandidates),
   ];
 }
@@ -3478,6 +3572,7 @@ function maintenancePlanSteps(
 function maintenanceRefreshStep(
   statusReport: AlmanacStatusReport,
   rootSuffix: string,
+  askSuite: boolean,
 ): MaintenancePlanStep {
   const refresh = statusReport.lifecycle.refresh;
   if (statusReport.status === "broken") {
@@ -3508,11 +3603,28 @@ function maintenanceRefreshStep(
     id: "refresh",
     status: "planned",
     reason: `${refresh.reasons ?? 0} refresh reason(s)`,
-    command:
-      `almanac refresh run ${statusReport.almanacId} --from-stage ${refresh.recommendedFromStage} --save${rootSuffix}`,
+    command: maintenanceRefreshRunCommand(
+      statusReport.almanacId,
+      refresh.recommendedFromStage,
+      rootSuffix,
+      askSuite,
+    ),
     providerRequired: refresh.recommendedFromStage !== "12-benchmark-run",
     expectedArtifact: ".runs/refresh-*.json",
   };
+}
+
+function maintenanceRefreshRunCommand(
+  almanacId: string,
+  fromStage: StageId,
+  rootSuffix: string,
+  askSuite: boolean,
+): string {
+  return (
+    `almanac refresh run ${almanacId} --from-stage ${fromStage}` +
+    `${askSuite ? " --ask-suite" : ""}` +
+    ` --save${rootSuffix}`
+  );
 }
 
 function maintenanceBenchmarkStep(
@@ -3565,13 +3677,48 @@ function maintenanceBenchmarkStep(
 function maintenanceAskSuiteStep(
   statusReport: AlmanacStatusReport,
   rootSuffix: string,
+  opts: MaintainOptions,
+  shouldRunAskSuite: boolean,
 ): MaintenancePlanStep {
   const answer = statusReport.lifecycle.answer;
+  if (!maintenanceAskSuiteEnabled(opts)) {
+    return {
+      id: "ask-suite",
+      status: "skipped",
+      reason: "ask-suite validation disabled",
+      command: null,
+      providerRequired: false,
+      expectedArtifact: null,
+    };
+  }
   if (statusReport.status === "broken" || answer.status === "unknown") {
     return blockedMaintenanceStep(
       "ask-suite",
       answer.issue ?? "answer readiness is unavailable",
     );
+  }
+  if (shouldRunAskSuite) {
+    const reason =
+      opts.askSuite === true
+        ? "ask-suite validation requested"
+        : answer.latestSuite !== "passed"
+          ? answer.issue ?? `ask suite is ${answer.latestSuite}`
+          : maintenanceAskSuiteFixtureMismatch(statusReport)
+            ? answer.issue ?? "ask suite fixture coverage changed"
+            : "ask-suite validation follows refresh/benchmark maintenance";
+    return {
+      id: "ask-suite",
+      status: "planned",
+      reason,
+      command: maintenanceRefreshRunCommand(
+        statusReport.almanacId,
+        "12-benchmark-run",
+        rootSuffix,
+        true,
+      ),
+      providerRequired: false,
+      expectedArtifact: ".runs/refresh-*.json",
+    };
   }
   if (answer.status === "ready") {
     return {
@@ -3620,6 +3767,40 @@ function maintenanceAskSuiteStep(
   return blockedMaintenanceStep(
     "ask-suite",
     answer.issue ?? `answer readiness is ${answer.status}`,
+  );
+}
+
+function maintenanceAskSuiteEnabled(opts: MaintainOptions): boolean {
+  return opts.askSuite !== false;
+}
+
+function maintenanceHasAskFixtures(statusReport: AlmanacStatusReport): boolean {
+  return (statusReport.lifecycle.answer.fixtures ?? 0) > 0;
+}
+
+function maintenanceAskSuiteFixtureMismatch(
+  statusReport: AlmanacStatusReport,
+): boolean {
+  return (
+    statusReport.lifecycle.answer.issue?.includes(
+      "latest ask suite fixture coverage differs",
+    ) ?? false
+  );
+}
+
+function maintenanceShouldPlanAskSuite(
+  statusReport: AlmanacStatusReport,
+  opts: MaintainOptions,
+  refreshOrBenchmarkPlanned: boolean,
+): boolean {
+  if (!maintenanceAskSuiteEnabled(opts)) return false;
+  if (!maintenanceHasAskFixtures(statusReport)) return false;
+  if (opts.askSuite === true) return true;
+  const answer = statusReport.lifecycle.answer;
+  return (
+    refreshOrBenchmarkPlanned ||
+    answer.latestSuite !== "passed" ||
+    maintenanceAskSuiteFixtureMismatch(statusReport)
   );
 }
 
@@ -3888,6 +4069,8 @@ async function applyMaintenanceForId(
   let reportAfter: MaintenanceReport | null = null;
   let error: MaintenanceApplyResult["error"];
   const refreshStep = reportBefore.plan.find((step) => step.id === "refresh");
+  const askSuiteStep = reportBefore.plan.find((step) => step.id === "ask-suite");
+  const shouldRunAskSuite = maintenancePlanStepRunsAskSuite(askSuiteStep);
   const { runners, providerAvailable } = buildRunners();
 
   if (opts.dueOnly === true && !maintenanceReportIsDue(reportBefore)) {
@@ -3917,6 +4100,7 @@ async function applyMaintenanceForId(
       steps,
       refresh: null,
       benchmark: null,
+      askSuite: null,
       savedArtifact: null,
       nextActions: reportBefore.nextActions,
     };
@@ -3944,6 +4128,7 @@ async function applyMaintenanceForId(
           persistManifest: (manifest) =>
             writeManifestWithActualCounts(reportBefore.almanacDir, manifest),
           save: true,
+          askSuite: shouldRunAskSuite,
           label: normalizeMaintenanceLabel(opts.label ?? "maintenance"),
           ...(opts.note === undefined
             ? {}
@@ -3952,7 +4137,7 @@ async function applyMaintenanceForId(
         steps.push(
           maintenanceStepResult(
             refreshStep,
-            maintenanceStepStatusFromRefresh(refreshResult.status),
+            maintenanceRefreshStepStatusFromRun(refreshResult),
             `refresh ${refreshResult.status}`,
             {
               artifactRelPath: refreshResult.savedArtifact?.relPath,
@@ -3964,6 +4149,23 @@ async function applyMaintenanceForId(
       }
     } else if (refreshStep !== undefined) {
       steps.push(maintenanceStepResult(refreshStep, "skipped", refreshStep.reason));
+    }
+
+    if (refreshResult === null && shouldRunAskSuite && error === undefined) {
+      refreshResult = await runRefresh({
+        almanacDir: reportBefore.almanacDir,
+        fromStage: "12-benchmark-run",
+        runners,
+        forgerVersion: FORGER_VERSION,
+        persistManifest: (manifest) =>
+          writeManifestWithActualCounts(reportBefore.almanacDir, manifest),
+        save: true,
+        askSuite: true,
+        label: normalizeMaintenanceLabel(opts.label ?? "maintenance"),
+        ...(opts.note === undefined
+          ? {}
+          : { note: normalizeMaintenanceNote(opts.note) }),
+      });
     }
 
     const benchmarkStep = reportBefore.plan.find((step) => step.id === "benchmark");
@@ -3990,8 +4192,15 @@ async function applyMaintenanceForId(
       }
     }
 
+    if (askSuiteStep !== undefined) {
+      steps.push(maintenanceAskSuiteStepResult(askSuiteStep, refreshResult, error));
+    }
+
     for (const step of reportBefore.plan.filter(
-      (step) => step.id !== "refresh" && step.id !== "benchmark",
+      (step) =>
+        step.id !== "refresh" &&
+        step.id !== "benchmark" &&
+        step.id !== "ask-suite",
     )) {
       steps.push(
         maintenanceStepResult(
@@ -4005,7 +4214,7 @@ async function applyMaintenanceForId(
     }
 
     reportAfter =
-      refreshResult !== null && refreshResult.exitCode === 0
+      refreshResult !== null && maintenanceCanReadReportAfter(refreshResult)
         ? await readMaintenanceReport(id, opts)
         : null;
   } catch (cause) {
@@ -4038,6 +4247,7 @@ async function applyMaintenanceForId(
     dueOnly: opts.dueOnly === true,
     steps,
     refreshResult,
+    askSuite: refreshResult?.askSuite ?? null,
     label: normalizeMaintenanceLabel(opts.label ?? "maintenance"),
     ...(opts.note === undefined ? {} : { note: normalizeMaintenanceNote(opts.note) }),
     ...(error === undefined ? {} : { error }),
@@ -4072,6 +4282,7 @@ async function applyMaintenanceForId(
             exitCode: refreshResult.exitCode,
           },
     benchmark: refreshResult?.benchmark ?? null,
+    askSuite: refreshResult?.askSuite ?? null,
     savedArtifact: {
       path: artifact.path,
       relPath: artifact.relPath,
@@ -4082,7 +4293,19 @@ async function applyMaintenanceForId(
 }
 
 function maintenanceReportIsDue(report: MaintenanceReport): boolean {
-  return report.refresh.due || report.benchmark.planned;
+  return (
+    report.refresh.due ||
+    report.benchmark.planned ||
+    maintenancePlanStepRunsAskSuite(
+      report.plan.find((step) => step.id === "ask-suite"),
+    )
+  );
+}
+
+function maintenancePlanStepRunsAskSuite(
+  step: MaintenancePlanStep | undefined,
+): boolean {
+  return step?.status === "planned" && step.expectedArtifact === ".runs/refresh-*.json";
 }
 
 function maintenanceStepResult(
@@ -4111,6 +4334,78 @@ function maintenanceStepStatusFromRefresh(
   if (status === "not-due") return "not-due";
   if (status === "locked") return "locked";
   return "failed";
+}
+
+function maintenanceRefreshStepStatusFromRun(
+  result: Awaited<ReturnType<typeof runRefresh>>,
+): MaintenanceStepResult["status"] {
+  if (
+    (result.error?.code === "ask-suite-failed" ||
+      result.error?.code === "ask-suite-missing") &&
+    result.stageSummary.failed.length === 0 &&
+    result.benchmark.status === "passed"
+  ) {
+    return "ok";
+  }
+  return maintenanceStepStatusFromRefresh(result.status);
+}
+
+function maintenanceCanReadReportAfter(
+  result: Awaited<ReturnType<typeof runRefresh>>,
+): boolean {
+  if (result.exitCode === 0) return true;
+  return (
+    (result.error?.code === "ask-suite-failed" ||
+      result.error?.code === "ask-suite-missing") &&
+    result.stageSummary.failed.length === 0
+  );
+}
+
+function maintenanceAskSuiteStepResult(
+  step: MaintenancePlanStep,
+  refreshResult: Awaited<ReturnType<typeof runRefresh>> | null,
+  error: MaintenanceApplyResult["error"] | undefined,
+): MaintenanceStepResult {
+  if (!maintenancePlanStepRunsAskSuite(step)) {
+    return maintenanceStepResult(
+      step,
+      step.status === "planned" ? "skipped" : step.status,
+      step.status === "planned"
+        ? "not applied by the due-only maintenance runner"
+        : step.reason,
+    );
+  }
+  if (refreshResult?.askSuite === undefined) {
+    return maintenanceStepResult(
+      step,
+      "blocked",
+      error?.message ?? "ask-suite validation did not run",
+      error === undefined ? {} : { error },
+    );
+  }
+  const askSuite = refreshResult.askSuite;
+  const counts =
+    askSuite.total === undefined ? "" : `, ${askSuite.passed ?? 0}/${askSuite.total} passed`;
+  const quality = [
+    askSuite.unsupportedClaimCount === undefined
+      ? null
+      : `unsupported=${askSuite.unsupportedClaimCount}`,
+    askSuite.staleCitationCount === undefined ? null : `stale=${askSuite.staleCitationCount}`,
+    askSuite.abstentionMismatchCount === undefined
+      ? null
+      : `abstentionMismatch=${askSuite.abstentionMismatchCount}`,
+  ].filter((part): part is string => part !== null);
+  const qualityText = quality.length === 0 ? "" : `, ${quality.join(", ")}`;
+  return maintenanceStepResult(
+    step,
+    askSuite.status === "passed" ? "ok" : "failed",
+    `ask-suite ${askSuite.status}${counts}${qualityText}`,
+    {
+      artifactRelPath: refreshResult.savedArtifact?.relPath,
+      exitCode: askSuite.exitCode,
+      error: askSuite.error,
+    },
+  );
 }
 
 function maintenanceArtifactStatus(args: {
@@ -4148,6 +4443,7 @@ async function saveMaintenanceArtifact(input: {
   dueOnly: boolean;
   steps: MaintenanceStepResult[];
   refreshResult: Awaited<ReturnType<typeof runRefresh>> | null;
+  askSuite: Awaited<ReturnType<typeof runRefresh>>["askSuite"] | null;
   label?: string;
   note?: string;
   error?: MaintenanceApplyResult["error"];
@@ -4184,6 +4480,7 @@ async function saveMaintenanceArtifact(input: {
             exitCode: input.refreshResult.exitCode,
           },
           benchmark: input.refreshResult.benchmark,
+          ...(input.askSuite === null ? {} : { askSuite: input.askSuite }),
         }),
     steps: input.steps,
     nextActions: input.nextActions,
@@ -4245,6 +4542,9 @@ function formatMaintenanceApplyHuman(result: MaintenanceApplyResult): string {
   if (result.benchmark !== null) {
     lines.push(`benchmark: ${result.benchmark?.status ?? "unknown"}`);
   }
+  if (result.askSuite !== null && result.askSuite !== undefined) {
+    lines.push(`ask-suite: ${formatMaintenanceAskSuiteSummary(result.askSuite)}`);
+  }
   if (result.savedArtifact !== null) {
     lines.push(`artifact: ${result.savedArtifact.path}`);
   }
@@ -4265,6 +4565,24 @@ function formatMaintenanceApplyHuman(result: MaintenanceApplyResult): string {
     }
   }
   return lines.join("\n") + "\n";
+}
+
+function formatMaintenanceAskSuiteSummary(
+  askSuite: NonNullable<MaintenanceArtifact["askSuite"]>,
+): string {
+  const counts =
+    askSuite.total === undefined ? "" : `, ${askSuite.passed ?? 0}/${askSuite.total} passed`;
+  const quality = [
+    askSuite.unsupportedClaimCount === undefined
+      ? null
+      : `unsupported=${askSuite.unsupportedClaimCount}`,
+    askSuite.staleCitationCount === undefined ? null : `stale=${askSuite.staleCitationCount}`,
+    askSuite.abstentionMismatchCount === undefined
+      ? null
+      : `abstentionMismatch=${askSuite.abstentionMismatchCount}`,
+  ].filter((part): part is string => part !== null);
+  const qualityText = quality.length === 0 ? "" : `, ${quality.join(", ")}`;
+  return `${askSuite.status}${counts}${qualityText}`;
 }
 
 function formatMaintenanceBatchHuman(result: MaintenanceBatchResult): string {
@@ -7932,6 +8250,8 @@ program
   .option("--due-only", "Skip almanacs that are not due for refresh or benchmark")
   .option("--json", "Emit JSON instead of a human-readable summary")
   .option("--dry-run", "Show the maintenance plan without writing files")
+  .option("--ask-suite", "Run deterministic ask fixture suite when fixtures exist")
+  .option("--no-ask-suite", "Skip ask-suite validation during maintenance")
   .option("--label <name>", "Short label for saved maintenance artifacts")
   .option("--note <text>", "Human note for saved maintenance artifacts")
   .addOption(rootOption)
