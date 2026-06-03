@@ -583,6 +583,34 @@ describe("ask fixture authoring", () => {
     await expect(
       saveAnswerArtifact({
         almanacDir,
+        answerId: "answer-2026-01-03T00-00-00-000Z-00000006",
+        question: "What governance checks should precede rollout?",
+        status: "abstained",
+        exitCode: 1,
+        startedAt: "2026-01-03T00:00:00.000Z",
+        finishedAt: "2026-01-03T00:00:01.000Z",
+        abstentionReason: "no-citations",
+        toolCalls: [
+          {
+            toolName: "query_facts",
+            input: { q: "governance rollout checks" },
+            status: "ok",
+            durationMs: 10,
+            citationsCount: 1,
+          },
+        ],
+        citations: [],
+        freshness: {
+          class: "static",
+          maxAge: null,
+          staleness: "fresh",
+        },
+      }).then((result) => askReplayFixtureFromAnswerArtifact(result.artifact)),
+    ).rejects.toThrow("abstained despite cited tool evidence");
+
+    await expect(
+      saveAnswerArtifact({
+        almanacDir,
         answerId: "answer-2026-01-03T00-00-00-000Z-00000005",
         question: "What happened?",
         status: "model-error",

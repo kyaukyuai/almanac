@@ -166,6 +166,17 @@ export function askReplayFixtureFromAnswerArtifact(
       `answer artifact has no recorded tool calls: ${artifact.answerId}`,
     );
   }
+  if (
+    artifact.status === "abstained" &&
+    artifact.toolCalls.some(
+      (call) => call.status === "ok" && call.citationsCount > 0,
+    )
+  ) {
+    throw new AskFixtureAuthoringError(
+      "answer-not-replayable",
+      `answer artifact abstained despite cited tool evidence: ${artifact.answerId}; use ask-replay --from-runs for this saved answer instead`,
+    );
+  }
 
   return AskReplayFixtureSchema.parse({
     id: options.fixtureId ?? artifact.answerId,
