@@ -172,6 +172,7 @@ a resident chat surface.
 | `almanac feed <domain> <source>`                   | add a single source incrementally             | v0.2 |
 | `almanac remove <domain>`                          | delete almanac                                | ✅   |
 | `almanac export <domain>`                          | bundle as portable archive                    | v0.2 |
+| `almanac import <archive>`                         | validate/install exported archive             | v0.12 |
 | `almanac wiki <domain>`                            | export human-readable inspection bundle       | v0.4 |
 
 `almanac new` flags (initial set):
@@ -922,6 +923,9 @@ workflow:
   Retention cleanup is dry-run by default and deletes only with `--apply`.
 - `almanac export` excludes `.runs/` by default and includes it only with
   `--include-runs`; `.compile/` inclusion remains independent.
+- `almanac import` is dry-run by default, validates archive paths and
+  `manifest.json` before extraction, and only overwrites an existing almanac
+  with explicit `--replace`.
 
 The v0.5 release gate passed on 2026-06-01 with `bun run typecheck`,
 `bun test`, a fresh offline demo, local `run --tool`, saved artifact viewer

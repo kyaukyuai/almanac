@@ -40,6 +40,7 @@
  *                                          reindex; dry-run by default)
  *   almanac export <id> [opts]             package a compiled almanac as a
  *                                          portable .tar.gz archive
+ *   almanac import <archive> [opts]        inspect/install an exported archive
  *   almanac wiki <id> [opts]               export a Markdown inspection bundle
  *
  * All twelve stages (0–12) are implemented and exercised by `src/e2e.test.ts`.
@@ -205,6 +206,11 @@ import {
   defaultExportPath,
   runExport,
 } from "./manage/export.ts";
+import {
+  ImportFailedError,
+  ImportValidationError,
+  runImport,
+} from "./manage/import.ts";
 import {
   defaultWikiExportDir,
   runWikiExport,
@@ -5525,6 +5531,14 @@ interface ExportOptions {
   includeRuns?: boolean;
 }
 
+interface ImportOptions {
+  root: string;
+  apply?: boolean;
+  replace?: boolean;
+  as?: string;
+  json?: boolean;
+}
+
 interface WikiOptions {
   root: string;
   output?: string;
@@ -5583,6 +5597,67 @@ function formatExportExtras(opts: ExportOptions): string {
     opts.includeCompile === true ? "INCLUDE .compile/" : "exclude .compile/",
     opts.includeRuns === true ? "INCLUDE .runs/" : "exclude .runs/",
   ].join(", ");
+}
+
+async function cmdImport(archive: string, opts: ImportOptions): Promise<void> {
+  const archivePath = resolve(archive);
+  const root = resolve(opts.root);
+
+  try {
+    const result = await runImport({
+      archivePath,
+      root,
+      ...(opts.apply === true ? { apply: true } : {}),
+      ...(opts.replace === true ? { replace: true } : {}),
+      ...(opts.as ? { targetId: opts.as } : {}),
+    });
+
+    if (opts.json === true) {
+      process.stdout.write(`${JSON.stringify(result, null, 2)}\n`);
+      return;
+    }
+
+    const mode =
+      result.mode === "dry-run" ? "dry-run (no files written)" : "applied";
+    const action =
+      result.mode === "dry-run"
+        ? result.collision
+          ? "would replace existing target"
+          : "would install"
+        : result.replaced
+          ? "replaced existing target"
+          : "installed";
+
+    process.stdout.write(
+      `▶ import almanac archive\n` +
+        `    archive  ${result.archivePath}\n` +
+        `    root     ${result.root}\n` +
+        `    top      ${result.topLevelDir}\n` +
+        `    target   ${result.targetId}\n` +
+        `    mode     ${mode}\n` +
+        `    action   ${action}\n` +
+        `    entries  ${result.entries}\n`,
+    );
+
+    if (result.mode === "dry-run") {
+      process.stdout.write(
+        `\nNo files were written. Re-run with --apply to install the archive.\n`,
+      );
+    } else {
+      process.stdout.write(`\nDone.\n    dir     ${result.targetDir}\n`);
+    }
+
+    process.stdout.write(
+      `\nNext actions:\n` +
+        `    almanac status ${result.targetId} --root ${result.root}\n` +
+        `    almanac benchmark ${result.targetId} --root ${result.root}\n`,
+    );
+  } catch (e) {
+    if (e instanceof ImportValidationError || e instanceof ImportFailedError) {
+      fail(`import failed: ${e.message}`);
+    }
+    throw e;
+  }
 }
 
 function formatBytes(n: number): string {
@@ -6645,6 +6720,18 @@ program
   )
   .addOption(rootOption)
   .action(cmdExport);
+
+program
+  .command("import <archive>")
+  .description(
+    "inspect or install an exported almanac archive (dry-run by default)",
+  )
+  .option("--apply", "Actually extract the archive into the root")
+  .option("--replace", "Allow replacing an existing target almanac directory")
+  .option("--as <id>", "Import under a different almanac id")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdImport);
 
 program
   .command("wiki <id>")
