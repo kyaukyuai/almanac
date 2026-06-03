@@ -61,6 +61,19 @@ provider-free and complements `inspect` and `profile`: use `status` to decide
 whether the almanac is usable now, then use the detailed commands when a next
 action points there.
 
+## Registration visibility
+
+```bash
+almanac register sqlite-demo --client=claude-code --status --root "$tmp"
+almanac register sqlite-demo --status --all --root "$tmp"
+```
+
+`register --status` is the read-only client registration check. It distinguishes
+missing Skill installs, stale Skill files, missing MCP config entries,
+unreadable config files, and MCP command/path mismatches. Repair commands are
+printed explicitly and still require `--apply`; status mode never mutates the
+client config or skills directory.
+
 ## Install sanity
 
 Before compiling anything, verify the source-first CLI path from the repository

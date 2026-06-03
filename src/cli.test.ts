@@ -424,6 +424,10 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.lifecycle.benchmark.status).toBe("missing");
     expect(status.lifecycle.answer.status).toBe("not-ready");
     expect(status.lifecycle.refresh.status).toBe("due");
+    expect(
+      (status.lifecycle as { registration?: { clients: unknown[] } }).registration
+        ?.clients.length,
+    ).toBeGreaterThan(0);
     expect(status.lifecycle.nextActions.some((action) =>
       action.includes("almanac inspect legacy"),
     )).toBe(true);
@@ -463,6 +467,151 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("almanac status: partial (partial)");
     expect(result.stdout).toContain("status        broken");
     expect(result.stdout).toContain("manifest.json missing");
+  });
+
+  test("register --status distinguishes current skill from mismatched MCP entry", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    const almanacDir = almanacDirPath(root, "legacy");
+    const skillSource = join(almanacDir, "adapters", "skill", "SKILL.md");
+    const skillsDir = join(root, "skills");
+    const skillDest = join(skillsDir, "almanac-legacy", "SKILL.md");
+    const mcpConfig = join(root, "claude.json");
+    await mkdir(join(almanacDir, "adapters", "skill"), { recursive: true });
+    await mkdir(join(skillsDir, "almanac-legacy"), { recursive: true });
+    await writeFile(skillSource, "# Legacy Skill\n", "utf8");
+    await writeFile(skillDest, "# Legacy Skill\n", "utf8");
+    await writeFile(
+      mcpConfig,
+      JSON.stringify(
+        {
+          mcpServers: {
+            "almanac-legacy": {
+              command: "bun",
+              args: [
+                "run",
+                "/tmp/old-cli.ts",
+                "serve",
+                "legacy",
+                "--root",
+                "/tmp/old-root",
+              ],
+            },
+          },
+        },
+        null,
+        2,
+      ),
+      "utf8",
+    );
+
+    const result = runCli([
+      "register",
+      "legacy",
+      "--status",
+      "--client",
+      "claude-code",
+      "--skills-dir",
+      skillsDir,
+      "--mcp-config",
+      mcpConfig,
+      "--json",
+      "--root",
+      root,
+    ]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      summary: string;
+      clients: Array<{
+        status: string;
+        skill: { status: string };
+        mcp: { status: string; issues: string[] };
+        nextActions: string[];
+      }>;
+    };
+    expect(report.summary).toBe("stale");
+    expect(report.clients[0]?.status).toBe("stale");
+    expect(report.clients[0]?.skill.status).toBe("current");
+    expect(report.clients[0]?.mcp.status).toBe("mismatched");
+    expect(report.clients[0]?.mcp.issues.some((issue) =>
+      issue.startsWith("CLI path mismatch:"),
+    )).toBe(true);
+    expect(report.clients[0]?.mcp.issues.some((issue) =>
+      issue.startsWith("root path mismatch:"),
+    )).toBe(true);
+    expect(report.clients[0]?.nextActions.some((action) =>
+      action.includes("almanac register legacy --client=claude-code --target=mcp --apply"),
+    )).toBe(true);
+  });
+
+  test("register --status validates current MCP entries for every supported client", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    const cliPath = join(import.meta.dirname, "cli.ts");
+    const expectedArgs = ["run", cliPath, "serve", "legacy", "--root", root];
+    const clients = [
+      { name: "claude-code", format: "json", key: "mcpServers" },
+      { name: "claude-desktop", format: "json", key: "mcpServers" },
+      { name: "cursor", format: "json", key: "mcpServers" },
+      { name: "codex", format: "toml", key: "mcp_servers" },
+    ] as const;
+
+    for (const client of clients) {
+      const mcpConfig = join(root, `${client.name}.${client.format}`);
+      if (client.format === "json") {
+        await writeFile(
+          mcpConfig,
+          JSON.stringify(
+            {
+              [client.key]: {
+                "almanac-legacy": {
+                  command: "bun",
+                  args: expectedArgs,
+                },
+              },
+            },
+            null,
+            2,
+          ),
+          "utf8",
+        );
+      } else {
+        await writeFile(
+          mcpConfig,
+          `[mcp_servers.almanac-legacy]\ncommand = "bun"\nargs = ${JSON.stringify(expectedArgs)}\n`,
+          "utf8",
+        );
+      }
+
+      const result = runCli([
+        "register",
+        "legacy",
+        "--status",
+        "--target",
+        "mcp",
+        "--client",
+        client.name,
+        "--mcp-config",
+        mcpConfig,
+        "--json",
+        "--root",
+        root,
+      ]);
+
+      expect(result.status).toBe(0);
+      expect(result.stderr).toBe("");
+      const report = JSON.parse(result.stdout) as {
+        summary: string;
+        clients: Array<{ client: string; status: string; mcp: { status: string } }>;
+      };
+      expect(report.summary).toBe("current");
+      expect(report.clients).toHaveLength(1);
+      expect(report.clients[0]).toMatchObject({
+        client: client.name,
+        status: "current",
+        mcp: { status: "current" },
+      });
+    }
   });
 
   test("inspect shows actual counts first and the stale manifest counts below", async () => {
