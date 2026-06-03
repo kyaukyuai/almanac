@@ -858,6 +858,313 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("manifest.json missing");
   });
 
+  test("repair --json dry-run and apply fixes stale manifest counts", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const dryRun = runCli(["repair", "legacy", "--json", "--dry-run", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(dryRun.status).toBe(0);
+    expect(dryRun.stderr).toBe("");
+    const dryRunReport = JSON.parse(dryRun.stdout) as {
+      status: string;
+      mode: string;
+      candidates: Array<{
+        kind: string;
+        status: string;
+        applySupported: boolean;
+        paths: string[];
+        command: string | null;
+      }>;
+    };
+    expect(dryRunReport.status).toBe("repairable");
+    expect(dryRunReport.mode).toBe("dry-run");
+    expect(dryRunReport.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "manifest-counts",
+        status: "planned",
+        applySupported: true,
+        paths: expect.arrayContaining([
+          join(root, "legacy", "manifest.json"),
+          join(root, "legacy", "knowledge", "index-manifest.json"),
+        ]),
+      }),
+    );
+    expect(dryRunReport.candidates[0]?.command).toContain(
+      "almanac repair legacy --apply",
+    );
+
+    const applied = runCli(["repair", "legacy", "--json", "--apply", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(applied.status).toBe(0);
+    expect(applied.stderr).toBe("");
+    const appliedReport = JSON.parse(applied.stdout) as {
+      status: string;
+      applied: number;
+      failed: number;
+      candidates: Array<{ kind: string; status: string }>;
+    };
+    expect(appliedReport.status).toBe("clean");
+    expect(appliedReport.applied).toBe(1);
+    expect(appliedReport.failed).toBe(0);
+    expect(appliedReport.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "manifest-counts",
+        status: "applied",
+      }),
+    );
+
+    const manifest = JSON.parse(
+      await readFile(join(root, "legacy", "manifest.json"), "utf8"),
+    ) as { factCount: number; toolCount: number };
+    expect(manifest.factCount).toBe(7);
+    expect(manifest.toolCount).toBe(2);
+  });
+
+  test("repair --apply refreshes stale registration artifacts with JSON output", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    const almanacDir = almanacDirPath(root, "legacy");
+    const home = join(root, "home");
+    const skillSource = join(almanacDir, "adapters", "skill", "SKILL.md");
+    const skillDest = join(home, ".claude", "skills", "almanac-legacy", "SKILL.md");
+    await mkdir(join(almanacDir, "adapters", "skill"), { recursive: true });
+    await mkdir(join(home, ".claude", "skills", "almanac-legacy"), {
+      recursive: true,
+    });
+    await writeFile(skillSource, "# Current Legacy Skill\n", "utf8");
+    await writeFile(skillDest, "# Stale Legacy Skill\n", "utf8");
+    await writeFile(
+      join(home, ".claude.json"),
+      JSON.stringify({
+        mcpServers: {
+          "almanac-legacy": {
+            command: "bun",
+            args: ["run", "/tmp/old-cli.ts", "serve", "legacy", "--root", "/tmp/old-root"],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = runCli(["repair", "legacy", "--json", "--apply", "--root", root], {
+      HOME: home,
+      ANTHROPIC_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      status: string;
+      applied: number;
+      failed: number;
+      candidates: Array<{
+        id: string;
+        kind: string;
+        status: string;
+        paths: string[];
+      }>;
+    };
+    expect(report.status).toBe("clean");
+    expect(report.applied).toBeGreaterThanOrEqual(3);
+    expect(report.failed).toBe(0);
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        id: "registration:claude-code:skill",
+        kind: "registration",
+        status: "applied",
+        paths: expect.arrayContaining([skillSource, skillDest]),
+      }),
+    );
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        id: "registration:claude-code:mcp",
+        kind: "registration",
+        status: "applied",
+        paths: [join(home, ".claude.json")],
+      }),
+    );
+    expect(await readFile(skillDest, "utf8")).toBe("# Current Legacy Skill\n");
+    const mcpConfig = JSON.parse(
+      await readFile(join(home, ".claude.json"), "utf8"),
+    ) as {
+      mcpServers: Record<string, { command: string; args: string[] }>;
+    };
+    expect(mcpConfig.mcpServers["almanac-legacy"]?.command).toBe("bun");
+    expect(mcpConfig.mcpServers["almanac-legacy"]?.args).toEqual(
+      expect.arrayContaining(["serve", "legacy", "--root", root]),
+    );
+  });
+
+  test("cleanup --json dry-run lists saved runs, exports, and orphaned MCP registrations", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    const savedRun = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"transactions atomic"}',
+      "--save",
+      "--label",
+      "cleanup-test",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(savedRun.status).toBe(0);
+    const saved = JSON.parse(savedRun.stdout) as { artifactRelPath: string };
+    const savedPath = join(root, "sqlite-demo", saved.artifactRelPath);
+    const archivePath = join(root, "almanac-sqlite-demo-0.1.0.tar.gz");
+    await writeFile(archivePath, "fake", "utf8");
+    const home = `${root}-home`;
+    await mkdir(home, { recursive: true });
+    const mcpPath = join(home, ".claude.json");
+    await writeFile(
+      mcpPath,
+      JSON.stringify({
+        mcpServers: {
+          "almanac-missing": {
+            command: "bun",
+            args: ["run", "/tmp/almanac-cli.ts", "serve", "missing", "--root", root],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = runCli(
+      ["cleanup", "--json", "--dry-run", "--keep-latest", "0", "--root", root],
+      {
+        HOME: home,
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      status: string;
+      keepLatest: number;
+      candidates: Array<{
+        kind: string;
+        status: string;
+        applySupported: boolean;
+        paths: string[];
+        command: string | null;
+      }>;
+    };
+    expect(report.status).toBe("attention");
+    expect(report.keepLatest).toBe(0);
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "saved-runs",
+        status: "planned",
+        applySupported: true,
+        paths: [savedPath],
+      }),
+    );
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "export-archive",
+        applySupported: false,
+        paths: [archivePath],
+      }),
+    );
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "orphaned-mcp-registration",
+        applySupported: true,
+        paths: [mcpPath],
+      }),
+    );
+    expect(
+      report.candidates.find((candidate) => candidate.kind === "saved-runs")
+        ?.command,
+    ).toContain("almanac runs sqlite-demo --prune --keep-latest 0 --dry-run");
+  });
+
+  test("cleanup --apply prunes runs and orphaned MCP entries without deleting archives", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    const savedRun = runCli([
+      "run",
+      "sqlite-demo",
+      "--tool",
+      "query_facts",
+      "--input",
+      '{"q":"transactions atomic"}',
+      "--save",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(savedRun.status).toBe(0);
+    const saved = JSON.parse(savedRun.stdout) as { artifactRelPath: string };
+    const savedPath = join(root, "sqlite-demo", saved.artifactRelPath);
+    const archivePath = join(root, "almanac-sqlite-demo-0.1.0.tar.gz");
+    await writeFile(archivePath, "fake", "utf8");
+    const home = `${root}-home`;
+    await mkdir(home, { recursive: true });
+    const mcpPath = join(home, ".claude.json");
+    await writeFile(
+      mcpPath,
+      JSON.stringify({
+        mcpServers: {
+          "almanac-missing": {
+            command: "bun",
+            args: ["run", "/tmp/almanac-cli.ts", "serve", "missing", "--root", root],
+          },
+        },
+      }),
+      "utf8",
+    );
+
+    const result = runCli(
+      ["cleanup", "--json", "--apply", "--keep-latest", "0", "--root", root],
+      {
+        HOME: home,
+        ANTHROPIC_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const report = JSON.parse(result.stdout) as {
+      status: string;
+      applied: number;
+      skipped: number;
+      failed: number;
+      candidates: Array<{ kind: string; status: string }>;
+    };
+    expect(report.status).toBe("partial");
+    expect(report.applied).toBe(2);
+    expect(report.skipped).toBe(1);
+    expect(report.failed).toBe(0);
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({ kind: "saved-runs", status: "applied" }),
+    );
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({
+        kind: "orphaned-mcp-registration",
+        status: "applied",
+      }),
+    );
+    expect(report.candidates).toContainEqual(
+      expect.objectContaining({ kind: "export-archive", status: "skipped" }),
+    );
+    expect(existsSync(savedPath)).toBe(false);
+    expect(existsSync(archivePath)).toBe(true);
+    expect(existsSync(join(root, "sqlite-demo"))).toBe(true);
+    const mcpConfig = JSON.parse(await readFile(mcpPath, "utf8")) as {
+      mcpServers: Record<string, unknown>;
+    };
+    expect(mcpConfig.mcpServers["almanac-missing"]).toBeUndefined();
+  });
+
   test("maintain --apply runs due provider-free refresh and saves a maintenance artifact", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);
