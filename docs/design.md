@@ -1125,7 +1125,27 @@ real-provider Enterprise AI ask with two citations, saved-run replay, fixture
 promotion, `ask-suite` pass, refresh-integrated ask validation, and
 doctor/profile reporting answer mode as ready.
 
-### v0.13+ (long-tail)
+### v0.13 planned — Personal almanac maintenance
+
+v0.13 is planned as the Personal Almanac Maintenance release:
+
+- add provider-free maintenance reports that combine refresh due state,
+  benchmark freshness, ask-suite readiness, latest answer quality,
+  registration drift, cleanup candidates, and next actions,
+- add a manual `almanac maintain` runner for one almanac or all due almanacs,
+  with dry-run first behavior and saved maintenance artifacts,
+- integrate benchmark and ask-suite checks into maintenance routines so answer
+  mode stays validated after refreshes,
+- turn doctor/status findings into explicit repair and cleanup candidates
+  without destructive defaults,
+- generate scheduler handoff snippets for cron, launchd, and GitHub Actions,
+- audit answer fixtures and saved-answer promotion candidates so personal
+  regression sets remain replayable.
+
+See [`docs/v0.13-plan.md`](./v0.13-plan.md) for scope, non-goals, PR sequence,
+and planned release smoke targets.
+
+### v0.14+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
