@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.14.0 shipped** · last updated 2026-06-04.
+Status: **v0.15 RC prepared** · last updated 2026-06-04.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1185,9 +1185,9 @@ read-only studio HTML/API and localhost boundary checks, Enterprise AI fresh
 compile benchmark at 185 facts and 15/15 passed fixtures, real-provider
 Enterprise AI answer with one citation, and saved-run replay pass.
 
-### v0.15 planned — Guided activation
+### v0.15 release candidate — Guided activation
 
-v0.15 is planned as the Guided Activation release:
+v0.15 is the Guided Activation release candidate:
 
 - introduce activation milestones derived from existing lifecycle, benchmark,
   answer readiness, saved answer, replay, and maintenance state,
@@ -1200,7 +1200,8 @@ v0.15 is planned as the Guided Activation release:
   milestones, suggested questions, and copyable next commands.
 
 See [`docs/v0.15-plan.md`](./v0.15-plan.md) for scope, non-goals, PR sequence,
-and planned release smoke targets.
+and release smoke targets. The concrete release-candidate runbook is
+[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
 ### v0.16+ (long-tail)
 

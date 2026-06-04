@@ -24,7 +24,10 @@ or write files by itself.
 
 For the full guided first-run release-candidate path, including no-key demo,
 answer readiness bootstrap, local studio, and the separated provider-backed
-Enterprise AI smoke, see [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
+Enterprise AI smoke, see [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For
+the Guided Activation path through milestones, guided create apply, first
+answer, replay, and Studio activation state, see
+[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
 ## Offline demo
 
@@ -110,9 +113,10 @@ almanac studio --host 127.0.0.1 --port 4631 --root "$tmp"
 
 `studio` starts a read-only localhost dashboard for the selected root. It
 shows installed almanacs, health, references, checks, answer readiness, refresh
-status, registration status, latest history, issues, and the next best action.
-It does not mutate files, fixtures, registrations, or artifacts. Mutating
-actions are shown only as copyable CLI commands.
+status, registration status, latest history, activation milestones, suggested
+questions, issues, and the next best action. It does not mutate files,
+fixtures, registrations, or artifacts. Mutating actions are shown only as
+copyable CLI commands.
 
 The server binds to localhost only. Use Ctrl-C to stop it. The first version is
 intentionally plain: it is an orientation surface for personal/local use, not a
@@ -120,7 +124,10 @@ hosted management plane.
 
 The v0.14 RC smoke checks the local HTML page, `/api/inventory`, copyable
 commands, localhost-only binding, and clean Ctrl-C shutdown in
-[`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
+[`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). The v0.15 RC smoke extends
+that coverage to activation milestones, first-answer guidance, suggested
+questions, and `/api/status/:almanacId` in
+[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
 ## Registration visibility
 
@@ -564,7 +571,9 @@ sequence, see [`v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
 For the v0.11 first-run and failure-recovery release-candidate smoke sequence,
 see [`v0.11-rc-smoke.md`](./v0.11-rc-smoke.md).
 For the v0.14 guided first-run and seeded answer-readiness release-candidate
-smoke sequence, see [`v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
+smoke sequence, see [`v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For the v0.15
+guided activation, first-answer, replay, and Studio activation smoke sequence,
+see [`v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
 Minimal answer-mode smoke:
 
