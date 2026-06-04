@@ -1831,6 +1831,8 @@ interface StatusOptions {
 interface StartOptions {
   root: string;
   json?: boolean;
+  apply?: boolean;
+  source?: string[];
 }
 
 interface MaintainOptions {
@@ -2377,6 +2379,37 @@ interface StartReport {
   goalDraft: StartGoalDraft | null;
   almanacs: StartAlmanacSummary[];
   nextBestAction: StartAction;
+  nextActions: StartAction[];
+}
+
+interface StartProviderRequirement {
+  anthropicRequired: true;
+  available: boolean;
+  satisfiedBy: "anthropic" | "mock" | null;
+  message: string;
+}
+
+interface StartApplyResult {
+  almanacId: string;
+  almanacDir: string;
+  stdoutLineCount: number;
+  stdoutTail: string[];
+}
+
+interface StartApplyReport {
+  schemaVersion: "0.1.0";
+  root: string;
+  checkedAt: string;
+  status: "blocked" | "created";
+  summary: string;
+  provider: StartProviderStatus;
+  providerRequirement: StartProviderRequirement;
+  goalDraft: StartGoalDraft | null;
+  sources: string[];
+  plannedCommand: string;
+  delegatedCommand: string | null;
+  blockers: string[];
+  result: StartApplyResult | null;
   nextActions: StartAction[];
 }
 
@@ -4052,6 +4085,110 @@ function buildStartGoalDraft(
   };
 }
 
+function normalizeStartSources(sources: string[] | undefined): string[] {
+  return uniqueStrings(
+    (sources ?? [])
+      .map((source) => source.trim())
+      .filter((source) => source.length > 0),
+  );
+}
+
+function startApplyCommand(
+  goal: string | null,
+  sources: readonly string[],
+  root: string,
+): string {
+  const goalArg = goal === null ? "\"<goal>\"" : shellArg(goal);
+  const sourceArg =
+    sources.length === 0
+      ? " --source <url>"
+      : ` --source ${sources.map((source) => shellArg(source)).join(" ")}`;
+  return `almanac start ${goalArg}${sourceArg} --apply${rootArg(root)}`;
+}
+
+function startNewCommand(
+  draft: StartGoalDraft,
+  sources: readonly string[],
+  root: string,
+): string {
+  const sourceArg =
+    sources.length === 0
+      ? ' --source "$REFERENCE_URL"'
+      : ` --source ${sources.map((source) => shellArg(source)).join(" ")}`;
+  return (
+    `almanac new ${shellArg(draft.domain)} --display-name ${shellArg(draft.displayName)} ` +
+    `--slug ${shellArg(draft.slug)} --profile ${draft.profile} --depth ${draft.depth} ` +
+    `--scope ${shellArg(draft.scope)}${sourceArg}${rootArg(root)}`
+  );
+}
+
+function startProviderRequirement(
+  provider: StartProviderStatus,
+): StartProviderRequirement {
+  if (provider.anthropic === "set") {
+    return {
+      anthropicRequired: true,
+      available: true,
+      satisfiedBy: "anthropic",
+      message: "ANTHROPIC_API_KEY is set; guided create may run provider-backed compile.",
+    };
+  }
+  if (process.env["ALMANAC_LLM"] === "mock") {
+    return {
+      anthropicRequired: true,
+      available: true,
+      satisfiedBy: "mock",
+      message:
+        "ALMANAC_LLM=mock is set; guided create may run with the deterministic mock provider.",
+    };
+  }
+  return {
+    anthropicRequired: true,
+    available: false,
+    satisfiedBy: null,
+    message:
+      "ANTHROPIC_API_KEY is required before guided create starts provider-backed compile.",
+  };
+}
+
+async function captureStdout(fn: () => Promise<void>): Promise<string> {
+  const originalWrite = process.stdout.write;
+  let stdout = "";
+  const captureWrite = function (
+    this: typeof process.stdout,
+    chunk: string | Uint8Array,
+    encodingOrCallback?: BufferEncoding | ((error?: Error | null) => void),
+    callback?: (error?: Error | null) => void,
+  ): boolean {
+    stdout += typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf8");
+    if (typeof encodingOrCallback === "function") {
+      encodingOrCallback(null);
+    }
+    if (callback !== undefined) {
+      callback(null);
+    }
+    return true;
+  };
+  process.stdout.write = captureWrite as typeof process.stdout.write;
+  try {
+    await fn();
+  } finally {
+    process.stdout.write = originalWrite;
+  }
+  return stdout;
+}
+
+function summarizeCapturedStdout(stdout: string): {
+  stdoutLineCount: number;
+  stdoutTail: string[];
+} {
+  const lines = stdout.split(/\r?\n/).filter((line) => line.length > 0);
+  return {
+    stdoutLineCount: lines.length,
+    stdoutTail: lines.slice(-20),
+  };
+}
+
 function deriveStartGoalSubject(goal: string): string {
   let subject = goal.trim();
   const replacements = [
@@ -4214,7 +4351,164 @@ function uniqueStartActions(actions: StartAction[]): StartAction[] {
   return out;
 }
 
+async function cmdStartApply(
+  goalParts: string[],
+  opts: StartOptions,
+): Promise<void> {
+  const checkedAt = new Date().toISOString();
+  const provider = startProviderStatus();
+  const providerRequirement = startProviderRequirement(provider);
+  const goal = normalizeStartGoal(goalParts);
+  const sources = normalizeStartSources(opts.source);
+  const goalDraft =
+    goal === null ? null : buildStartGoalDraft(goal, opts.root, provider);
+  const plannedCommand = startApplyCommand(goal, sources, opts.root);
+  const delegatedCommand =
+    goalDraft === null ? null : startNewCommand(goalDraft, sources, opts.root);
+
+  const blockers: string[] = [];
+  if (goal === null) {
+    blockers.push("start --apply requires a natural-language goal.");
+  }
+  if (sources.length === 0) {
+    blockers.push(
+      "start --apply requires at least one explicit --source <url> reference.",
+    );
+  }
+  if (!providerRequirement.available) {
+    blockers.push(
+      "start --apply requires ANTHROPIC_API_KEY before provider-backed compile starts.",
+    );
+  }
+
+  if (blockers.length > 0 || goalDraft === null || delegatedCommand === null) {
+    const nextActions: StartAction[] = [];
+    if (!providerRequirement.available) {
+      nextActions.push({
+        label: "Set provider credential",
+        command: "export ANTHROPIC_API_KEY=<your-key>",
+        reason:
+          "Guided create will not start provider-backed compile until credentials are explicit.",
+        providerRequired: true,
+        mutates: false,
+      });
+    }
+    if (sources.length === 0) {
+      nextActions.push({
+        label: "Add a reviewed reference",
+        command: plannedCommand,
+        reason:
+          "Guided create does not infer sources; provide at least one reviewed URL or file:// reference.",
+        providerRequired: true,
+        mutates: true,
+      });
+    }
+    nextActions.push({
+      label: "Check local setup",
+      command: `almanac doctor${rootArg(opts.root)}`,
+      reason: "Doctor checks provider keys and local runtime readiness.",
+      providerRequired: false,
+      mutates: false,
+    });
+
+    const report: StartApplyReport = {
+      schemaVersion: "0.1.0",
+      root: opts.root,
+      checkedAt,
+      status: "blocked",
+      summary: "Guided create is blocked before provider work starts.",
+      provider,
+      providerRequirement,
+      goalDraft,
+      sources,
+      plannedCommand,
+      delegatedCommand,
+      blockers,
+      result: null,
+      nextActions,
+    };
+    if (opts.json) {
+      process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+      process.exit(1);
+    }
+    process.stderr.write(
+      "error: start --apply cannot continue:\n" +
+        blockers.map((blocker) => `  - ${blocker}`).join("\n") +
+        "\n\nrecovery:\n" +
+        nextActions.map((action) => `  - ${action.command}`).join("\n") +
+        "\n",
+    );
+    process.exit(1);
+  }
+
+  const almanacDir = almanacDirPath(opts.root, goalDraft.slug);
+  const newOptions: NewOptions = {
+    displayName: goalDraft.displayName,
+    slug: goalDraft.slug,
+    profile: goalDraft.profile,
+    depth: goalDraft.depth,
+    target: "both",
+    source: sources,
+    scope: goalDraft.scope,
+    root: opts.root,
+    requireApproval: false,
+  };
+
+  if (opts.json) {
+    const stdout = await captureStdout(() => cmdNew(goalDraft.domain, newOptions));
+    const stdoutSummary = summarizeCapturedStdout(stdout);
+    const report: StartApplyReport = {
+      schemaVersion: "0.1.0",
+      root: opts.root,
+      checkedAt,
+      status: "created",
+      summary: "Guided create completed through the existing new pipeline.",
+      provider,
+      providerRequirement,
+      goalDraft,
+      sources,
+      plannedCommand,
+      delegatedCommand,
+      blockers: [],
+      result: {
+        almanacId: goalDraft.slug,
+        almanacDir,
+        ...stdoutSummary,
+      },
+      nextActions: [
+        {
+          label: "Inspect the new almanac",
+          command: `almanac inspect ${goalDraft.slug}${rootArg(opts.root)}`,
+          reason: "Inspect shows compile health, stages, references, and checks.",
+          providerRequired: false,
+          mutates: false,
+        },
+        {
+          label: "Review activation status",
+          command: `almanac status ${goalDraft.slug}${rootArg(opts.root)}`,
+          reason: "Status summarizes usability and the next activation step.",
+          providerRequired: false,
+          mutates: false,
+        },
+      ],
+    };
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+
+  process.stdout.write("guided create\n");
+  process.stdout.write(`  goal          ${goalDraft.goal}\n`);
+  process.stdout.write(`  command       ${plannedCommand}\n`);
+  process.stdout.write(`  delegates     ${delegatedCommand}\n`);
+  process.stdout.write(`  provider      ${providerRequirement.message}\n\n`);
+  await cmdNew(goalDraft.domain, newOptions);
+}
+
 async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> {
+  if (opts.apply === true) {
+    await cmdStartApply(goalParts, opts);
+    return;
+  }
   const report = await buildStartReport(opts, goalParts);
   if (opts.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
@@ -10727,6 +11021,8 @@ program
   .command("start [goal...]")
   .description("guide first-run setup or draft a setup plan from a goal")
   .option("--json", "Emit JSON instead of a human-readable guide")
+  .option("--source <hint...>", "Explicit reviewed source hint(s) for --apply", [])
+  .option("--apply", "Create the drafted almanac by delegating to almanac new")
   .addOption(rootOption)
   .action((goal: string[] | undefined, opts: StartOptions) =>
     cmdStart(goal ?? [], opts),
