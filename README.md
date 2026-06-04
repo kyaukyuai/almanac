@@ -290,7 +290,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.14.0 RC | 185 | 6 (2) | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.15.0 RC | 138 | 6 (2) | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -332,6 +332,14 @@ refresh-backed ask-suite evidence, local read-only studio HTML/API and
 localhost boundary checks, Enterprise AI fresh compile benchmark at 185 facts
 and 15/15 fixtures, real-provider Enterprise AI answer with one citation, and
 saved-run replay pass.
+
+The v0.15.0 RC smoke passed the guided activation gate on `main`: static gates,
+source and linked CLI sanity, provider-free activation start, deterministic
+mock guided create apply, sqlite-demo suggested questions, seeded answer
+readiness, mock first-answer guidance, saved answer replay, Studio activation
+HTML/API and localhost boundary checks, maintenance dry-run, Enterprise AI
+fresh compile benchmark at 138 facts and 15/15 fixtures, valid real-provider
+Enterprise AI abstention with quality pass, and saved-run replay pass.
 
 ## Development
 

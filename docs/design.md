@@ -1203,6 +1203,15 @@ See [`docs/v0.15-plan.md`](./v0.15-plan.md) for scope, non-goals, PR sequence,
 and release smoke targets. The concrete release-candidate runbook is
 [`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
+The v0.15 release gate passed on 2026-06-04 with `git diff --check`,
+`bun run typecheck`, `bun test`, source and linked CLI checks, provider-free
+activation start, deterministic mock guided create apply, sqlite-demo
+suggested questions, seeded answer readiness, mock first-answer guidance,
+saved answer replay, Studio activation HTML/API and localhost boundary checks,
+maintenance dry-run, Enterprise AI fresh compile benchmark at 138 facts and
+15/15 passed fixtures, valid real-provider Enterprise AI abstention with
+quality pass, and saved-run replay pass.
+
 ### v0.16+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
