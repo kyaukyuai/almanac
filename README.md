@@ -344,6 +344,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.13 RC smoke](./docs/v0.13-rc-smoke.md): release-candidate validation for
   provider-free maintenance, scheduler handoff, and Enterprise AI provider
   smoke
+- [v0.14 plan](./docs/v0.14-plan.md): first-run guided experience, natural
+  language intake, user-facing terminology, answer readiness bootstrap, and
+  local read-only studio
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
