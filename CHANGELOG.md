@@ -11,6 +11,45 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.15.0] — 2026-06-04
+
+### Added
+
+- **Activation milestones.** `start`, `status`, and Studio now derive a shared
+  activation state across oriented, planned, compiled, validated,
+  answer-ready, first-answer, replayable, and maintainable states.
+- **Guided create apply.** `almanac start "<goal>" --source ... --apply`
+  delegates to the existing `new` pipeline after explicit references and an
+  explicit provider boundary are present.
+- **First-answer guidance.** `status`, `profile`, and saved `ask --save`
+  output now surface suggested questions, first-answer trust summaries,
+  replay commands, and answer-check promotion commands.
+- **Studio activation surface.** `almanac studio` now shows activation
+  milestones, suggested questions, first-answer guidance, and copyable next
+  commands while remaining read-only and localhost-only.
+- **v0.15 RC smoke runbook.** `docs/v0.15-rc-smoke.md` covers provider-free
+  guided activation, deterministic mock guided create apply, first-answer
+  replay, Studio activation checks, maintenance dry-run, and credentialed
+  Enterprise AI compile/ask/replay validation.
+
+### Changed
+
+- **First success path.** The documented product path now moves users from
+  orientation to first saved/replayable answer instead of stopping at initial
+  guided setup.
+- **Activation terminology.** User-facing docs and surfaces now make the next
+  activation step explicit while keeping source-first artifacts and runtime
+  contracts unchanged.
+
+### Fixed
+
+- **No hidden provider work.** Guided activation, status, doctor, maintenance
+  dry-runs, and Studio reads keep provider-backed work explicit and copyable
+  instead of triggering it implicitly.
+- **Release confidence.** v0.15 RC smoke records valid real-provider
+  abstention as a passing cite-or-abstain outcome when replay passes without
+  another provider call.
+
 ## [0.14.0] — 2026-06-04
 
 ### Added
@@ -1028,7 +1067,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.15.0...HEAD
+[0.15.0]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kyaukyuai/almanac/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/kyaukyuai/almanac/compare/v0.12.0...v0.13.0
 [0.12.0]: https://github.com/kyaukyuai/almanac/compare/v0.11.0...v0.12.0
