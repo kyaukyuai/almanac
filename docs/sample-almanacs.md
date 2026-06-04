@@ -96,57 +96,30 @@ almanac benchmark sqlite-demo --root "$handoff_root"
 
 ## Answer-Mode Sample
 
-To make the sample answer-ready without a live provider, use the mock provider
-flow from the v0.12 RC smoke:
+To make the sample answer-ready without a live provider, seed the deterministic
+SQLite answer check and persist the passing suite through the deterministic
+Stage 12 refresh boundary:
 
 ```bash
-export ALMANAC_LLM=mock
-export ALMANAC_MOCK_RESPONSES="$(
-  cat <<'JSON'
-{
-  "answer-planner@planner-v1": [
-    "{\"action\":\"call_tool\",\"toolName\":\"query_facts\",\"input\":{\"q\":\"transactions atomic\",\"limit\":3}}",
-    "{\"action\":\"stop\",\"reason\":\"enough-evidence\"}"
-  ],
-  "answer-synthesis@synthesis-v1": "{\"status\":\"ok\",\"answer\":\"SQLite transactions are atomic.\",\"citations\":[{\"sourceId\":\"sqlite-transactions\",\"url\":\"https://www.sqlite.org/lang_transaction.html\",\"fetchedAt\":\"2026-01-01T00:00:00.000Z\"}]}"
-}
-JSON
-)"
-
-answer_json="$tmp/sqlite-answer.json"
-almanac ask sqlite-demo \
-  "Are SQLite transactions atomic?" \
-  --save \
-  --label sample-answer \
-  --json \
-  --root "$tmp" \
-  > "$answer_json"
-
-answer_id="$(jq -r '.answerId' "$answer_json")"
-
-unset ALMANAC_LLM
-unset ALMANAC_MOCK_RESPONSES
-
-almanac ask-replay sqlite-demo \
-  --from-runs \
-  --label sample-answer \
-  --json \
-  --root "$tmp"
-
-almanac ask-fixtures init sqlite-demo --root "$tmp"
-almanac ask-fixtures add-from-run sqlite-demo "$answer_id" \
-  --fixture-id sqlite-transactions-atomic \
-  --root "$tmp"
+almanac ask-fixtures init sqlite-demo --seed-demo --root "$tmp"
 almanac ask-suite sqlite-demo --root "$tmp"
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --root "$tmp"
+almanac profile sqlite-demo --root "$tmp"
 ```
 
 Expected outcome:
 
-- saved answer status is `ok`,
-- at least one citation and one tool call are present,
-- saved replay passes without provider credentials,
+- one deterministic fixture is written to `tests/ask.jsonl`,
 - `ask-suite` passes without provider credentials,
-- `profile` reports answer mode as ready after fixture promotion.
+- `profile` reports answer mode as ready after saved ask-suite evidence.
+
+For a live answer artifact workflow, use `almanac ask --save` with
+`ANTHROPIC_API_KEY`, then replay or promote the saved answer with
+`ask-replay` and `ask-fixtures add-from-run`.
 
 ## Credentialed Release Sample
 
@@ -154,7 +127,7 @@ Enterprise AI remains the credentialed release sample because it exercises real
 provider compile, source discovery, generated tools, benchmark generation,
 real-provider ask, saved answer replay, and ask-suite promotion. The current
 commands are maintained in
-[`docs/v0.12-rc-smoke.md`](./v0.12-rc-smoke.md#7-enterprise-ai-fresh-compile-and-update-smoke).
+[`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md#7-enterprise-ai-provider-smoke).
 
 Keep the committed sample small and deterministic. Keep the Enterprise AI
 sample generated on demand because its sources, provider outputs, and costs are

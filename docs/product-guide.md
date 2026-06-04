@@ -22,6 +22,10 @@ domain, slug, scope, reference checklist, first questions, and a provider-backed
 `almanac new ...` command to review. It does not call an LLM provider, compile,
 or write files by itself.
 
+For the full guided first-run release-candidate path, including no-key demo,
+answer readiness bootstrap, local studio, and the separated provider-backed
+Enterprise AI smoke, see [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
+
 ## Offline demo
 
 ```bash
@@ -113,6 +117,10 @@ actions are shown only as copyable CLI commands.
 The server binds to localhost only. Use Ctrl-C to stop it. The first version is
 intentionally plain: it is an orientation surface for personal/local use, not a
 hosted management plane.
+
+The v0.14 RC smoke checks the local HTML page, `/api/inventory`, copyable
+commands, localhost-only binding, and clean Ctrl-C shutdown in
+[`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
 
 ## Registration visibility
 
@@ -555,6 +563,8 @@ For the v0.10 answer trust and retrieval readiness release-candidate smoke
 sequence, see [`v0.10-rc-smoke.md`](./v0.10-rc-smoke.md).
 For the v0.11 first-run and failure-recovery release-candidate smoke sequence,
 see [`v0.11-rc-smoke.md`](./v0.11-rc-smoke.md).
+For the v0.14 guided first-run and seeded answer-readiness release-candidate
+smoke sequence, see [`v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
 
 Minimal answer-mode smoke:
 
