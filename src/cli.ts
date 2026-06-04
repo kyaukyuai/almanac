@@ -275,6 +275,15 @@ import {
   initAskFixtureFile,
 } from "./manage/ask-fixtures.ts";
 import {
+  StudioServerError,
+  parseStudioPort,
+  startStudioServer,
+  type StudioAlmanacCard,
+  type StudioCommand,
+  type StudioHistorySummary,
+  type StudioSnapshot,
+} from "./manage/studio.ts";
+import {
   formatAnswerReadinessDoctor,
   getAnswerReadiness,
   type AnswerReadiness,
@@ -4113,6 +4122,221 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       process.stdout.write(`  - ${formatGuidedAction(action)}\n`);
     }
   }
+}
+
+interface StudioOptions {
+  root: string;
+  host?: string;
+  port?: string;
+  json?: boolean;
+}
+
+async function cmdStudio(opts: StudioOptions): Promise<void> {
+  const host = opts.host ?? "127.0.0.1";
+  let port: number;
+  try {
+    port = parseStudioPort(opts.port);
+    const handle = startStudioServer({
+      host,
+      port,
+      loadSnapshot: () => buildStudioSnapshot(opts.root),
+      loadStatus: (almanacId) => buildStudioStatus(opts.root, almanacId),
+    });
+    const started = {
+      schemaVersion: "0.1.0" as const,
+      root: opts.root,
+      host,
+      port: handle.server.port,
+      url: handle.url,
+      readOnly: true,
+    };
+    process.stdout.write(
+      opts.json === true
+        ? JSON.stringify(started, null, 2) + "\n"
+        : `studio: ${handle.url}\n` +
+            `  root      ${opts.root}\n` +
+            `  readonly  yes\n` +
+            "  stop      Ctrl-C\n",
+    );
+    await waitForStudioShutdown(handle);
+  } catch (e) {
+    if (e instanceof StudioServerError) {
+      fail(`studio: ${e.message}`);
+    }
+    throw e;
+  }
+}
+
+async function waitForStudioShutdown(handle: {
+  stop: () => void;
+}): Promise<void> {
+  await new Promise<void>((resolve) => {
+    let stopped = false;
+    const shutdown = () => {
+      if (stopped) return;
+      stopped = true;
+      handle.stop();
+      process.stdout.write("studio stopped\n");
+      resolve();
+    };
+    process.once("SIGINT", shutdown);
+    process.once("SIGTERM", shutdown);
+  });
+}
+
+async function buildStudioSnapshot(root: string): Promise<StudioSnapshot> {
+  const items = await readLifecycleInventory(root);
+  const almanacs = await Promise.all(
+    items.map(async (item) =>
+      studioCardFromItem(
+        item,
+        await readLifecycleLatestRuns(item.almanacDir),
+        root,
+      ),
+    ),
+  );
+  const ok = almanacs.filter((item) => item.health === "ok").length;
+  const broken = almanacs.filter((item) => item.health === "broken").length;
+  return {
+    schemaVersion: "0.1.0",
+    root,
+    generatedAt: new Date().toISOString(),
+    counts: {
+      total: almanacs.length,
+      ok,
+      broken,
+      attention: almanacs.length - ok - broken,
+    },
+    almanacs,
+  };
+}
+
+async function buildStudioStatus(
+  root: string,
+  almanacId: string,
+): Promise<StudioAlmanacCard | null> {
+  const almanacDir = almanacDirPath(root, almanacId);
+  if (!existsSync(almanacDir)) return null;
+  const item = await readLifecycleInventoryItem(root, almanacId);
+  return studioCardFromItem(
+    item,
+    await readLifecycleLatestRuns(item.almanacDir),
+    root,
+  );
+}
+
+function studioCardFromItem(
+  item: LifecycleInventoryItem,
+  runs: LifecycleLatestRuns,
+  root: string,
+): StudioAlmanacCard {
+  return {
+    almanacId: item.almanacId,
+    displayName: item.displayName,
+    almanacDir: item.almanacDir,
+    health: item.lifecycle.status,
+    usability: lifecycleUsability(item),
+    manifest:
+      item.manifest === null
+        ? null
+        : {
+            domain: item.manifest.domain,
+            version: item.manifest.version,
+            profile: item.manifest.freshnessProfileId,
+            compiledAt: item.manifest.compiledAt,
+          },
+    references: {
+      extractedKnowledge: item.lifecycle.knowledge.facts,
+      tools: item.lifecycle.knowledge.tools,
+      retrieval: item.lifecycle.knowledge.retrieval,
+    },
+    checks: {
+      validation: formatGuidedLifecycleBenchmark(item.lifecycle.benchmark),
+      answer: formatGuidedLifecycleAnswer(item.lifecycle.answer),
+      refresh: formatLifecycleRefresh(item.lifecycle.refresh),
+      registration: formatLifecycleRegistration(item.lifecycle.registration),
+    },
+    latestHistory: studioHistorySummary(runs),
+    issues: item.lifecycle.issues.map(formatGuidedIssue),
+    nextBestAction: studioCommandFromStartAction(startActionForItem(item, root)),
+    commands: item.lifecycle.nextActions.map(studioCommandFromActionString),
+  };
+}
+
+function studioHistorySummary(runs: LifecycleLatestRuns): StudioHistorySummary {
+  if (runs.readError !== null) {
+    return {
+      latest: "unreadable",
+      answer: "unreadable",
+      refresh: "unreadable",
+      maintenance: "unreadable",
+      readError: runs.readError,
+    };
+  }
+  return {
+    latest: compactRunSummary(runs.latest),
+    answer: compactRunSummary(runs.byKind.answer),
+    refresh: compactRunSummary(runs.byKind.refresh),
+    maintenance: compactRunSummary(runs.byKind.maintenance),
+    readError: null,
+  };
+}
+
+function studioCommandFromStartAction(action: StartAction): StudioCommand {
+  return {
+    label: action.label,
+    command: action.command,
+    reason: action.reason,
+    providerRequired: action.providerRequired,
+    mutates: action.mutates,
+  };
+}
+
+function studioCommandFromActionString(action: string): StudioCommand {
+  const parsed = parseLabeledCommand(action);
+  return {
+    label: parsed.label,
+    command: parsed.command,
+    providerRequired: studioCommandNeedsProvider(parsed.command),
+    mutates: studioCommandMutates(parsed.command),
+  };
+}
+
+function parseLabeledCommand(action: string): {
+  label: string;
+  command: string;
+} {
+  const colon = action.indexOf(": ");
+  if (colon > 0 && action.slice(colon + 2).startsWith("almanac ")) {
+    return {
+      label: action.slice(0, colon),
+      command: action.slice(colon + 2),
+    };
+  }
+  return { label: "Run command", command: action };
+}
+
+function studioCommandNeedsProvider(command: string): boolean {
+  return (
+    command.includes(" almanac new ") ||
+    command.startsWith("almanac new ") ||
+    command.includes(" almanac ask ") ||
+    command.startsWith("almanac ask ")
+  );
+}
+
+function studioCommandMutates(command: string): boolean {
+  return (
+    command.includes(" --apply") ||
+    command.includes(" --save") ||
+    command.includes(" --init") ||
+    command.includes(" update ") ||
+    command.includes(" refresh run ") ||
+    command.includes(" ask-fixtures ") ||
+    command.includes(" register ") ||
+    command.includes(" repair ") ||
+    command.includes(" cleanup ")
+  );
 }
 
 async function readMaintenanceReport(
@@ -10201,6 +10425,15 @@ program
   .option("--json", "Emit JSON instead of a human-readable summary")
   .addOption(rootOption)
   .action(cmdStatus);
+
+program
+  .command("studio")
+  .description("start a read-only localhost dashboard")
+  .option("--host <host>", "Local bind host (default: 127.0.0.1)")
+  .option("--port <port>", "Local bind port (default: 4631; use 0 for random)")
+  .option("--json", "Emit startup metadata as JSON")
+  .addOption(rootOption)
+  .action(cmdStudio);
 
 program
   .command("maintain [id]")
