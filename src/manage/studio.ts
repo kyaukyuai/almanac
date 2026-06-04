@@ -31,6 +31,18 @@ export interface StudioSuggestedQuestion {
   saveCommand: string;
 }
 
+export interface StudioActivationSummary {
+  status: string;
+  milestone: string;
+  milestoneLabel: string;
+  nextMilestone: string | null;
+  nextMilestoneLabel: string | null;
+  summary: string;
+  evidence: string[];
+  gaps: string[];
+  nextAction: StudioCommand | null;
+}
+
 export interface StudioAlmanacCard {
   almanacId: string;
   displayName: string;
@@ -58,11 +70,23 @@ export interface StudioAlmanacCard {
     registration: string;
   };
   latestHistory: StudioHistorySummary;
+  activation: StudioActivationSummary;
   suggestedQuestions: StudioSuggestedQuestion[];
   issues: string[];
   nextBestAction: StudioCommand;
   commands: StudioCommand[];
 }
+
+const STUDIO_ACTIVATION_MILESTONES = [
+  { id: "oriented", label: "Oriented" },
+  { id: "planned", label: "Planned" },
+  { id: "compiled", label: "Compiled" },
+  { id: "validated", label: "Validated" },
+  { id: "answer-ready", label: "Answer Ready" },
+  { id: "first-answer", label: "First Answer" },
+  { id: "replayable", label: "Replayable" },
+  { id: "maintainable", label: "Maintainable" },
+] as const;
 
 export interface StudioSnapshot {
   schemaVersion: "0.1.0";
@@ -237,6 +261,7 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
           .slice(0, 3)
           .map(renderSuggestedQuestion)
           .join("\n");
+  const activation = renderActivation(card.activation);
   return `<article class="card" data-health="${escapeHtml(card.health)}">
   <div class="card-header">
     <div>
@@ -253,8 +278,13 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     <div><dt>Answer</dt><dd>${escapeHtml(card.checks.answer)}</dd></div>
     <div><dt>Refresh</dt><dd>${escapeHtml(card.checks.refresh)}</dd></div>
     <div><dt>Registration</dt><dd>${escapeHtml(card.checks.registration)}</dd></div>
+    <div><dt>Activation</dt><dd>${escapeHtml(card.activation.summary)}</dd></div>
     <div><dt>Latest</dt><dd>${escapeHtml(card.latestHistory.latest)}</dd></div>
   </dl>
+  <section>
+    <h3>Activation</h3>
+    ${activation}
+  </section>
   <section>
     <h3>Next Action</h3>
     ${renderCommand(card.nextBestAction)}
@@ -272,6 +302,43 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     ${commands}
   </section>
 </article>`;
+}
+
+function renderActivation(activation: StudioActivationSummary): string {
+  const currentIndex = STUDIO_ACTIVATION_MILESTONES.findIndex(
+    (milestone) => milestone.id === activation.milestone,
+  );
+  const milestones = STUDIO_ACTIVATION_MILESTONES.map((milestone, index) => {
+    const state =
+      currentIndex >= 0 && index <= currentIndex
+        ? "done"
+        : milestone.id === activation.nextMilestone
+          ? "next"
+          : "todo";
+    return `<li data-state="${state}">${escapeHtml(milestone.label)}</li>`;
+  }).join("");
+  const details = [
+    ...activation.gaps.slice(0, 2).map((gap) => `Gap: ${gap}`),
+    ...activation.evidence.slice(0, 1).map((item) => `Evidence: ${item}`),
+  ];
+  const detailList =
+    details.length === 0
+      ? `<li class="muted">No activation details</li>`
+      : details.map((detail) => `<li>${escapeHtml(detail)}</li>`).join("");
+  const next =
+    activation.nextAction === null
+      ? `<p class="muted">No activation command needed</p>`
+      : renderCommand(activation.nextAction);
+  return `<div class="activation">
+  <div class="activation-head">
+    <strong>${escapeHtml(activation.milestoneLabel)}</strong>
+    <span>${escapeHtml(activation.status)}</span>
+  </div>
+  <p>${escapeHtml(activation.summary)}</p>
+  <ol class="milestones">${milestones}</ol>
+  <ul>${detailList}</ul>
+  ${next}
+</div>`;
 }
 
 function renderSuggestedQuestion(question: StudioSuggestedQuestion): string {
@@ -378,6 +445,14 @@ dt{font-size:11px;color:#526064;text-transform:uppercase;letter-spacing:.06em}
 dd{margin:2px 0 0;font-size:13px;word-break:break-word}
 ul{margin:0;padding-left:18px;font-size:13px}
 .muted{color:#526064}
+.activation{border:1px solid #d9dedf;border-radius:8px;padding:10px;background:#fbfcfc}
+.activation-head{display:flex;justify-content:space-between;gap:12px;align-items:center;font-size:13px}
+.activation-head span{border:1px solid #b8c1c4;border-radius:999px;padding:2px 8px;font-size:12px;color:#526064}
+.activation p{font-size:12px;color:#526064;margin-top:6px}
+.milestones{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:6px;list-style:none;margin:10px 0;padding:0}
+.milestones li{border:1px solid #d9dedf;border-radius:6px;padding:5px 6px;font-size:11px;text-align:center;color:#526064}
+.milestones [data-state="done"]{border-color:#5e8f63;color:#27632d;background:#edf7ee}
+.milestones [data-state="next"]{border-color:#9d8358;color:#704d18;background:#fff7e8}
 .command,.question{position:relative;border:1px solid #d9dedf;border-radius:8px;padding:10px;background:#fbfcfc;margin-bottom:8px}
 .command-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#526064}
 .command-meta strong{color:#1c2528}
@@ -386,7 +461,7 @@ pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;lin
 button{position:absolute;right:10px;bottom:10px;border:1px solid #9aa7aa;background:#ffffff;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer}
 .empty{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px}
 @media (max-width:720px){header{align-items:flex-start;flex-direction:column;padding:22px 18px}.root{text-align:left}main{padding:18px}.grid{grid-template-columns:1fr}.meta{grid-template-columns:1fr}}
-@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p{color:#a8b4b8}.command,.question{background:#151c1f;border-color:#334044}.command-meta strong{color:#edf1f2}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
+@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p,.activation p,.activation-head span{color:#a8b4b8}.command,.question,.activation{background:#151c1f;border-color:#334044}.command-meta strong,.activation-head strong{color:#edf1f2}.milestones li{border-color:#334044;color:#a8b4b8}.milestones [data-state="done"]{background:#152916;color:#8dd394;border-color:#47794d}.milestones [data-state="next"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
 `;
 }
 

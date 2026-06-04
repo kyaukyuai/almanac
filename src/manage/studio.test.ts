@@ -75,6 +75,8 @@ describe("studio server", () => {
     const html = await fetch(server.url).then((response) => response.text());
     expect(html).toContain("Almanac");
     expect(html).toContain("SQLite Operations Demo");
+    expect(html).toContain("Activation");
+    expect(html).toContain("answer ready; next first answer saved");
     expect(html).toContain("Are SQLite transactions atomic?");
     expect(html).toContain("almanac ask sqlite-demo");
 
@@ -86,6 +88,13 @@ describe("studio server", () => {
     );
     expect(inventory.status).toBe(200);
     expect(inventory.body.almanacs[0]?.almanacId).toBe("sqlite-demo");
+    expect(inventory.body.almanacs[0]?.activation).toEqual(
+      expect.objectContaining({
+        status: "in-progress",
+        milestone: "answer-ready",
+        nextMilestone: "first-answer",
+      }),
+    );
     expect(inventory.body.almanacs[0]?.suggestedQuestions[0]?.question).toBe(
       "Are SQLite transactions atomic?",
     );
@@ -98,6 +107,9 @@ describe("studio server", () => {
     );
     expect(status.status).toBe(200);
     expect(status.body.checks.validation).toBe("2/2 passed");
+    expect(status.body.activation.nextAction?.command).toContain(
+      "almanac ask sqlite-demo",
+    );
 
     const missing = await fetch(`${server.url}/api/status/missing`);
     expect(missing.status).toBe(404);
@@ -150,6 +162,24 @@ function fixtureCard(): StudioAlmanacCard {
       refresh: "none",
       maintenance: "none",
       readError: null,
+    },
+    activation: {
+      status: "in-progress",
+      milestone: "answer-ready",
+      milestoneLabel: "answer ready",
+      nextMilestone: "first-answer",
+      nextMilestoneLabel: "first answer saved",
+      summary: "answer ready; next first answer saved",
+      evidence: ["answer readiness is ready"],
+      gaps: ["no saved answer history yet"],
+      nextAction: {
+        label: "Ask first question",
+        command:
+          "almanac ask sqlite-demo 'Are SQLite transactions atomic?' --save --root /tmp/almanac-root",
+        reason: "save the first cited answer or valid abstention",
+        providerRequired: true,
+        mutates: true,
+      },
     },
     suggestedQuestions: [
       {

@@ -5155,7 +5155,32 @@ async function studioCardFromItem(
     latestAnswer: firstAnswerHistoryFromRunSummary(runs.byKind.answer),
     canAsk: item.lifecycle.answer.status === "ready" || runs.byKind.answer !== null,
   });
-  const firstAnswerAction = firstAnswer.nextActions[0] ?? null;
+  const activation = buildActivationReport({
+    almanacId: item.almanacId,
+    manifest: item.manifest,
+    lifecycle: item.lifecycle,
+    runs,
+    nextActions: item.lifecycle.nextActions,
+    root,
+  });
+  const activationAction = preferredStudioActivationAction(
+    activation,
+    firstAnswer,
+  );
+  const startAction = studioCommandFromStartAction(startActionForItem(item, root));
+  const nextBestAction =
+    activationAction === null
+      ? startAction
+      : studioCommandFromActivationAction(activationAction);
+  const commands = uniqueStudioCommands([
+    nextBestAction,
+    ...firstAnswer.nextActions.map(studioCommandFromActivationAction),
+    ...(activation.nextAction === null
+      ? []
+      : [studioCommandFromActivationAction(activation.nextAction)]),
+    startAction,
+    ...item.lifecycle.nextActions.map(studioCommandFromActionString),
+  ]);
   return {
     almanacId: item.almanacId,
     displayName: item.displayName,
@@ -5183,14 +5208,39 @@ async function studioCardFromItem(
       registration: formatLifecycleRegistration(item.lifecycle.registration),
     },
     latestHistory: studioHistorySummary(runs),
+    activation: {
+      status: activation.status,
+      milestone: activation.milestone,
+      milestoneLabel: activation.milestoneLabel,
+      nextMilestone: activation.nextMilestone,
+      nextMilestoneLabel: activation.nextMilestoneLabel,
+      summary: activation.summary,
+      evidence: activation.evidence,
+      gaps: activation.gaps,
+      nextAction:
+        activationAction === null
+          ? null
+          : studioCommandFromActivationAction(activationAction),
+    },
     suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
-    nextBestAction:
-      firstAnswerAction === null
-        ? studioCommandFromStartAction(startActionForItem(item, root))
-        : studioCommandFromActivationAction(firstAnswerAction),
-    commands: item.lifecycle.nextActions.map(studioCommandFromActionString),
+    nextBestAction,
+    commands,
   };
+}
+
+function preferredStudioActivationAction(
+  activation: ActivationReport,
+  firstAnswer: FirstAnswerGuidance,
+): ActivationNextAction | null {
+  if (
+    (activation.nextMilestone === "first-answer" ||
+      activation.nextMilestone === "replayable") &&
+    firstAnswer.nextActions.length > 0
+  ) {
+    return firstAnswer.nextActions[0]!;
+  }
+  return activation.nextAction;
 }
 
 function studioHistorySummary(runs: LifecycleLatestRuns): StudioHistorySummary {
@@ -5251,6 +5301,17 @@ function studioCommandFromActionString(action: string): StudioCommand {
     providerRequired: studioCommandNeedsProvider(parsed.command),
     mutates: studioCommandMutates(parsed.command),
   };
+}
+
+function uniqueStudioCommands(commands: StudioCommand[]): StudioCommand[] {
+  const seen = new Set<string>();
+  const out: StudioCommand[] = [];
+  for (const command of commands) {
+    if (seen.has(command.command)) continue;
+    seen.add(command.command);
+    out.push(command);
+  }
+  return out;
 }
 
 function parseLabeledCommand(action: string): {
