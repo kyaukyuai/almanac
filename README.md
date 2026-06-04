@@ -245,7 +245,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.13.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.14.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -271,11 +271,14 @@ Current shipped lines include:
   handoff, registration visibility, root hygiene, and cleanup guidance
 - `v0.13`: personal maintenance reports, due-only maintenance apply,
   repair/cleanup candidates, scheduler handoff snippets, and ask fixture upkeep
+- `v0.14`: guided first-run start, natural-language intake, user-facing
+  vocabulary, no-key answer-readiness bootstrap, and local read-only studio
 
-`v0.13.0` turns that local lifecycle into a maintainable personal asset: users
-can dry-run maintenance, apply due provider-free validation work, preserve
-maintenance evidence, preview repairs and cleanup, and generate caller-owned
-cron, launchd, or GitHub Actions handoff snippets.
+`v0.14.0` makes first success less technical: users can start with one command,
+describe a goal in natural language, see health and next actions in guided
+language, bootstrap answer readiness on the sqlite demo without keys, and open
+a localhost-only read-only dashboard before learning the internal artifact
+model.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -287,7 +290,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.13.0 RC | 407 | 6 (2) | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.14.0 RC | 185 | 6 (2) | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -321,6 +324,14 @@ dry-runs, scheduler handoff generation for cron/launchd/GitHub Actions,
 Enterprise AI fresh compile benchmark at 407 facts and 15/15 fixtures, valid
 real-provider Enterprise AI abstention with saved-run replay pass, and
 maintenance dry-run reporting provider-free planned steps.
+
+The v0.14.0 RC smoke passed the first-run guided gate on `main`: source and
+linked CLI sanity, provider-free guided start, natural-language planning,
+sqlite-demo answer-readiness bootstrap via seeded ask fixtures and
+refresh-backed ask-suite evidence, local read-only studio HTML/API and
+localhost boundary checks, Enterprise AI fresh compile benchmark at 185 facts
+and 15/15 fixtures, real-provider Enterprise AI answer with one citation, and
+saved-run replay pass.
 
 ## Development
 
