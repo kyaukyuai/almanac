@@ -105,6 +105,13 @@ almanac status sqlite-demo --root "$tmp"
 almanac inspect sqlite-demo --root "$tmp"
 almanac profile sqlite-demo --root "$tmp"
 almanac benchmark sqlite-demo --root "$tmp"
+almanac ask-fixtures init sqlite-demo --seed-demo --root "$tmp"
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --root "$tmp"
+almanac maintain sqlite-demo --dry-run --root "$tmp"
 almanac run sqlite-demo \
   --tool query_facts \
   --input '{"q":"transactions atomic"}' \
@@ -124,6 +131,15 @@ not compile, call a provider, or write files until you run a follow-up command.
 The demo creates a complete local almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
 golden benchmark fixtures.
+
+`ask-fixtures init --seed-demo` and the Stage 12 `refresh run --ask-suite`
+bootstrap answer readiness without provider credentials for the offline demo.
+`maintain --dry-run` previews future upkeep. `studio` opens a local read-only
+dashboard when you want a browser view:
+
+```bash
+almanac studio --root "$tmp"
+```
 
 For a committed inspection snapshot and answer-mode handoff commands, see
 the [sample almanacs guide](./docs/sample-almanacs.md).
@@ -354,6 +370,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.14 plan](./docs/v0.14-plan.md): first-run guided experience, natural
   language intake, user-facing terminology, answer readiness bootstrap, and
   local read-only studio
+- [v0.14 RC smoke](./docs/v0.14-rc-smoke.md): release-candidate validation for
+  guided start, no-key answer readiness bootstrap, local studio, and
+  Enterprise AI provider smoke
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
