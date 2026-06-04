@@ -127,6 +127,23 @@ function mockAskProviderEnv(): Record<string, string | undefined> {
   };
 }
 
+function mockAbstainAskProviderEnv(): Record<string, string | undefined> {
+  return {
+    ALMANAC_LLM: "mock",
+    ANTHROPIC_API_KEY: undefined,
+    ALMANAC_MOCK_RESPONSES: JSON.stringify({
+      "answer-planner@planner-v1": [
+        JSON.stringify({
+          action: "call_tool",
+          toolName: "query_facts",
+          input: { q: "definitely no matching sqlite fact", limit: 3 },
+        }),
+        JSON.stringify({ action: "stop", reason: "no-evidence" }),
+      ],
+    }),
+  };
+}
+
 function coverageMap(fileCount = 0): Record<string, number> {
   return {
     docs: 0,
@@ -4171,6 +4188,199 @@ describe("almanac CLI product onboarding", () => {
     const missingToolOption = runCli(["run", "sqlite-demo", "--root", root]);
     expect(missingToolOption.status).toBe(2);
     expect(missingToolOption.stderr).toContain("missing required --tool");
+  }, { timeout: 15_000 });
+
+  test("status and profile expose first-answer suggested questions", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const statusJson = runCli([
+      "status",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(statusJson.status).toBe(0);
+    const statusReport = JSON.parse(statusJson.stdout) as {
+      firstAnswer: {
+        status: string;
+        suggestedQuestions: Array<{
+          intent: string;
+          question: string;
+          saveCommand: string;
+        }>;
+        nextActions: Array<{ command: string; providerRequired: boolean }>;
+      };
+    };
+    expect(statusReport.firstAnswer.status).toBe("not-started");
+    expect(statusReport.firstAnswer.suggestedQuestions[0]).toEqual(
+      expect.objectContaining({
+        intent: "lookup",
+        question: "What makes SQLite transactions atomic?",
+        saveCommand: expect.stringContaining(
+          "almanac ask sqlite-demo 'What makes SQLite transactions atomic?' --save",
+        ),
+      }),
+    );
+    expect(statusReport.firstAnswer.nextActions).toEqual([]);
+
+    const statusHuman = runCli(["status", "sqlite-demo", "--root", root]);
+    expect(statusHuman.status).toBe(0);
+    expect(statusHuman.stdout).toContain("first answer");
+    expect(statusHuman.stdout).toContain("suggested questions");
+    expect(statusHuman.stdout).toContain("What makes SQLite transactions atomic?");
+
+    const profileJson = runCli([
+      "profile",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(profileJson.status).toBe(0);
+    expect(
+      (JSON.parse(profileJson.stdout) as {
+        firstAnswer: { suggestedQuestions: Array<{ question: string }> };
+      }).firstAnswer.suggestedQuestions[0]?.question,
+    ).toBe("What makes SQLite transactions atomic?");
+
+    const profileHuman = runCli(["profile", "sqlite-demo", "--root", root]);
+    expect(profileHuman.status).toBe(0);
+    expect(profileHuman.stdout).toContain("first answer suggestions");
+    expect(profileHuman.stdout).toContain(
+      "almanac ask sqlite-demo 'What makes SQLite transactions atomic?' --save",
+    );
+
+    const initAskFixtures = runCli([
+      "ask-fixtures",
+      "init",
+      "sqlite-demo",
+      "--seed-demo",
+      "--root",
+      root,
+    ]);
+    expect(initAskFixtures.status).toBe(0);
+    const askSuite = runCli(["ask-suite", "sqlite-demo", "--root", root]);
+    expect(askSuite.status).toBe(0);
+    const refreshAskSuite = runCli([
+      "refresh",
+      "run",
+      "sqlite-demo",
+      "--from-stage",
+      "12-benchmark-run",
+      "--ask-suite",
+      "--save",
+      "--root",
+      root,
+    ]);
+    expect(refreshAskSuite.status).toBe(0);
+
+    const readyStatusJson = runCli([
+      "status",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(readyStatusJson.status).toBe(0);
+    expect(
+      (JSON.parse(readyStatusJson.stdout) as {
+        firstAnswer: {
+          nextActions: Array<{ command: string; providerRequired: boolean }>;
+        };
+      }).firstAnswer.nextActions[0],
+    ).toEqual(
+      expect.objectContaining({
+        command: expect.stringContaining("--save"),
+        providerRequired: true,
+      }),
+    );
+  }, { timeout: 15_000 });
+
+  test("ask --save human output shows first-answer trust guidance", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const savedHuman = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Are SQLite transactions atomic?",
+        "--save",
+        "--label",
+        "first-answer-human",
+        "--root",
+        root,
+      ],
+      mockAskProviderEnv(),
+    );
+    expect(savedHuman.status).toBe(0);
+    expect(savedHuman.stderr).toBe("");
+    expect(savedHuman.stdout).toContain("artifact:");
+    expect(savedHuman.stdout).toContain("first answer:");
+    expect(savedHuman.stdout).toContain("trust: saved cited answer");
+    expect(savedHuman.stdout).toContain("quality: pass, 1 citation, 0 unsupported, 0 stale");
+    expect(savedHuman.stdout).toContain(
+      "almanac ask-replay sqlite-demo --from-runs --label first-answer-human",
+    );
+    expect(savedHuman.stdout).toContain(
+      "almanac ask-fixtures add-from-run sqlite-demo answer-",
+    );
+    expect(savedHuman.stdout).toContain("almanac ask-suite sqlite-demo");
+
+    const savedJson = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Are SQLite transactions atomic?",
+        "--save",
+        "--label",
+        "first-answer-json",
+        "--json",
+        "--root",
+        root,
+      ],
+      mockAskProviderEnv(),
+    );
+    expect(savedJson.status).toBe(0);
+    expect(savedJson.stderr).toBe("");
+    const artifact = JSON.parse(savedJson.stdout) as { kind: string; status: string };
+    expect(artifact).toEqual(
+      expect.objectContaining({ kind: "answer", status: "ok" }),
+    );
+    expect(savedJson.stdout).not.toContain("first answer:");
+  }, { timeout: 15_000 });
+
+  test("ask --save human output treats abstention as first-class guidance", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const savedHuman = runCli(
+      [
+        "ask",
+        "sqlite-demo",
+        "Should I rely on a fact that is not in the almanac?",
+        "--save",
+        "--label",
+        "first-answer-abstain",
+        "--root",
+        root,
+      ],
+      mockAbstainAskProviderEnv(),
+    );
+    expect(savedHuman.status).toBe(1);
+    expect(savedHuman.stderr).toBe("");
+    expect(savedHuman.stdout).toContain("status: abstained");
+    expect(savedHuman.stdout).toContain("first answer:");
+    expect(savedHuman.stdout).toContain("trust: saved abstention");
+    expect(savedHuman.stdout).toContain("abstention:");
+    expect(savedHuman.stdout).toContain(
+      "replay the saved abstention without provider calls",
+    );
+    expect(savedHuman.stdout).toContain(
+      "promote this expected abstention into answer checks",
+    );
   }, { timeout: 15_000 });
 
   test("ask synthesizes cited answers and can save answer artifacts", async () => {

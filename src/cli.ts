@@ -184,6 +184,7 @@ import {
   Stage11OutputSchema,
   STAGE_IDS,
   ToolDesignResultSchema,
+  type AnswerArtifact,
   type AlmanacManifest,
   type BenchmarkReport,
   type BenchmarkSet,
@@ -1974,6 +1975,39 @@ interface ActivationReport {
   nextAction: ActivationNextAction | null;
 }
 
+type FirstAnswerGuidanceStatus =
+  | "not-started"
+  | "saved-ok"
+  | "saved-abstention"
+  | "needs-review";
+
+interface SuggestedQuestion {
+  intent: string;
+  question: string;
+  askCommand: string;
+  saveCommand: string;
+}
+
+interface FirstAnswerHistorySummary {
+  answerId: string;
+  status: RunArtifactStatus;
+  label?: string;
+  abstentionReason?: string;
+  citationsCount?: number;
+  qualityStatus?: string;
+  unsupportedClaimCount?: number;
+  staleCitationCount?: number;
+  toolCallsCount?: number;
+}
+
+interface FirstAnswerGuidance {
+  status: FirstAnswerGuidanceStatus;
+  summary: string;
+  latestAnswer: FirstAnswerHistorySummary | null;
+  suggestedQuestions: SuggestedQuestion[];
+  nextActions: ActivationNextAction[];
+}
+
 interface LifecycleInventoryItem {
   almanacId: string;
   almanacDir: string;
@@ -2057,6 +2091,7 @@ interface AlmanacStatusReport {
   status: LifecycleOverallStatus;
   usability: LifecycleUsability;
   activation: ActivationReport;
+  firstAnswer: FirstAnswerGuidance;
   lifecycle: LifecycleInventoryItem["lifecycle"];
   runs: LifecycleLatestRuns;
   nextActions: string[];
@@ -2435,6 +2470,7 @@ async function readAlmanacStatusReport(
   }
   const item = await readLifecycleInventoryItem(opts.root, id);
   const runs = await readLifecycleLatestRuns(dir);
+  const domainSpec = await readDomainSpecForGuidance(dir);
   const runReadError =
     runs.readError === null ? [] : [`saved runs unreadable: ${runs.readError}`];
   const registrationRepairActions = item.lifecycle.registration.clients
@@ -2460,6 +2496,15 @@ async function readAlmanacStatusReport(
     nextActions,
     root: opts.root,
   });
+  const rootSuffix = rootArg(opts.root);
+  const firstAnswer = buildFirstAnswerGuidance({
+    almanacId: item.almanacId,
+    domainSpec,
+    rootSuffix,
+    latestAnswer: firstAnswerHistoryFromRunSummary(runs.byKind.answer),
+    canAsk:
+      lifecycle.answer.status === "ready" || runs.byKind.answer !== null,
+  });
 
   return {
     almanacId: item.almanacId,
@@ -2469,6 +2514,7 @@ async function readAlmanacStatusReport(
     status: item.lifecycle.status,
     usability: lifecycleUsability(item),
     activation,
+    firstAnswer,
     lifecycle,
     runs,
     nextActions,
@@ -3679,6 +3725,235 @@ function activationCommandNeedsProvider(command: string): boolean {
   );
 }
 
+async function readDomainSpecForGuidance(
+  almanacDir: string,
+): Promise<DomainSpec | null> {
+  try {
+    return await readDomainSpecIfPresent(almanacDir);
+  } catch {
+    return null;
+  }
+}
+
+function suggestedQuestionsForAlmanac(args: {
+  almanacId: string;
+  domainSpec: DomainSpec | null;
+  rootSuffix: string;
+  limit?: number;
+}): SuggestedQuestion[] {
+  const limit = args.limit ?? 3;
+  return (args.domainSpec?.intents ?? []).slice(0, limit).map((intent) => ({
+    intent: intent.kind,
+    question: intent.example,
+    askCommand: `almanac ask ${args.almanacId} ${shellArg(intent.example)}${args.rootSuffix}`,
+    saveCommand: `almanac ask ${args.almanacId} ${shellArg(intent.example)} --save${args.rootSuffix}`,
+  }));
+}
+
+function firstAnswerHistoryFromRunSummary(
+  run: RunToolArtifactSummary | null,
+): FirstAnswerHistorySummary | null {
+  if (run === null || run.kind !== "answer") return null;
+  return {
+    answerId: run.runId,
+    status: run.status,
+    ...(run.label === undefined ? {} : { label: run.label }),
+    ...(run.abstentionReason === undefined
+      ? {}
+      : { abstentionReason: run.abstentionReason }),
+    ...(run.citationsCount === undefined
+      ? {}
+      : { citationsCount: run.citationsCount }),
+  };
+}
+
+function firstAnswerHistoryFromArtifact(
+  artifact: AnswerArtifact,
+): FirstAnswerHistorySummary {
+  return {
+    answerId: artifact.answerId,
+    status: artifact.status,
+    ...(artifact.label === undefined ? {} : { label: artifact.label }),
+    ...(artifact.abstentionReason === undefined
+      ? {}
+      : { abstentionReason: artifact.abstentionReason }),
+    citationsCount: artifact.citations.length,
+    ...(artifact.trace?.quality?.status === undefined
+      ? {}
+      : { qualityStatus: artifact.trace.quality.status }),
+    ...(artifact.trace?.quality?.unsupportedClaimCount === undefined
+      ? {}
+      : {
+          unsupportedClaimCount:
+            artifact.trace.quality.unsupportedClaimCount,
+        }),
+    ...(artifact.trace?.quality?.staleCitationCount === undefined
+      ? {}
+      : { staleCitationCount: artifact.trace.quality.staleCitationCount }),
+    toolCallsCount: artifact.toolCalls.length,
+  };
+}
+
+function buildFirstAnswerGuidance(args: {
+  almanacId: string;
+  domainSpec: DomainSpec | null;
+  rootSuffix: string;
+  latestAnswer: FirstAnswerHistorySummary | null;
+  canAsk?: boolean;
+}): FirstAnswerGuidance {
+  const suggestedQuestions = suggestedQuestionsForAlmanac({
+    almanacId: args.almanacId,
+    domainSpec: args.domainSpec,
+    rootSuffix: args.rootSuffix,
+  });
+  const suggestedSaveCommand =
+    suggestedQuestions[0]?.saveCommand ??
+    `almanac ask ${args.almanacId} "<question>" --save${args.rootSuffix}`;
+  const latest = args.latestAnswer;
+  if (latest === null) {
+    if (args.canAsk === false) {
+      return {
+        status: "not-started",
+        summary:
+          "answer readiness is not ready yet; suggested questions are available for later",
+        latestAnswer: null,
+        suggestedQuestions,
+        nextActions: [],
+      };
+    }
+    return {
+      status: "not-started",
+      summary:
+        suggestedQuestions.length === 0
+          ? "no saved answer yet; ask a real question with --save"
+          : "no saved answer yet; save one suggested question first",
+      latestAnswer: null,
+      suggestedQuestions,
+      nextActions: [
+        {
+          command: suggestedSaveCommand,
+          reason: "save the first cited answer or valid abstention",
+          providerRequired: true,
+        },
+      ],
+    };
+  }
+
+  if (latest.status === "ok") {
+    return {
+      status: "saved-ok",
+      summary: `saved cited answer ${latest.answerId}${firstAnswerQualitySuffix(latest)}`,
+      latestAnswer: latest,
+      suggestedQuestions,
+      nextActions: savedAnswerNextActions({
+        almanacId: args.almanacId,
+        rootSuffix: args.rootSuffix,
+        latest,
+      }),
+    };
+  }
+
+  if (latest.status === "abstained") {
+    return {
+      status: "saved-abstention",
+      summary: `saved abstention ${latest.answerId}${firstAnswerAbstentionSuffix(latest)}`,
+      latestAnswer: latest,
+      suggestedQuestions,
+      nextActions: savedAnswerNextActions({
+        almanacId: args.almanacId,
+        rootSuffix: args.rootSuffix,
+        latest,
+      }),
+    };
+  }
+
+  return {
+    status: "needs-review",
+    summary: `latest saved answer ${latest.answerId} is ${latest.status}; inspect before promotion`,
+    latestAnswer: latest,
+    suggestedQuestions,
+    nextActions: [
+      {
+        command: `almanac runs ${args.almanacId} ${latest.answerId}${args.rootSuffix}`,
+        reason: "inspect the failed saved answer before replay or promotion",
+        providerRequired: false,
+      },
+      {
+        command: suggestedSaveCommand,
+        reason: "try a new saved first answer when ready",
+        providerRequired: true,
+      },
+    ],
+  };
+}
+
+function savedAnswerNextActions(args: {
+  almanacId: string;
+  rootSuffix: string;
+  latest: FirstAnswerHistorySummary;
+}): ActivationNextAction[] {
+  const labelSuffix =
+    args.latest.label === undefined
+      ? ""
+      : ` --label ${shellArg(args.latest.label)}`;
+  const replayReason =
+    args.latest.status === "abstained"
+      ? "replay the saved abstention without provider calls"
+      : "replay the saved cited answer without provider calls";
+  const actions: ActivationNextAction[] = [
+    {
+      command: `almanac ask-replay ${args.almanacId} --from-runs${labelSuffix}${args.rootSuffix}`,
+      reason: replayReason,
+      providerRequired: false,
+    },
+  ];
+  if (
+    args.latest.status === "ok" ||
+    (args.latest.status === "abstained" &&
+      (args.latest.toolCallsCount ?? 1) > 0)
+  ) {
+    actions.push({
+      command: `almanac ask-fixtures add-from-run ${args.almanacId} ${args.latest.answerId}${args.rootSuffix}`,
+      reason:
+        args.latest.status === "abstained"
+          ? "promote this expected abstention into answer checks"
+          : "promote this answer into answer checks",
+      providerRequired: false,
+    });
+    actions.push({
+      command: `almanac ask-suite ${args.almanacId}${args.rootSuffix}`,
+      reason: "run answer checks without provider calls",
+      providerRequired: false,
+    });
+  }
+  return actions;
+}
+
+function firstAnswerQualitySuffix(latest: FirstAnswerHistorySummary): string {
+  const parts = [
+    latest.qualityStatus === undefined ? null : `quality ${latest.qualityStatus}`,
+    latest.citationsCount === undefined
+      ? null
+      : `${latest.citationsCount} citation${latest.citationsCount === 1 ? "" : "s"}`,
+    latest.unsupportedClaimCount === undefined
+      ? null
+      : `${latest.unsupportedClaimCount} unsupported`,
+    latest.staleCitationCount === undefined
+      ? null
+      : `${latest.staleCitationCount} stale`,
+  ].filter((part): part is string => part !== null);
+  return parts.length === 0 ? "" : ` (${parts.join(", ")})`;
+}
+
+function firstAnswerAbstentionSuffix(
+  latest: FirstAnswerHistorySummary,
+): string {
+  const reason =
+    latest.abstentionReason === undefined ? "" : `: ${latest.abstentionReason}`;
+  const quality = firstAnswerQualitySuffix(latest);
+  return `${reason}${quality}`;
+}
+
 function compactRunSummary(run: RunToolArtifactSummary | null): string {
   if (run === null) return "none";
   const subject =
@@ -3722,6 +3997,17 @@ function formatActivationReport(activation: ActivationReport): string {
       ? ""
       : ` -> ${activation.nextMilestoneLabel}`;
   return `${activation.milestoneLabel}${next}, ${activation.status}`;
+}
+
+function formatFirstAnswerGuidanceSummary(
+  guidance: FirstAnswerGuidance,
+): string {
+  return guidance.summary;
+}
+
+function formatFirstAnswerAction(action: ActivationNextAction): string {
+  const provider = action.providerRequired ? " (provider required)" : "";
+  return `${formatGuidedAction(action.command)} - ${action.reason}${provider}`;
 }
 
 function formatLifecycleAnswer(
@@ -4671,6 +4957,22 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       `  activation next ${formatGuidedAction(report.activation.nextAction.command)}${provider}\n`,
     );
   }
+  process.stdout.write(
+    `  first answer  ${formatFirstAnswerGuidanceSummary(report.firstAnswer)}\n`,
+  );
+  if (report.firstAnswer.suggestedQuestions.length > 0) {
+    process.stdout.write(`  suggested questions\n`);
+    for (const question of report.firstAnswer.suggestedQuestions) {
+      process.stdout.write(
+        `    - ${question.intent}: ${question.question}\n`,
+      );
+    }
+  }
+  if (report.firstAnswer.nextActions.length > 0) {
+    for (const action of report.firstAnswer.nextActions.slice(0, 3)) {
+      process.stdout.write(`  answer next   ${formatFirstAnswerAction(action)}\n`);
+    }
+  }
   process.stdout.write(`  vocabulary    ${guidedVocabularyLine()}\n`);
   process.stdout.write(`  dir           ${report.almanacDir}\n`);
   if (report.manifest !== null) {
@@ -4839,11 +5141,21 @@ async function buildStudioStatus(
   );
 }
 
-function studioCardFromItem(
+async function studioCardFromItem(
   item: LifecycleInventoryItem,
   runs: LifecycleLatestRuns,
   root: string,
-): StudioAlmanacCard {
+): Promise<StudioAlmanacCard> {
+  const rootSuffix = rootArg(root);
+  const domainSpec = await readDomainSpecForGuidance(item.almanacDir);
+  const firstAnswer = buildFirstAnswerGuidance({
+    almanacId: item.almanacId,
+    domainSpec,
+    rootSuffix,
+    latestAnswer: firstAnswerHistoryFromRunSummary(runs.byKind.answer),
+    canAsk: item.lifecycle.answer.status === "ready" || runs.byKind.answer !== null,
+  });
+  const firstAnswerAction = firstAnswer.nextActions[0] ?? null;
   return {
     almanacId: item.almanacId,
     displayName: item.displayName,
@@ -4871,8 +5183,12 @@ function studioCardFromItem(
       registration: formatLifecycleRegistration(item.lifecycle.registration),
     },
     latestHistory: studioHistorySummary(runs),
+    suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
-    nextBestAction: studioCommandFromStartAction(startActionForItem(item, root)),
+    nextBestAction:
+      firstAnswerAction === null
+        ? studioCommandFromStartAction(startActionForItem(item, root))
+        : studioCommandFromActivationAction(firstAnswerAction),
     commands: item.lifecycle.nextActions.map(studioCommandFromActionString),
   };
 }
@@ -4904,6 +5220,27 @@ function studioCommandFromStartAction(action: StartAction): StudioCommand {
     providerRequired: action.providerRequired,
     mutates: action.mutates,
   };
+}
+
+function studioCommandFromActivationAction(
+  action: ActivationNextAction,
+): StudioCommand {
+  return {
+    label: studioActivationActionLabel(action.command),
+    command: action.command,
+    reason: action.reason,
+    providerRequired: action.providerRequired,
+    mutates: studioCommandMutates(action.command),
+  };
+}
+
+function studioActivationActionLabel(command: string): string {
+  if (command.startsWith("almanac ask-replay ")) return "Replay saved answer";
+  if (command.startsWith("almanac ask-fixtures ")) return "Promote answer check";
+  if (command.startsWith("almanac ask-suite ")) return "Run answer checks";
+  if (command.startsWith("almanac ask ")) return "Ask first question";
+  if (command.startsWith("almanac runs ")) return "Inspect answer history";
+  return "Run next step";
 }
 
 function studioCommandFromActionString(action: string): StudioCommand {
@@ -7796,6 +8133,34 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     .sort((a, b) => b.facts - a.facts || b.trust - a.trust || a.id.localeCompare(b.id));
 
   const rootSuffix = rootArg(opts.root);
+  const firstAnswer = buildFirstAnswerGuidance({
+    almanacId: id,
+    domainSpec,
+    rootSuffix,
+    latestAnswer:
+      answerReadiness.latestAnswer === null
+        ? null
+        : {
+            answerId: answerReadiness.latestAnswer.answerId,
+            status: answerReadiness.latestAnswer.status,
+            ...(answerReadiness.latestAnswer.label === undefined
+              ? {}
+              : { label: answerReadiness.latestAnswer.label }),
+            ...(answerReadiness.latestAnswer.abstentionReason === undefined
+              ? {}
+              : {
+                  abstentionReason:
+                    answerReadiness.latestAnswer.abstentionReason,
+                }),
+            ...(answerReadiness.latestAnswer.quality === null
+              ? {}
+              : { qualityStatus: answerReadiness.latestAnswer.quality.status }),
+            staleCitationCount: answerReadiness.latestAnswer.staleCitationCount,
+          },
+    canAsk:
+      answerReadiness.status === "ready" ||
+      answerReadiness.latestAnswer !== null,
+  });
   const nextActions: string[] = [];
   const failureRecovery = buildStageFailureRecovery({
     almanacId: id,
@@ -7934,6 +8299,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     },
     refresh: refreshRunVisibility,
     answer: answerReadiness,
+    firstAnswer,
     artifacts: {
       domainSpec: domainSpec === null ? null : domainSpecPath(dir),
       facts: factsJsonlPath(dir),
@@ -8022,6 +8388,9 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   process.stdout.write(
     `  quality gate   ${formatAnswerReadinessQuality(answerReadiness)}\n`,
   );
+  process.stdout.write(
+    `  first answer   ${formatFirstAnswerGuidanceSummary(firstAnswer)}\n`,
+  );
 
   if (domainSpec !== null) {
     process.stdout.write(`\ncapabilities:\n`);
@@ -8031,6 +8400,14 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     process.stdout.write(`\nquery shapes:\n`);
     for (const intent of domainSpec.intents) {
       process.stdout.write(`  - ${intent.kind}: ${intent.example}\n`);
+    }
+    if (firstAnswer.suggestedQuestions.length > 0) {
+      process.stdout.write(`\nfirst answer suggestions:\n`);
+      for (const question of firstAnswer.suggestedQuestions) {
+        process.stdout.write(
+          `  - ${question.intent}: ${question.question} | ${formatGuidedAction(question.saveCommand)}\n`,
+        );
+      }
     }
   }
 
@@ -8568,6 +8945,9 @@ async function cmdAsk(
       process.stdout.write(formatAnswerSessionHuman(session));
       if (saved) {
         process.stdout.write(`artifact: ${saved.path}\n`);
+        process.stdout.write(
+          formatSavedAnswerFirstAnswerGuidance(saved.artifact, opts.root),
+        );
       }
     }
     process.exitCode = exitCode;
@@ -8634,6 +9014,52 @@ function formatAnswerSessionHuman(session: AnswerSession): string {
     }
   }
   return lines.join("\n") + "\n";
+}
+
+function formatSavedAnswerFirstAnswerGuidance(
+  artifact: AnswerArtifact,
+  root: string,
+): string {
+  const rootSuffix = rootArg(root);
+  const guidance = buildFirstAnswerGuidance({
+    almanacId: artifact.almanacId,
+    domainSpec: null,
+    rootSuffix,
+    latestAnswer: firstAnswerHistoryFromArtifact(artifact),
+  });
+  const lines = [
+    "first answer:",
+    `  trust: ${guidance.summary}`,
+    `  quality: ${formatSavedAnswerQuality(artifact)}`,
+  ];
+  if (artifact.status === "abstained") {
+    lines.push(`  abstention: ${artifact.abstentionReason ?? "(none)"}`);
+  }
+  if (guidance.nextActions.length > 0) {
+    lines.push("  next:");
+    for (const action of guidance.nextActions) {
+      lines.push(`    - ${formatFirstAnswerAction(action)}`);
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function formatSavedAnswerQuality(artifact: AnswerArtifact): string {
+  const quality = artifact.trace?.quality;
+  const unsupported =
+    quality?.unsupportedClaimCount === undefined
+      ? "unknown"
+      : String(quality.unsupportedClaimCount);
+  const stale =
+    quality?.staleCitationCount ??
+    artifact.trace?.citations.staleCount ??
+    "unknown";
+  return [
+    quality?.status ?? "unknown",
+    `${artifact.citations.length} citation${artifact.citations.length === 1 ? "" : "s"}`,
+    `${unsupported} unsupported`,
+    `${stale} stale`,
+  ].join(", ");
 }
 
 function askUsageError(message: string): never {

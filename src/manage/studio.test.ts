@@ -75,6 +75,8 @@ describe("studio server", () => {
     const html = await fetch(server.url).then((response) => response.text());
     expect(html).toContain("Almanac");
     expect(html).toContain("SQLite Operations Demo");
+    expect(html).toContain("Are SQLite transactions atomic?");
+    expect(html).toContain("almanac ask sqlite-demo");
 
     const inventory = await fetch(`${server.url}/api/inventory`).then(
       async (response) => ({
@@ -84,6 +86,9 @@ describe("studio server", () => {
     );
     expect(inventory.status).toBe(200);
     expect(inventory.body.almanacs[0]?.almanacId).toBe("sqlite-demo");
+    expect(inventory.body.almanacs[0]?.suggestedQuestions[0]?.question).toBe(
+      "Are SQLite transactions atomic?",
+    );
 
     const status = await fetch(`${server.url}/api/status/sqlite-demo`).then(
       async (response) => ({
@@ -146,6 +151,16 @@ function fixtureCard(): StudioAlmanacCard {
       maintenance: "none",
       readError: null,
     },
+    suggestedQuestions: [
+      {
+        intent: "lookup",
+        question: "Are SQLite transactions atomic?",
+        askCommand:
+          "almanac ask sqlite-demo 'Are SQLite transactions atomic?' --root /tmp/almanac-root",
+        saveCommand:
+          "almanac ask sqlite-demo 'Are SQLite transactions atomic?' --save --root /tmp/almanac-root",
+      },
+    ],
     issues: [],
     nextBestAction: {
       label: "Open status",
