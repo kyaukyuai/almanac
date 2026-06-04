@@ -77,6 +77,13 @@ Initialize the standard fixture file:
 almanac ask-fixtures init sqlite-demo --root "$tmp"
 ```
 
+For the offline SQLite demo, seed a deterministic answer check without a
+provider key:
+
+```bash
+almanac ask-fixtures init sqlite-demo --seed-demo --root "$tmp"
+```
+
 The default path is `tests/ask.jsonl` under the compiled almanac. Alternate
 recognized fixture paths are `tests/ask-replay.jsonl`, `fixtures/ask.jsonl`,
 and `fixtures/ask-replay.jsonl`.
@@ -95,7 +102,9 @@ almanac ask-fixtures add-from-run sqlite-demo "$answer_id" --root "$tmp"
 The added row keeps the saved question, recorded tool calls, expected final
 answer status, citation expectations, and abstention reason when present. The
 default fixture id is the saved `answer-*` id; pass `--fixture-id` when a
-shorter stable id is preferable. Duplicate fixture ids are rejected.
+shorter stable id is preferable. Duplicate fixture ids are rejected. Saved
+`model-error` artifacts are not promotable because they are provider/runtime
+failures rather than deterministic answer behavior.
 
 ## Replay
 
@@ -224,19 +233,32 @@ Readiness considers:
 - compiled tools and benchmark state,
 - ask fixture coverage,
 - latest saved refresh ask-suite status and fixture coverage,
-- latest saved answer status,
-- latest saved answer quality verdict,
+- latest saved answer status when answer history exists,
+- saved ask-suite quality evidence, or latest saved answer quality verdict,
 - malformed answer artifacts,
 - stale citation warnings.
 
 States:
 
 - `ready`: benchmark passed, ask fixtures exist, latest saved ask suite passed
-  against the current fixture files, and the latest saved answer gate passed.
+  against the current fixture files, and either that saved suite provides
+  passing quality evidence or the latest saved answer gate passed.
 - `needs-validation`: answer mode can run but fixtures or saved quality evidence
   are missing, stale, or failed.
 - `not-ready`: benchmark/runtime state is missing or the latest answer failure
   indicates a blocking runtime issue.
+
+For a fresh SQLite demo, the provider-free bootstrap path is:
+
+```bash
+almanac ask-fixtures init sqlite-demo --seed-demo --root "$tmp"
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --root "$tmp"
+almanac profile sqlite-demo --root "$tmp"
+```
 
 When fixtures exist but no saved suite evidence exists, run:
 

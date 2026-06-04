@@ -10,7 +10,7 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { dirname, isAbsolute, join, relative, resolve } from "node:path";
 
 import { readManifest } from "../compile/storage.ts";
-import type { AnswerArtifact } from "../core/types.ts";
+import type { AlmanacManifest, AnswerArtifact } from "../core/types.ts";
 import { readRunToolArtifact } from "./run-tool.ts";
 import {
   AskReplayFixtureSchema,
@@ -33,7 +33,10 @@ export interface InitAskFixtureFileOptions {
   /** Absolute or cwd-relative fixture file path. */
   fixturePath?: string;
   overwrite?: boolean;
+  seed?: AskFixtureSeed;
 }
+
+export type AskFixtureSeed = "sqlite-demo";
 
 export interface AddAskFixtureFromRunOptions {
   /** Absolute path to the compiled almanac directory. */
@@ -52,6 +55,7 @@ export interface AskFixtureAuthoringResult {
   relPath: string;
   created: boolean;
   fixtureCount: number;
+  seed: AskFixtureSeed | null;
 }
 
 export interface AddAskFixtureFromRunResult
@@ -69,7 +73,8 @@ export class AskFixtureAuthoringError extends Error {
       | "fixture-invalid"
       | "duplicate-fixture-id"
       | "not-answer-artifact"
-      | "answer-not-replayable",
+      | "answer-not-replayable"
+      | "seed-unavailable",
     message: string,
   ) {
     super(message);
@@ -93,15 +98,17 @@ export async function initAskFixtureFile(
     );
   }
 
+  const fixtures = seededAskFixtures(options.seed, manifest);
   await mkdir(dirname(fixturePath), { recursive: true });
-  await writeFile(fixturePath, "", "utf8");
+  await writeFile(fixturePath, fixtureRows(fixtures), "utf8");
   return {
     almanacId: manifest.almanacId,
     version: manifest.version,
     path: fixturePath,
     relPath: relPathForFixture(options.almanacDir, fixturePath),
     created: !existed,
-    fixtureCount: 0,
+    fixtureCount: fixtures.length,
+    seed: options.seed ?? null,
   };
 }
 
@@ -151,6 +158,7 @@ export async function addAskFixtureFromRun(
     relPath: relPathForFixture(options.almanacDir, fixturePath),
     created: !existing.exists,
     fixtureCount: existing.fixtures.length + 1,
+    seed: null,
     fixture,
     sourceAnswerId: read.artifact.answerId,
   };
@@ -160,6 +168,12 @@ export function askReplayFixtureFromAnswerArtifact(
   artifact: AnswerArtifact,
   options: { fixtureId?: string } = {},
 ): AskReplayFixture {
+  if (artifact.status === "model-error") {
+    throw new AskFixtureAuthoringError(
+      "answer-not-replayable",
+      `model-error answer artifacts are not replayable: ${artifact.answerId}`,
+    );
+  }
   if (artifact.toolCalls.length === 0) {
     throw new AskFixtureAuthoringError(
       "answer-not-replayable",
@@ -210,11 +224,66 @@ export function formatAskFixtureAuthoringHuman(
     `created: ${result.created ? "yes" : "no"}`,
     `fixtures: ${result.fixtureCount}`,
   ];
+  if (result.seed !== null) {
+    lines.push(`seed: ${result.seed}`);
+  }
   if (isAddResult(result)) {
     lines.push(`added: ${result.fixture.id}`);
     lines.push(`source answer: ${result.sourceAnswerId}`);
   }
   return lines.join("\n") + "\n";
+}
+
+export function sqliteDemoAskReplayFixtures(): AskReplayFixture[] {
+  return [
+    AskReplayFixtureSchema.parse({
+      id: "sqlite-demo-transactions-atomic",
+      question: "Are SQLite transactions atomic?",
+      answer:
+        "SQLite transactions are atomic: either all changes inside COMMIT persist or none do after ROLLBACK.",
+      toolCalls: [
+        {
+          tool: "query_facts",
+          input: { q: "transactions atomic", limit: 3 },
+          expectedStatus: "ok",
+        },
+      ],
+      expectedStatus: "ok",
+      minCitations: 1,
+      maxStaleCitations: 0,
+      maxUnsupportedClaims: 0,
+    }),
+  ];
+}
+
+function seededAskFixtures(
+  seed: AskFixtureSeed | undefined,
+  manifest: AlmanacManifest,
+): AskReplayFixture[] {
+  if (seed === undefined) return [];
+  if (seed === "sqlite-demo") {
+    if (!isSqliteDemoManifest(manifest)) {
+      throw new AskFixtureAuthoringError(
+        "seed-unavailable",
+        `seed sqlite-demo is only available for the offline SQLite demo almanac: ${manifest.almanacId}`,
+      );
+    }
+    return sqliteDemoAskReplayFixtures();
+  }
+  return [];
+}
+
+function isSqliteDemoManifest(manifest: AlmanacManifest): boolean {
+  return (
+    manifest.almanacId === "sqlite-demo" ||
+    manifest.domain.toLowerCase() === "sqlite operations demo" ||
+    manifest.displayName.toLowerCase() === "sqlite operations demo"
+  );
+}
+
+function fixtureRows(fixtures: AskReplayFixture[]): string {
+  if (fixtures.length === 0) return "";
+  return fixtures.map((fixture) => JSON.stringify(fixture)).join("\n") + "\n";
 }
 
 async function readExistingFixtures(

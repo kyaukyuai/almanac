@@ -3035,6 +3035,116 @@ describe("almanac CLI product onboarding", () => {
     expect(failedDoctor.stdout).toContain("last failed");
   }, { timeout: 15_000 });
 
+  test("demo can bootstrap answer readiness without provider credentials", async () => {
+    const noProviderEnv = {
+      ANTHROPIC_API_KEY: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+    };
+    const demo = runCli(["demo", "--root", root], noProviderEnv);
+    expect(demo.status).toBe(0);
+
+    const dryRun = runCli(
+      ["maintain", "sqlite-demo", "--dry-run", "--json", "--root", root],
+      noProviderEnv,
+    );
+    expect(dryRun.status).toBe(0);
+    const dryReport = JSON.parse(dryRun.stdout) as {
+      plan: Array<{ id: string; reason: string; command: string | null }>;
+      nextActions: string[];
+    };
+    const askSuiteStep = dryReport.plan.find((step) => step.id === "ask-suite");
+    expect(askSuiteStep).toEqual(
+      expect.objectContaining({
+        reason: "seeded answer checks are missing",
+        command: expect.stringContaining(
+          "ask-fixtures init sqlite-demo --seed-demo",
+        ),
+      }),
+    );
+    expect(dryReport.nextActions).toContainEqual(
+      expect.stringContaining("ask-fixtures init sqlite-demo --seed-demo"),
+    );
+    expect(dryReport.nextActions).toContainEqual(
+      expect.stringContaining("almanac ask sqlite-demo"),
+    );
+
+    const seed = runCli(
+      [
+        "ask-fixtures",
+        "init",
+        "sqlite-demo",
+        "--seed-demo",
+        "--json",
+        "--root",
+        root,
+      ],
+      noProviderEnv,
+    );
+    expect(seed.status).toBe(0);
+    const seeded = JSON.parse(seed.stdout) as {
+      relPath: string;
+      fixtureCount: number;
+      seed: string | null;
+    };
+    expect(seeded).toEqual(
+      expect.objectContaining({
+        relPath: "tests/ask.jsonl",
+        fixtureCount: 1,
+        seed: "sqlite-demo",
+      }),
+    );
+
+    const askSuite = runCli(
+      ["ask-suite", "sqlite-demo", "--json", "--root", root],
+      noProviderEnv,
+    );
+    expect(askSuite.status).toBe(0);
+    expect(JSON.parse(askSuite.stdout)).toEqual(
+      expect.objectContaining({
+        status: "pass",
+        total: 1,
+        passed: 1,
+      }),
+    );
+
+    const refresh = runCli(
+      [
+        "refresh",
+        "run",
+        "sqlite-demo",
+        "--from-stage",
+        "12-benchmark-run",
+        "--ask-suite",
+        "--save",
+        "--json",
+        "--root",
+        root,
+      ],
+      noProviderEnv,
+    );
+    expect(refresh.status).toBe(0);
+    expect(JSON.parse(refresh.stdout)).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        askSuite: expect.objectContaining({
+          status: "passed",
+          total: 1,
+          passed: 1,
+        }),
+      }),
+    );
+
+    const profile = runCli(
+      ["profile", "sqlite-demo", "--root", root],
+      noProviderEnv,
+    );
+    expect(profile.status).toBe(0);
+    expect(profile.stdout).toContain("answer readiness ready");
+    expect(profile.stdout).toContain("answer checks  1 found");
+    expect(profile.stdout).toContain("quality gate   pass");
+    expect(profile.stdout).toContain("save real answer history");
+  }, { timeout: 12_000 });
+
   test("run invokes compiled tools with stable output and exit codes", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);
@@ -4205,7 +4315,7 @@ describe("almanac CLI product onboarding", () => {
     ]);
     expect(answerProfileAfterSuite.status).toBe(0);
     expect(answerProfileAfterSuite.stdout).toContain(
-      "answer readiness needs-validation",
+      "answer readiness ready",
     );
     expect(answerProfileAfterSuite.stdout).toContain(
       "answer checks  1 found (tests/ask.jsonl:1)",
@@ -4214,7 +4324,7 @@ describe("almanac CLI product onboarding", () => {
       "answer check suite passed, 1/1 passed",
     );
     expect(answerProfileAfterSuite.stdout).toContain("latest answer  none");
-    expect(answerProfileAfterSuite.stdout).toContain("no saved answer history");
+    expect(answerProfileAfterSuite.stdout).toContain("quality gate   pass");
 
     const answerProfileJsonAfterSuite = runCli([
       "profile",
@@ -4234,7 +4344,7 @@ describe("almanac CLI product onboarding", () => {
       }).answer,
     ).toEqual(
       expect.objectContaining({
-        status: "needs-validation",
+        status: "ready",
         fixtures: expect.objectContaining({
           paths: [expect.objectContaining({ relPath: "tests/ask.jsonl", count: 1 })],
         }),
@@ -4249,9 +4359,9 @@ describe("almanac CLI product onboarding", () => {
       root,
     ]);
     expect(doctorAfterSuite.status).toBe(0);
-    expect(doctorAfterSuite.stdout).toContain("warn answer");
+    expect(doctorAfterSuite.stdout).toContain("ok   answer");
     expect(doctorAfterSuite.stdout).toContain("suite passed");
-    expect(doctorAfterSuite.stdout).toContain("no saved answer artifacts");
+    expect(doctorAfterSuite.stdout).toContain("latest answer none");
 
     const metadataWithoutSave = runCli([
       "ask",

@@ -491,6 +491,18 @@ almanac ask-replay sqlite-demo \
   --root "$tmp"
 ```
 
+Seed the offline SQLite demo with a deterministic answer check, then persist
+ask-suite evidence through refresh:
+
+```bash
+almanac ask-fixtures init sqlite-demo --seed-demo --root "$tmp"
+almanac refresh run sqlite-demo \
+  --from-stage 12-benchmark-run \
+  --ask-suite \
+  --save \
+  --root "$tmp"
+```
+
 Replay reports include an ask-mode quality gate. The gate records citation
 rate, unsupported claim count, stale citation count, and abstention
 expected/actual matching separately from benchmark fixtures. Fixture rows can
@@ -504,10 +516,10 @@ deterministic replay remains provider-free by default.
 
 `profile` and `doctor` also expose answer readiness without calling a provider:
 ask fixture coverage by path, latest saved refresh ask-suite status, latest
-saved answer status, latest answer quality verdict, and stale citation
-warnings. Missing ask fixtures, missing saved ask-suite evidence, stale fixture
-coverage, or missing saved answer quality gates are warnings so an otherwise
-compiled almanac can remain usable while answer mode still needs validation.
+saved answer status when history exists, quality evidence, and stale citation
+warnings. Missing ask fixtures, missing saved ask-suite evidence, or stale
+fixture coverage are warnings so an otherwise compiled almanac can remain
+usable while answer readiness still needs validation.
 
 The output exit code is part of the contract: grounded `ok` answers exit `0`,
 abstentions and model/tool failures exit `1`, and usage or tool-input errors

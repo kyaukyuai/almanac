@@ -625,7 +625,34 @@ describe("ask fixture authoring", () => {
           retryable: false,
         },
       }).then((result) => askReplayFixtureFromAnswerArtifact(result.artifact)),
-    ).rejects.toThrow("no recorded tool calls");
+    ).rejects.toThrow("model-error answer artifacts are not replayable");
+
+    await expect(
+      saveAnswerArtifact({
+        almanacDir,
+        answerId: "answer-2026-01-03T00-00-00-000Z-00000007",
+        question: "What happened after tools ran?",
+        status: "model-error",
+        exitCode: 1,
+        startedAt: "2026-01-03T00:00:00.000Z",
+        finishedAt: "2026-01-03T00:00:01.000Z",
+        toolCalls: [
+          {
+            toolName: "query_facts",
+            input: { q: "foreign keys" },
+            status: "ok",
+            durationMs: 10,
+            citationsCount: 1,
+          },
+        ],
+        citations: [fixtureCitation()],
+        error: {
+          code: "model-error",
+          message: "synthesis failed after tool calls",
+          retryable: false,
+        },
+      }).then((result) => askReplayFixtureFromAnswerArtifact(result.artifact)),
+    ).rejects.toThrow("model-error answer artifacts are not replayable");
   });
 });
 
