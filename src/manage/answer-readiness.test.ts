@@ -100,6 +100,31 @@ describe("answer readiness", () => {
     expect(readiness.latestAnswer?.status).toBe("ok");
     expect(readiness.qualityGate.status).toBe("pass");
   });
+
+  test("uses a passing saved ask suite as provider-free quality evidence", async () => {
+    const almanacDir = await buildAnswerReadinessFixture("answer-suite-ready");
+    writeAskFixture(almanacDir);
+    writeAskSuiteRefresh(almanacDir, {
+      refreshId: "refresh-2026-01-03T00-00-00-000Z-00000004",
+      status: "passed",
+      exitCode: 0,
+      passed: 1,
+      failed: 0,
+    });
+
+    const readiness = await getAnswerReadiness({ almanacDir });
+
+    expect(readiness.status).toBe("ready");
+    expect(readiness.latestAnswer).toBeNull();
+    expect(readiness.latestSuite.status).toBe("passed");
+    expect(readiness.qualityGate.status).toBe("pass");
+    expect(readiness.issues.validation).not.toContain(
+      "no saved answer artifacts",
+    );
+    expect(formatAnswerReadinessDoctor(readiness)).toContain(
+      "latest answer none",
+    );
+  });
 });
 
 function writeAskFixture(almanacDir: string): void {

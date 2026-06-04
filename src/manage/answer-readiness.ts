@@ -84,6 +84,7 @@ export async function getAnswerReadiness(input: {
   }
 
   const latestSuite = await readLatestAskSuite(input.almanacDir);
+  let suiteReady = false;
   if (fixtures.count > 0) {
     if (latestSuite.status === "not-run") {
       validation.push("ask suite has not been run");
@@ -97,6 +98,13 @@ export async function getAnswerReadiness(input: {
       validation.push("latest ask suite failed");
     } else if (!suiteMatchesFixtures(latestSuite, fixtures)) {
       validation.push(suiteFixtureMismatchMessage(latestSuite, fixtures));
+    } else {
+      const suiteQuality = qualityGateFromSuite(latestSuite);
+      if (suiteQuality.status === "fail") {
+        validation.push("latest ask suite quality gate failed");
+      } else {
+        suiteReady = true;
+      }
     }
   }
 
@@ -107,7 +115,7 @@ export async function getAnswerReadiness(input: {
 
   const latest =
     latestAnswer.status === "ok" ? latestAnswer.answer : null;
-  if (latest === null && latestAnswer.status === "missing") {
+  if (latest === null && latestAnswer.status === "missing" && !suiteReady) {
     validation.push("no saved answer artifacts");
   }
   if (latest !== null && !latest.hasTrace) {
@@ -122,7 +130,10 @@ export async function getAnswerReadiness(input: {
     );
   }
 
-  const qualityGate = latest?.quality ?? null;
+  const qualityGate =
+    latest === null && suiteReady
+      ? qualityGateFromSuite(latestSuite)
+      : latest?.quality ?? null;
   if (qualityGate === null) {
     validation.push("latest answer quality gate missing");
   } else if (qualityGate.status === "fail") {
@@ -227,6 +238,30 @@ function suiteFixtureMismatchMessage(
       ? `${fixtures.count} fixture(s)`
       : fixtures.paths.map((file) => `${file.relPath}:${file.count}`).join(", ");
   return `latest ask suite fixture coverage differs: suite ${suiteCoverage}; current ${currentCoverage}`;
+}
+
+function qualityGateFromSuite(suite: AnswerReadinessLatestSuite): {
+  status: "pass" | "fail";
+  reasons: string[];
+} {
+  const reasons: string[] = [];
+  if ((suite.unsupportedClaimCount ?? 0) > 0) {
+    reasons.push(
+      `ask suite has ${suite.unsupportedClaimCount} unsupported claim(s)`,
+    );
+  }
+  if ((suite.staleCitationCount ?? 0) > 0) {
+    reasons.push(`ask suite has ${suite.staleCitationCount} stale citation(s)`);
+  }
+  if ((suite.abstentionMismatchCount ?? 0) > 0) {
+    reasons.push(
+      `ask suite has ${suite.abstentionMismatchCount} abstention mismatch(es)`,
+    );
+  }
+  return {
+    status: reasons.length === 0 ? "pass" : "fail",
+    reasons,
+  };
 }
 
 async function readAnswerFixtureCoverage(

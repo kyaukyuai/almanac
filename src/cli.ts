@@ -2814,7 +2814,7 @@ async function readLifecycleAnswer(args: {
       args.issues.push(`answer mode ${readiness.status}`);
       args.nextActions.push(
         ...answerReadinessNextActions(
-          args.manifest.almanacId,
+          args.manifest,
           args.rootSuffix,
           readiness,
         ),
@@ -3835,11 +3835,14 @@ function startActionForItem(item: LifecycleInventoryItem, root: string): StartAc
     };
   }
   if (item.lifecycle.answer.status !== "ready") {
+    const seeded = supportsSeededAnswerChecks(item.manifest);
     return {
-      label: "Create answer checks",
-      command: `almanac ask-fixtures init ${item.almanacId}${rootSuffix}`,
+      label: seeded ? "Create seeded answer checks" : "Create answer checks",
+      command: answerChecksInitCommand(item.almanacId, rootSuffix, item.manifest),
       reason:
-        "Answer checks let Almanac replay saved answers and report answer readiness.",
+        seeded
+          ? "Seeded answer checks let the offline demo reach answer readiness without provider credentials."
+          : "Answer checks let Almanac replay saved answers and report answer readiness.",
       providerRequired: false,
       mutates: true,
     };
@@ -4475,11 +4478,18 @@ function maintenanceAskSuiteStep(
     };
   }
   if (answer.fixtures === 0) {
+    const seeded = supportsSeededAnswerChecks(statusReport.manifest);
     return {
       id: "ask-suite",
       status: "planned",
-      reason: "ask replay fixtures are missing",
-      command: `almanac ask-fixtures init ${statusReport.almanacId}${rootSuffix}`,
+      reason: seeded
+        ? "seeded answer checks are missing"
+        : "ask replay fixtures are missing",
+      command: answerChecksInitCommand(
+        statusReport.almanacId,
+        rootSuffix,
+        statusReport.manifest,
+      ),
       providerRequired: false,
       expectedArtifact: "tests/ask.jsonl",
     };
@@ -6993,8 +7003,13 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     nextActions.push(`inspect saved runs: almanac runs ${id}${rootSuffix}`);
   }
   if (answerReadiness.fixtures.count === 0) {
+    const seeded = supportsSeededAnswerChecks(manifest);
     nextActions.push(
-      `create ask replay fixtures: almanac ask-fixtures init ${id}${rootSuffix}`,
+      `${seeded ? "create seeded answer checks" : "create answer checks"}: ${answerChecksInitCommand(
+        id,
+        rootSuffix,
+        manifest,
+      )}`,
     );
   } else if (answerReadiness.latestSuite.status !== "passed") {
     if (answerReadiness.latestSuite.refreshId !== undefined) {
@@ -7016,7 +7031,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
   if (answerReadiness.latestAnswer === null) {
     nextActions.push(
-      `save answer artifact: almanac ask ${id} "<question>" --save${rootSuffix}`,
+      `save real answer history: almanac ask ${id} "<question>" --save${rootSuffix}`,
     );
   } else if (answerReadiness.qualityGate.status !== "pass") {
     nextActions.push(
@@ -7925,6 +7940,7 @@ interface AskFixturesInitOptions {
   fixture?: string;
   json?: boolean;
   overwrite?: boolean;
+  seedDemo?: boolean;
 }
 
 async function cmdAskFixturesInit(
@@ -7939,6 +7955,7 @@ async function cmdAskFixturesInit(
         ? {}
         : { fixturePath: resolve(opts.fixture) }),
       overwrite: opts.overwrite === true,
+      ...(opts.seedDemo === true ? { seed: "sqlite-demo" as const } : {}),
     });
     process.stdout.write(
       opts.json === true
@@ -8955,7 +8972,7 @@ async function cmdDoctor(
               ? "answer fixtures and quality evidence are ready"
               : formatAnswerReadinessDoctor(answerReadiness),
           nextActions: answerReadinessNextActions(
-            id,
+            manifest,
             rootSuffix,
             answerReadiness,
           ),
@@ -9091,15 +9108,23 @@ async function cmdDoctor(
 }
 
 function answerReadinessNextActions(
-  id: string,
+  manifest: AlmanacManifest,
   rootSuffix: string,
   answerReadiness: AnswerReadiness,
 ): string[] {
+  const id = manifest.almanacId;
   if (answerReadiness.fixtures.count === 0) {
-    return [
-      `almanac ask ${id} "<question>" --save${rootSuffix}`,
-      `almanac ask-fixtures init ${id}${rootSuffix}`,
-    ];
+    const initCommand = answerChecksInitCommand(id, rootSuffix, manifest);
+    return supportsSeededAnswerChecks(manifest)
+      ? [
+          initCommand,
+          `almanac refresh run ${id} --from-stage 12-benchmark-run --ask-suite --save${rootSuffix}`,
+          `almanac ask ${id} "<question>" --save${rootSuffix}`,
+        ]
+      : [
+          initCommand,
+          `almanac ask ${id} "<question>" --save${rootSuffix}`,
+        ];
   }
   if (answerReadiness.latestSuite.status !== "passed") {
     return [`almanac ask-suite ${id}${rootSuffix}`];
@@ -9113,6 +9138,24 @@ function answerReadinessNextActions(
     ];
   }
   return [`almanac ask ${id} "<question>"${rootSuffix}`];
+}
+
+function answerChecksInitCommand(
+  id: string,
+  rootSuffix: string,
+  manifest: AlmanacManifest | null,
+): string {
+  const seed = supportsSeededAnswerChecks(manifest) ? " --seed-demo" : "";
+  return `almanac ask-fixtures init ${id}${seed}${rootSuffix}`;
+}
+
+function supportsSeededAnswerChecks(manifest: AlmanacManifest | null): boolean {
+  if (manifest === null) return false;
+  return (
+    manifest.almanacId === "sqlite-demo" ||
+    manifest.domain.toLowerCase() === "sqlite operations demo" ||
+    manifest.displayName.toLowerCase() === "sqlite operations demo"
+  );
 }
 
 interface UpdateOptions {
@@ -10293,13 +10336,14 @@ const askFixturesCommand = program
 
 askFixturesCommand
   .command("init <id>")
-  .description("create an ask replay fixture JSONL file")
+  .description("create or seed an ask replay fixture JSONL file")
   .option(
     "--fixture <path>",
     "Fixture JSONL path (default: <almanac>/tests/ask.jsonl)",
   )
   .option("--json", "Emit JSON instead of a human-readable summary")
-  .option("--overwrite", "Replace an existing fixture file with an empty file")
+  .option("--overwrite", "Replace an existing fixture file")
+  .option("--seed-demo", "Seed deterministic sqlite-demo answer checks")
   .addOption(rootOption)
   .action(cmdAskFixturesInit);
 
