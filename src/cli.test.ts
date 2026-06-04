@@ -544,6 +544,113 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("start with a natural-language goal drafts a provider-backed setup plan", () => {
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for production AI governance checks",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      summary: string;
+      goalDraft: {
+        goal: string;
+        domain: string;
+        displayName: string;
+        slug: string;
+        scope: string;
+        referenceChecklist: Array<{ kind: string; label: string }>;
+        firstQuestions: string[];
+        suggestedCommand: string;
+        confirmationRequired: boolean;
+        providerRequiredForCompile: boolean;
+        notes: string[];
+      };
+      nextBestAction: {
+        command: string;
+        providerRequired: boolean;
+        mutates: boolean;
+      };
+      nextActions: Array<{ command: string; providerRequired: boolean }>;
+    };
+
+    expect(parsed.status).toBe("planning");
+    expect(parsed.summary).toContain("Drafted a setup plan");
+    expect(parsed.goalDraft).toMatchObject({
+      goal: "Build an almanac for production AI governance checks",
+      domain: "production AI governance checks",
+      displayName: "Production AI Governance Checks",
+      slug: "production-ai-governance-checks",
+      confirmationRequired: true,
+      providerRequiredForCompile: true,
+    });
+    expect(parsed.goalDraft.scope).toContain("Production AI Governance Checks");
+    expect(parsed.goalDraft.referenceChecklist.map((item) => item.kind)).toEqual([
+      "docs",
+      "standard",
+      "repo",
+      "internal-doc",
+    ]);
+    expect(parsed.goalDraft.firstQuestions[0]).toContain(
+      "Production AI Governance Checks",
+    );
+    expect(parsed.goalDraft.suggestedCommand).toContain(
+      "almanac new 'production AI governance checks'",
+    );
+    expect(parsed.goalDraft.suggestedCommand).toContain('--source "$REFERENCE_URL"');
+    expect(parsed.goalDraft.notes).toContain(
+      "Set REFERENCE_URL to the first reviewed reference URL before running the suggested command.",
+    );
+    expect(parsed.goalDraft.notes).toContain(
+      "Set ANTHROPIC_API_KEY before running provider-backed compile.",
+    );
+    expect(parsed.nextBestAction).toMatchObject({
+      providerRequired: true,
+      mutates: true,
+    });
+    expect(parsed.nextActions.some((action) =>
+      action.command === `almanac demo --root ${root}` &&
+      action.providerRequired === false,
+    )).toBe(true);
+  });
+
+  test("start with a natural-language goal is readable in human output", () => {
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for production AI governance checks",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("status        planning");
+    expect(result.stdout).toContain("setup draft:");
+    expect(result.stdout).toContain("domain        production AI governance checks");
+    expect(result.stdout).toContain("references to gather:");
+    expect(result.stdout).toContain("first questions:");
+    expect(result.stdout).toContain("credential boundary:");
+    expect(result.stdout).toContain("Set ANTHROPIC_API_KEY");
+    expect(result.stdout).toContain('--source "$REFERENCE_URL"');
+  });
+
   test("start summarizes existing almanacs and recommends validation", async () => {
     await writeLegacyCountFixture({ completed: true });
 

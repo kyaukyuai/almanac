@@ -8,7 +8,7 @@
  *                                          interrupted run)
  *   almanac demo [id] [opts]               create a complete offline demo
  *                                          almanac with curated fixtures
- *   almanac start [opts]                   guide first-run / next action
+ *   almanac start [goal...] [opts]         guide first-run / draft setup
  *   almanac update <id> [opts]             refresh an existing almanac
  *                                          (resets stages from --from-stage
  *                                          onwards and re-runs the pipeline)
@@ -2271,7 +2271,7 @@ interface SchedulePrintReport {
   notes: string[];
 }
 
-type StartReportStatus = "empty" | "ready" | "attention";
+type StartReportStatus = "empty" | "ready" | "attention" | "planning";
 
 interface StartProviderStatus {
   anthropic: "set" | "missing";
@@ -2285,6 +2285,29 @@ interface StartAction {
   reason: string;
   providerRequired: boolean;
   mutates: boolean;
+}
+
+interface StartReferenceChecklistItem {
+  kind: "docs" | "repo" | "standard" | "internal-doc" | "unknown";
+  label: string;
+  reason: string;
+  example: string;
+}
+
+interface StartGoalDraft {
+  goal: string;
+  domain: string;
+  displayName: string;
+  slug: string;
+  profile: "mixed";
+  depth: "standard";
+  scope: string;
+  referenceChecklist: StartReferenceChecklistItem[];
+  firstQuestions: string[];
+  suggestedCommand: string;
+  confirmationRequired: true;
+  providerRequiredForCompile: true;
+  notes: string[];
 }
 
 interface StartAlmanacSummary {
@@ -2313,6 +2336,7 @@ interface StartReport {
   status: StartReportStatus;
   summary: string;
   provider: StartProviderStatus;
+  goalDraft: StartGoalDraft | null;
   almanacs: StartAlmanacSummary[];
   nextBestAction: StartAction;
   nextActions: StartAction[];
@@ -3429,10 +3453,54 @@ function unknownErrorMessage(error: unknown): string {
 
 async function buildStartReport(
   opts: StartOptions,
+  goalParts: string[] = [],
   now = new Date(),
 ): Promise<StartReport> {
   const items = await readLifecycleInventory(opts.root);
   const provider = startProviderStatus();
+  const goal = normalizeStartGoal(goalParts);
+  if (goal !== null) {
+    const almanacs = items.map((item) => startAlmanacSummary(item, opts.root));
+    const draft = buildStartGoalDraft(goal, opts.root, provider);
+    const inspectSetupAction: StartAction = {
+      label: "Review the setup plan",
+      command: draft.suggestedCommand,
+      reason:
+        "This is a planning-only draft. Review references before running provider-backed compile.",
+      providerRequired: true,
+      mutates: true,
+    };
+    return {
+      schemaVersion: "0.1.0",
+      root: opts.root,
+      checkedAt: now.toISOString(),
+      status: "planning",
+      summary: "Drafted a setup plan from the natural-language goal.",
+      provider,
+      goalDraft: draft,
+      almanacs,
+      nextBestAction: inspectSetupAction,
+      nextActions: uniqueStartActions([
+        inspectSetupAction,
+        {
+          label: "Try the offline demo first",
+          command: `almanac demo${rootArg(opts.root)}`,
+          reason:
+            "The demo proves the local workflow without provider credentials or network source discovery.",
+          providerRequired: false,
+          mutates: true,
+        },
+        {
+          label: "Check local setup",
+          command: `almanac doctor${rootArg(opts.root)}`,
+          reason:
+            "Doctor checks runtime readiness, provider keys, and root hygiene before compile.",
+          providerRequired: false,
+          mutates: false,
+        },
+      ]),
+    };
+  }
   if (items.length === 0) {
     const demoAction = startDemoAction(opts.root);
     return {
@@ -3442,6 +3510,7 @@ async function buildStartReport(
       status: "empty",
       summary: "No almanacs found. Start with the offline demo.",
       provider,
+      goalDraft: null,
       almanacs: [],
       nextBestAction: demoAction,
       nextActions: [
@@ -3474,6 +3543,7 @@ async function buildStartReport(
     status,
     summary,
     provider,
+    goalDraft: null,
     almanacs,
     nextBestAction: focus.nextAction,
     nextActions: uniqueStartActions([
@@ -3511,6 +3581,130 @@ function startProviderStatus(): StartProviderStatus {
         : "set",
     embeddings: embeddings.status === "configured" ? "configured" : "not-configured",
   };
+}
+
+function normalizeStartGoal(goalParts: string[]): string | null {
+  const goal = goalParts.join(" ").replace(/\s+/g, " ").trim();
+  if (goal.length === 0) return null;
+  if (goal.length > 500) {
+    fail("start: goal must be 500 characters or fewer");
+  }
+  return goal;
+}
+
+function buildStartGoalDraft(
+  goal: string,
+  root: string,
+  provider: StartProviderStatus,
+): StartGoalDraft {
+  const subject = deriveStartGoalSubject(goal);
+  const domain = startDomainName(subject);
+  const displayName = startDisplayName(domain);
+  const slug = slugify(domain) || "new-almanac";
+  const scope =
+    `${displayName}: collect citable references, extracted knowledge, ` +
+    "validation checks, freshness signals, and answer-ready workflows for " +
+    "practical decisions in this domain.";
+  const command =
+    `almanac new ${shellArg(domain)} --slug ${shellArg(slug)} ` +
+    `--profile mixed --depth standard --scope ${shellArg(scope)} ` +
+    `--source "$REFERENCE_URL"${rootArg(root)}`;
+  const notes = [
+    "This is a planning-only draft; no files were written and no provider was called.",
+    "Review the reference checklist before running compile.",
+    "Set REFERENCE_URL to the first reviewed reference URL before running the suggested command.",
+    provider.anthropic === "missing"
+      ? "Set ANTHROPIC_API_KEY before running provider-backed compile."
+      : "ANTHROPIC_API_KEY is set; compile is still explicit and must be run by the user.",
+    provider.braveSearch === "missing"
+      ? "BRAVE_SEARCH_API_KEY is optional, but improves web source discovery."
+      : "BRAVE_SEARCH_API_KEY is set for optional web source discovery.",
+  ];
+
+  return {
+    goal,
+    domain,
+    displayName,
+    slug,
+    profile: "mixed",
+    depth: "standard",
+    scope,
+    referenceChecklist: [
+      {
+        kind: "docs",
+        label: "Official documentation",
+        reason: "Primary documentation usually gives the most stable citable baseline.",
+        example: "https://example.com/docs",
+      },
+      {
+        kind: "standard",
+        label: "Standards, policies, or authoritative guidance",
+        reason: "Governance, safety, and operational domains need durable rules and definitions.",
+        example: "https://example.com/standard-or-policy",
+      },
+      {
+        kind: "repo",
+        label: "Implementation repositories or examples",
+        reason: "Repos provide concrete deployment, configuration, and operations evidence.",
+        example: "https://github.com/example/project",
+      },
+      {
+        kind: "internal-doc",
+        label: "Internal operating notes",
+        reason:
+          "Personal or team-specific references make the almanac useful for recurring decisions.",
+        example: "/path/to/internal-runbook.md",
+      },
+    ],
+    firstQuestions: [
+      `What decisions should ${displayName} help answer?`,
+      "Which references are canonical enough to cite?",
+      "Which claims should require abstention when evidence is missing?",
+      "What checks would prove the compiled tools and answers still work?",
+    ],
+    suggestedCommand: command,
+    confirmationRequired: true,
+    providerRequiredForCompile: true,
+    notes,
+  };
+}
+
+function deriveStartGoalSubject(goal: string): string {
+  let subject = goal.trim();
+  const replacements = [
+    /^(?:please\s+)?(?:build|create|make|draft|start|set up|setup|plan)\s+(?:an?\s+)?(?:almanac|knowledge base|knowledge surface)?\s*(?:for|about|on)?\s*/i,
+    /^(?:i\s+)?(?:need|want)\s+(?:an?\s+)?(?:almanac|knowledge base|knowledge surface)?\s*(?:for|about|on|to)?\s*/i,
+    /^(?:help\s+me\s+)?(?:with|understand|manage|track)\s+/i,
+  ];
+  for (const pattern of replacements) {
+    const next = subject.replace(pattern, "").trim();
+    if (next.length > 0 && next.length < subject.length) {
+      subject = next;
+      break;
+    }
+  }
+  return subject.replace(/[.!?]+$/g, "").trim() || goal.trim();
+}
+
+function startDomainName(subject: string): string {
+  const words = subject
+    .replace(/[^A-Za-z0-9\s/+-]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim()
+    .split(" ")
+    .filter((word) => word.length > 0)
+    .slice(0, 8);
+  return words.length === 0 ? "New Almanac" : words.join(" ");
+}
+
+function startDisplayName(domain: string): string {
+  return titleCase(domain)
+    .replace(/\bAi\b/g, "AI")
+    .replace(/\bLlm\b/g, "LLM")
+    .replace(/\bApi\b/g, "API")
+    .replace(/\bMcp\b/g, "MCP")
+    .replace(/\bSql\b/g, "SQL")
+    .replace(/\bSqlite\b/g, "SQLite");
 }
 
 function startDemoAction(root: string): StartAction {
@@ -3634,8 +3828,8 @@ function uniqueStartActions(actions: StartAction[]): StartAction[] {
   return out;
 }
 
-async function cmdStart(opts: StartOptions): Promise<void> {
-  const report = await buildStartReport(opts);
+async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> {
+  const report = await buildStartReport(opts, goalParts);
   if (opts.json) {
     process.stdout.write(JSON.stringify(report, null, 2) + "\n");
     return;
@@ -3651,6 +3845,32 @@ async function cmdStart(opts: StartOptions): Promise<void> {
   process.stdout.write(
     "  vocabulary    references = citable source material, checks = validation, history = saved runs\n",
   );
+
+  if (report.goalDraft !== null) {
+    const draft = report.goalDraft;
+    process.stdout.write("\nsetup draft:\n");
+    process.stdout.write(`  goal          ${draft.goal}\n`);
+    process.stdout.write(`  domain        ${draft.domain}\n`);
+    process.stdout.write(`  display name  ${draft.displayName}\n`);
+    process.stdout.write(`  slug          ${draft.slug}\n`);
+    process.stdout.write(`  profile       ${draft.profile}\n`);
+    process.stdout.write(`  depth         ${draft.depth}\n`);
+    process.stdout.write(`  scope         ${draft.scope}\n`);
+    process.stdout.write("\nreferences to gather:\n");
+    for (const item of draft.referenceChecklist) {
+      process.stdout.write(
+        `  - ${item.label}: ${item.reason} Example: ${item.example}\n`,
+      );
+    }
+    process.stdout.write("\nfirst questions:\n");
+    for (const question of draft.firstQuestions) {
+      process.stdout.write(`  - ${question}\n`);
+    }
+    process.stdout.write("\ncredential boundary:\n");
+    for (const note of draft.notes) {
+      process.stdout.write(`  - ${note}\n`);
+    }
+  }
 
   if (report.almanacs.length > 0) {
     process.stdout.write("\nalmanacs:\n");
@@ -9845,11 +10065,13 @@ program
   .action(cmdDemo);
 
 program
-  .command("start")
-  .description("guide first-run setup and show the next best action")
+  .command("start [goal...]")
+  .description("guide first-run setup or draft a setup plan from a goal")
   .option("--json", "Emit JSON instead of a human-readable guide")
   .addOption(rootOption)
-  .action(cmdStart);
+  .action((goal: string[] | undefined, opts: StartOptions) =>
+    cmdStart(goal ?? [], opts),
+  );
 
 program
   .command("list")

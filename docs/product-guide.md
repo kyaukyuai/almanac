@@ -8,6 +8,7 @@ sources, and gate changes with human golden fixtures.
 
 ```bash
 almanac start
+almanac start "Build an almanac for production AI governance checks"
 almanac start --json
 ```
 
@@ -15,6 +16,11 @@ almanac start --json
 the offline demo and shows the exact command to run. On a root with installed
 almanacs, it summarizes health, references, checks, answer readiness, refresh
 state, and the next best action without mutating files.
+
+When given a natural-language goal, `start` remains planning-only. It drafts a
+domain, slug, scope, reference checklist, first questions, and a provider-backed
+`almanac new ...` command to review. It does not call an LLM provider, compile,
+or write files by itself.
 
 ## Offline demo
 
