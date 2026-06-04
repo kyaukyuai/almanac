@@ -17,6 +17,7 @@ import {
 } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { pathToFileURL } from "node:url";
 
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 
@@ -121,6 +122,184 @@ function mockAskProviderEnv(): Record<string, string | undefined> {
             fetchedAt: "2026-01-01T00:00:00.000Z",
           },
         ],
+      }),
+    }),
+  };
+}
+
+function coverageMap(fileCount = 0): Record<string, number> {
+  return {
+    docs: 0,
+    repo: 0,
+    news: 0,
+    community: 0,
+    academic: 0,
+    data: 0,
+    file: fileCount,
+    essay: 0,
+    book: 0,
+    talk: 0,
+  };
+}
+
+function guidedCreateMockEnv(
+  sourceUrl: string,
+): Record<string, string | undefined> {
+  const almanacId = "tiny-guided-domain";
+  const positive = Array.from({ length: 8 }, (_, index) => ({
+    id: `tiny-pos-${String(index + 1).padStart(3, "0")}`,
+    query: `what does guided activation support ${index + 1}?`,
+    intent: "lookup",
+    rationale:
+      "Facts-backed query_facts fixture for the guided create apply smoke.",
+    invocation: { tool: "query_facts", input: { q: "guided activation" } },
+    expected: {
+      minCitations: 1,
+      contains: [],
+      acceptableStaleness: ["fresh", "warm"],
+    },
+  }));
+  const negative = Array.from({ length: 5 }, (_, index) => ({
+    id: `tiny-neg-${String(index + 1).padStart(3, "0")}`,
+    query: `out of scope weather lookup ${index + 1}`,
+    rationale:
+      "Out-of-scope query should not produce citations from the tiny almanac.",
+    invocation: { tool: "query_facts", input: { q: `weather forecast ${index + 1}` } },
+    refusalReason: "out-of-scope",
+    expected: { maxCitations: 0 },
+  }));
+
+  return {
+    ALMANAC_LLM: "mock",
+    ANTHROPIC_API_KEY: undefined,
+    BRAVE_SEARCH_API_KEY: undefined,
+    ALMANAC_MOCK_RESPONSES: JSON.stringify({
+      "01-domain-analysis@v2": JSON.stringify({
+        domain: "Tiny Guided Domain",
+        canonicalSlug: almanacId,
+        displayName: "Tiny Guided Domain",
+        summary:
+          "Small deterministic domain for exercising guided almanac creation.",
+        subareas: ["guided activation", "readiness checks"],
+        intents: [
+          { kind: "lookup", example: "what does guided activation support?" },
+          { kind: "explain", example: "why does readiness matter?" },
+        ],
+        verbs: ["lookup", "explain"],
+        entityTypes: ["activation", "readiness"],
+        freshnessProfile: {
+          profileId: "mixed",
+          defaultClass: "slow",
+          classes: {
+            static: { examples: ["activation definition"] },
+            slow: { examples: ["readiness workflow"], maxAgeDays: 365 },
+            fast: { examples: [] },
+            live: { examples: [] },
+          },
+        },
+        suggestedSources: [
+          { hint: sourceUrl, kind: "file" },
+          { hint: "https://example.com/docs", kind: "docs" },
+          { hint: "https://github.com/example/project", kind: "repo" },
+        ],
+        suggestedTools: [],
+        cautions: [],
+      }),
+      "02-source-discovery@planner-v1": JSON.stringify({
+        schemaVersion: "0.1.0",
+        domain: {
+          canonicalSlug: almanacId,
+          displayName: "Tiny Guided Domain",
+        },
+        budgets: {
+          maxWebSearchQueries: 0,
+          maxGithubQueries: 0,
+          maxUrlProbes: 0,
+          maxCandidatesPerKind: 1,
+          targetAcceptedSources: 1,
+        },
+        directProbes: [],
+        webSearchQueries: [],
+        githubQueries: [],
+        coverageGoals: {
+          docs: { min: 0, max: 0 },
+          repo: { min: 0, max: 0 },
+          news: { min: 0, max: 0 },
+          community: { min: 0, max: 0 },
+          academic: { min: 0, max: 0 },
+          data: { min: 0, max: 0 },
+          file: { min: 1, max: 1 },
+          essay: { min: 0, max: 0 },
+          book: { min: 0, max: 0 },
+          talk: { min: 0, max: 0 },
+        },
+      }),
+      "02-source-discovery@evaluator-v1": JSON.stringify({
+        schemaVersion: "0.1.0",
+        status: "draft",
+        generatedAt: "2026-06-04T00:00:00.000Z",
+        generatedBy: {
+          stage: "02-source-discovery",
+          evaluatorPromptVersion: "02-source-discovery/evaluator-v1",
+          candidateCount: 0,
+          acceptedCount: 1,
+        },
+        coverage: coverageMap(1),
+        warnings: [],
+        sources: [
+          {
+            id: "tiny-guided-source",
+            url: sourceUrl,
+            kind: "file",
+            trust: 0.9,
+            volatility: "slow",
+            rationale: "Local deterministic source for guided create apply tests.",
+            ingestion: {
+              mode: "snapshot",
+              scope: ["**"],
+              refreshIntervalHours: 168,
+            },
+            notes: null,
+          },
+        ],
+        rejected: [],
+      }),
+      "05-fact-extraction@v1": JSON.stringify({
+        schemaVersion: "0.1.0",
+        status: "extracted",
+        skipReason: null,
+        coverage: {
+          extractable: "Guided activation workflow basics.",
+          nonExtractable: "No live data in the local source.",
+        },
+        facts: [
+          {
+            text: "Tiny Guided Domain supports guided activation workflows.",
+            type: "definition",
+            entities: ["guided activation"],
+            excerpt: "Tiny Guided Domain supports guided activation workflows.",
+            freshnessClass: "static",
+            validUntilRelative: null,
+            confidence: 0.95,
+          },
+        ],
+      }),
+      "06-tool-design@v3": JSON.stringify({
+        schemaVersion: "0.1.0",
+        customTools: [],
+        rationale:
+          "The default facts-backed tools are sufficient for the guided create apply smoke.",
+      }),
+      "11-benchmark-gen@v3": JSON.stringify({
+        schemaVersion: "0.1.0",
+        set: {
+          schemaVersion: "0.1.0",
+          almanacId,
+          positive,
+          negative,
+        },
+        rationale:
+          "Deterministic ask-independent benchmark fixtures for guided create apply.",
       }),
     }),
   };
@@ -650,6 +829,152 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("Set ANTHROPIC_API_KEY");
     expect(result.stdout).toContain('--source "$REFERENCE_URL"');
   });
+
+  test("start --apply blocks before provider work when source is missing", async () => {
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for Tiny Guided Domain",
+        "--apply",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: "dummy",
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      blockers: string[];
+      plannedCommand: string;
+      delegatedCommand: string;
+      goalDraft: { referenceChecklist: Array<{ label: string }> };
+      result: unknown;
+    };
+    expect(parsed.status).toBe("blocked");
+    expect(parsed.blockers).toContain(
+      "start --apply requires at least one explicit --source <url> reference.",
+    );
+    expect(parsed.plannedCommand).toContain("--apply");
+    expect(parsed.delegatedCommand).toContain('--source "$REFERENCE_URL"');
+    expect(parsed.goalDraft.referenceChecklist.map((item) => item.label)).toContain(
+      "Official documentation",
+    );
+    expect(parsed.result).toBeNull();
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("start --apply blocks before provider work when provider is missing", async () => {
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for Tiny Guided Domain",
+        "--source",
+        "https://example.com/reference",
+        "--apply",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ALMANAC_LLM: undefined,
+        ANTHROPIC_API_KEY: undefined,
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      providerRequirement: { available: boolean; satisfiedBy: string | null };
+      blockers: string[];
+      nextActions: Array<{ command: string }>;
+      result: unknown;
+    };
+    expect(parsed.status).toBe("blocked");
+    expect(parsed.providerRequirement).toMatchObject({
+      available: false,
+      satisfiedBy: null,
+    });
+    expect(parsed.blockers).toContain(
+      "start --apply requires ANTHROPIC_API_KEY before provider-backed compile starts.",
+    );
+    expect(parsed.nextActions.map((action) => action.command)).toContain(
+      "export ANTHROPIC_API_KEY=<your-key>",
+    );
+    expect(parsed.result).toBeNull();
+    expect(await readdir(root)).toEqual([]);
+  });
+
+  test("start --apply delegates to new with explicit source and mock provider", async () => {
+    const sourcePath = join(root, "tiny-guided.md");
+    await writeFile(
+      sourcePath,
+      "# Tiny Guided Domain\n\nTiny Guided Domain supports guided activation workflows.\n",
+      "utf8",
+    );
+    const sourceUrl = pathToFileURL(sourcePath).href;
+
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for Tiny Guided Domain",
+        "--source",
+        sourceUrl,
+        "--apply",
+        "--json",
+        "--root",
+        root,
+      ],
+      guidedCreateMockEnv(sourceUrl),
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      providerRequirement: { available: boolean; satisfiedBy: string | null };
+      delegatedCommand: string;
+      sources: string[];
+      result: {
+        almanacId: string;
+        almanacDir: string;
+        stdoutLineCount: number;
+        stdoutTail: string[];
+      };
+      nextActions: Array<{ command: string }>;
+    };
+
+    expect(parsed.status).toBe("created");
+    expect(parsed.providerRequirement).toMatchObject({
+      available: true,
+      satisfiedBy: "mock",
+    });
+    expect(parsed.sources).toEqual([sourceUrl]);
+    expect(parsed.delegatedCommand).toContain("almanac new 'Tiny Guided Domain'");
+    expect(parsed.result.almanacId).toBe("tiny-guided-domain");
+    expect(parsed.result.stdoutLineCount).toBeGreaterThan(0);
+    expect(parsed.result.stdoutTail.join("\n")).toContain(
+      "Done. `almanac inspect tiny-guided-domain`",
+    );
+    expect(existsSync(join(root, "tiny-guided-domain", "manifest.json"))).toBe(
+      true,
+    );
+    expect(parsed.nextActions.map((action) => action.command)).toContain(
+      `almanac inspect tiny-guided-domain --root ${root}`,
+    );
+
+    const benchmark = runCli(["benchmark", "tiny-guided-domain", "--root", root]);
+    expect(benchmark.status).toBe(0);
+    expect(benchmark.stdout).toContain("total         13");
+    expect(benchmark.stdout).toContain("passed        13");
+  }, { timeout: 30_000 });
 
   test("start summarizes existing almanacs and recommends validation", async () => {
     await writeLegacyCountFixture({ completed: true });
