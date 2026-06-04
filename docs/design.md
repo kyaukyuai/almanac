@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.12.0 shipped** · last updated 2026-06-03.
+Status: **v0.13.0 shipped** · last updated 2026-06-04.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1125,25 +1125,37 @@ real-provider Enterprise AI ask with two citations, saved-run replay, fixture
 promotion, `ask-suite` pass, refresh-integrated ask validation, and
 doctor/profile reporting answer mode as ready.
 
-### v0.13 planned — Personal almanac maintenance
+### v0.13.0 — Personal almanac maintenance
 
-v0.13 is planned as the Personal Almanac Maintenance release:
+v0.13.0 shipped the Personal Almanac Maintenance release:
 
-- add provider-free maintenance reports that combine refresh due state,
-  benchmark freshness, ask-suite readiness, latest answer quality,
-  registration drift, cleanup candidates, and next actions,
-- add a manual `almanac maintain` runner for one almanac or all due almanacs,
-  with dry-run first behavior and saved maintenance artifacts,
-- integrate benchmark and ask-suite checks into maintenance routines so answer
-  mode stays validated after refreshes,
-- turn doctor/status findings into explicit repair and cleanup candidates
-  without destructive defaults,
-- generate scheduler handoff snippets for cron, launchd, and GitHub Actions,
-- audit answer fixtures and saved-answer promotion candidates so personal
-  regression sets remain replayable.
+- `almanac maintain` adds provider-free maintenance reports that combine
+  refresh due state, benchmark freshness, ask-suite readiness, latest answer
+  quality, registration drift, cleanup candidates, repairs, planned steps,
+  provider requirements, and next actions.
+- `almanac maintain --apply` runs due maintenance for one almanac or all due
+  almanacs, with dry-run first behavior and saved maintenance artifacts.
+- Benchmark and ask-suite checks are integrated into maintenance routines so
+  answer mode stays validated after refreshes.
+- `almanac repair` and `almanac cleanup` turn doctor/status findings into
+  explicit candidates without destructive defaults.
+- `almanac schedule print` generates scheduler handoff snippets for cron,
+  launchd, and GitHub Actions without installing a resident daemon.
+- `ask-fixtures init` and `ask-fixtures add-from-run` keep saved-answer
+  promotion explicit, reviewable, and guarded against non-replayable
+  abstention fixtures.
 
 See [`docs/v0.13-plan.md`](./v0.13-plan.md) for scope, non-goals, PR sequence,
-and planned release smoke targets.
+and the shipped implementation sequence. The concrete release-candidate
+runbook is [`docs/v0.13-rc-smoke.md`](./v0.13-rc-smoke.md).
+
+The v0.13 release gate passed on 2026-06-03/04 with `git diff --check`,
+`bun run typecheck`, `bun test`, source and linked CLI checks, sqlite-demo
+provider-free maintenance apply, saved maintenance evidence, provider-required
+boundary checks, repair/cleanup dry-runs, scheduler handoff generation,
+Enterprise AI fresh compile benchmark at 407 facts and 15/15 passed fixtures,
+valid real-provider Enterprise AI abstention, saved-run replay pass, and
+maintenance dry-run reporting provider-free planned steps.
 
 ### v0.14+ (long-tail)
 

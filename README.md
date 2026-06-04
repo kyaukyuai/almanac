@@ -222,7 +222,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.12.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.13.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -246,11 +246,13 @@ Current shipped lines include:
   sqlite-demo handoff, and compile failure recovery UX
 - `v0.12`: installed almanac lifecycle inventory, per-almanac status, import
   handoff, registration visibility, root hygiene, and cleanup guidance
+- `v0.13`: personal maintenance reports, due-only maintenance apply,
+  repair/cleanup candidates, scheduler handoff snippets, and ask fixture upkeep
 
-`v0.12.0` turns the first successful almanac into a local lifecycle: users can
-list installed almanacs, inspect per-almanac readiness, import portable
-handoffs, see registration drift before opening host clients, identify root
-hygiene issues, and clean up safely with dry-run defaults.
+`v0.13.0` turns that local lifecycle into a maintainable personal asset: users
+can dry-run maintenance, apply due provider-free validation work, preserve
+maintenance evidence, preview repairs and cleanup, and generate caller-owned
+cron, launchd, or GitHub Actions handoff snippets.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -262,7 +264,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.12.0 RC | 305 | 3 | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.13.0 RC | 407 | 6 (2) | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -288,6 +290,14 @@ remove guidance, Enterprise AI fresh compile benchmark at 305 facts and 15/15
 fixtures, real-provider Enterprise AI ask with two citations, saved-run replay,
 fixture promotion, `ask-suite`, refresh-integrated ask validation, and
 doctor/profile reporting answer mode as ready.
+
+The v0.13.0 RC smoke passed the personal maintenance gate on `main`: source and
+linked CLI sanity, sqlite-demo provider-free maintenance apply, saved
+maintenance evidence, provider-required boundary checks, repair/cleanup
+dry-runs, scheduler handoff generation for cron/launchd/GitHub Actions,
+Enterprise AI fresh compile benchmark at 407 facts and 15/15 fixtures, valid
+real-provider Enterprise AI abstention with saved-run replay pass, and
+maintenance dry-run reporting provider-free planned steps.
 
 ## Development
 
