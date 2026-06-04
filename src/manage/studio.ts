@@ -24,6 +24,13 @@ export interface StudioHistorySummary {
   readError: string | null;
 }
 
+export interface StudioSuggestedQuestion {
+  intent: string;
+  question: string;
+  askCommand: string;
+  saveCommand: string;
+}
+
 export interface StudioAlmanacCard {
   almanacId: string;
   displayName: string;
@@ -51,6 +58,7 @@ export interface StudioAlmanacCard {
     registration: string;
   };
   latestHistory: StudioHistorySummary;
+  suggestedQuestions: StudioSuggestedQuestion[];
   issues: string[];
   nextBestAction: StudioCommand;
   commands: StudioCommand[];
@@ -222,6 +230,13 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     .slice(0, 5)
     .map(renderCommand)
     .join("\n");
+  const suggestedQuestions =
+    card.suggestedQuestions.length === 0
+      ? `<p class="muted">No suggested questions available</p>`
+      : card.suggestedQuestions
+          .slice(0, 3)
+          .map(renderSuggestedQuestion)
+          .join("\n");
   return `<article class="card" data-health="${escapeHtml(card.health)}">
   <div class="card-header">
     <div>
@@ -245,6 +260,10 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     ${renderCommand(card.nextBestAction)}
   </section>
   <section>
+    <h3>Suggested Questions</h3>
+    ${suggestedQuestions}
+  </section>
+  <section>
     <h3>Issues</h3>
     <ul>${issueList}</ul>
   </section>
@@ -253,6 +272,18 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     ${commands}
   </section>
 </article>`;
+}
+
+function renderSuggestedQuestion(question: StudioSuggestedQuestion): string {
+  return `<div class="question">
+  <div class="command-meta">
+    <strong>${escapeHtml(question.intent)}</strong>
+    <span>provider key</span>
+  </div>
+  <p>${escapeHtml(question.question)}</p>
+  <pre><code>${escapeHtml(question.saveCommand)}</code></pre>
+  <button type="button" data-copy="${escapeAttribute(question.saveCommand)}">Copy</button>
+</div>`;
 }
 
 function renderCommand(command: StudioCommand): string {
@@ -347,15 +378,15 @@ dt{font-size:11px;color:#526064;text-transform:uppercase;letter-spacing:.06em}
 dd{margin:2px 0 0;font-size:13px;word-break:break-word}
 ul{margin:0;padding-left:18px;font-size:13px}
 .muted{color:#526064}
-.command{position:relative;border:1px solid #d9dedf;border-radius:8px;padding:10px;background:#fbfcfc;margin-bottom:8px}
+.command,.question{position:relative;border:1px solid #d9dedf;border-radius:8px;padding:10px;background:#fbfcfc;margin-bottom:8px}
 .command-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#526064}
 .command-meta strong{color:#1c2528}
-.command p{font-size:12px;color:#526064;margin-top:6px}
+.command p,.question p{font-size:12px;color:#526064;margin-top:6px}
 pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;background:#eef1f2;border-radius:6px;padding:9px;padding-right:58px}
 button{position:absolute;right:10px;bottom:10px;border:1px solid #9aa7aa;background:#ffffff;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer}
 .empty{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px}
 @media (max-width:720px){header{align-items:flex-start;flex-direction:column;padding:22px 18px}.root{text-align:left}main{padding:18px}.grid{grid-template-columns:1fr}.meta{grid-template-columns:1fr}}
-@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p{color:#a8b4b8}.command{background:#151c1f;border-color:#334044}.command-meta strong{color:#edf1f2}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
+@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p{color:#a8b4b8}.command,.question{background:#151c1f;border-color:#334044}.command-meta strong{color:#edf1f2}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
 `;
 }
 
