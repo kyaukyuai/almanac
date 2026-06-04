@@ -11,6 +11,49 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.13.0] — 2026-06-04
+
+### Added
+
+- **Personal maintenance reports.** `almanac maintain <id>` now composes
+  refresh due state, benchmark readiness, ask-suite status, registration drift,
+  cleanup candidates, repairs, planned steps, provider requirements, and next
+  actions into one dry-run-first maintenance report.
+- **Maintenance apply artifacts.** `almanac maintain <id> --apply` can run due
+  provider-free refresh and validation work, save `.runs/maintain-*.json`
+  evidence, and surface locked or provider-required attempts without hiding
+  partial progress.
+- **Root repair and cleanup surfaces.** `almanac repair` and `almanac cleanup`
+  turn doctor/status findings into explicit dry-run candidates before any
+  low-risk registration or saved-run cleanup is applied.
+- **Scheduler handoff.** `almanac schedule print <id>` renders caller-owned
+  cron, launchd, and GitHub Actions snippets with environment checklists,
+  log paths, and due-only apply variants without installing a resident daemon.
+- **Ask fixture upkeep.** `ask-fixtures init` and `ask-fixtures add-from-run`
+  keep saved-answer promotion explicit and reviewable, including safeguards
+  against non-replayable abstention fixture promotion.
+- **v0.13 RC smoke runbook.** `docs/v0.13-rc-smoke.md` covers source and linked
+  CLI sanity, sqlite-demo provider-free maintenance, provider boundary checks,
+  repair/cleanup previews, scheduler handoff, and credentialed Enterprise AI
+  compile/ask/replay validation.
+
+### Changed
+
+- **Personal almanac posture.** The documented lifecycle now continues past
+  install/import/status into routine maintenance: dry-run, apply, inspect
+  saved evidence, and hand off scheduling to the caller's OS or CI.
+- **Provider boundary visibility.** Maintenance dry-runs and apply results
+  distinguish provider-free deterministic validation from provider-backed
+  refresh work instead of implying all maintenance can run without keys.
+
+### Fixed
+
+- **Maintenance evidence preservation.** Failed or blocked maintenance attempts
+  are saved as artifacts when possible, so later `status`, `profile`, `doctor`,
+  and `runs` views can explain what happened.
+- **Scheduler copy-paste safety.** Generated snippets default to read-only
+  dry-runs and require `--apply` before rendering due-only mutating commands.
+
 ## [0.12.0] — 2026-06-03
 
 ### Added

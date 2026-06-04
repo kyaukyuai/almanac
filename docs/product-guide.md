@@ -292,6 +292,9 @@ The default snippet runs a read-only maintenance dry-run. `--apply` switches the
 rendered command to `maintain --apply --due-only` and should be reviewed before
 installation.
 
+For the v0.13 personal maintenance release-candidate smoke sequence, see
+[`docs/v0.13-rc-smoke.md`](./v0.13-rc-smoke.md).
+
 ## Run artifacts
 
 Use `almanac run --save` when a local tool invocation should leave an audit
