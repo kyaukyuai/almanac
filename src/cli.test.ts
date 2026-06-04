@@ -926,6 +926,21 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).not.toContain("benchmark     ");
   });
 
+  test("studio rejects non-local bind hosts before startup", async () => {
+    const result = runCli([
+      "studio",
+      "--host",
+      "0.0.0.0",
+      "--port",
+      "0",
+      "--root",
+      root,
+    ]);
+
+    expect(result.status).toBe(1);
+    expect(result.stderr).toContain("studio only binds to localhost");
+  });
+
   test("maintain --json emits a provider-free dry-run maintenance report", async () => {
     await writeLegacyCountFixture({ completed: true });
     await writeFile(join(root, "almanac-legacy-0.1.0.tar.gz"), "fake", "utf8");

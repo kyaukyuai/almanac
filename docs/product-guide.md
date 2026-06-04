@@ -97,6 +97,23 @@ and ordered next actions. It is provider-free and complements `inspect` and
 `profile`: use `status` to decide whether the almanac is usable now, then use
 the detailed commands when a next action points there.
 
+## Local studio
+
+```bash
+almanac studio --root "$tmp"
+almanac studio --host 127.0.0.1 --port 4631 --root "$tmp"
+```
+
+`studio` starts a read-only localhost dashboard for the selected root. It
+shows installed almanacs, health, references, checks, answer readiness, refresh
+status, registration status, latest history, issues, and the next best action.
+It does not mutate files, fixtures, registrations, or artifacts. Mutating
+actions are shown only as copyable CLI commands.
+
+The server binds to localhost only. Use Ctrl-C to stop it. The first version is
+intentionally plain: it is an orientation surface for personal/local use, not a
+hosted management plane.
+
 ## Registration visibility
 
 ```bash
