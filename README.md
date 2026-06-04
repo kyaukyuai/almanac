@@ -92,11 +92,13 @@ bun link
 
 ## Quick Start
 
-Run the offline demo first. It does not require API keys.
+Ask Almanac for the safest first step. This does not require API keys.
 
 ```bash
 tmp=$(mktemp -d)
+almanac start --root "$tmp"
 almanac demo --root "$tmp"
+almanac start --root "$tmp"
 almanac list --root "$tmp"
 almanac status sqlite-demo --root "$tmp"
 almanac inspect sqlite-demo --root "$tmp"

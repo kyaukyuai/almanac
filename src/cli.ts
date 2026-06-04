@@ -8,6 +8,7 @@
  *                                          interrupted run)
  *   almanac demo [id] [opts]               create a complete offline demo
  *                                          almanac with curated fixtures
+ *   almanac start [opts]                   guide first-run / next action
  *   almanac update <id> [opts]             refresh an existing almanac
  *                                          (resets stages from --from-stage
  *                                          onwards and re-runs the pipeline)
@@ -1818,6 +1819,11 @@ interface StatusOptions {
   json?: boolean;
 }
 
+interface StartOptions {
+  root: string;
+  json?: boolean;
+}
+
 interface MaintainOptions {
   root: string;
   json?: boolean;
@@ -2263,6 +2269,53 @@ interface SchedulePrintReport {
   environment: ScheduleEnvironmentItem[];
   snippet: string;
   notes: string[];
+}
+
+type StartReportStatus = "empty" | "ready" | "attention";
+
+interface StartProviderStatus {
+  anthropic: "set" | "missing";
+  braveSearch: "set" | "missing";
+  embeddings: "configured" | "not-configured";
+}
+
+interface StartAction {
+  label: string;
+  command: string;
+  reason: string;
+  providerRequired: boolean;
+  mutates: boolean;
+}
+
+interface StartAlmanacSummary {
+  id: string;
+  name: string;
+  health: LifecycleOverallStatus;
+  usability: LifecycleUsability;
+  references: {
+    extractedKnowledge: number | null;
+    tools: number | null;
+    retrieval: string | null;
+  };
+  checks: {
+    validation: LifecycleBenchmarkStatus;
+    answer: AnswerReadinessStatus | "unknown";
+    refresh: LifecycleRefreshStatus;
+  };
+  issues: string[];
+  nextAction: StartAction;
+}
+
+interface StartReport {
+  schemaVersion: "0.1.0";
+  root: string;
+  checkedAt: string;
+  status: StartReportStatus;
+  summary: string;
+  provider: StartProviderStatus;
+  almanacs: StartAlmanacSummary[];
+  nextBestAction: StartAction;
+  nextActions: StartAction[];
 }
 
 async function readLifecycleInventory(root: string): Promise<LifecycleInventoryItem[]> {
@@ -3372,6 +3425,261 @@ function uniqueStrings(values: string[]): string[] {
 
 function unknownErrorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+async function buildStartReport(
+  opts: StartOptions,
+  now = new Date(),
+): Promise<StartReport> {
+  const items = await readLifecycleInventory(opts.root);
+  const provider = startProviderStatus();
+  if (items.length === 0) {
+    const demoAction = startDemoAction(opts.root);
+    return {
+      schemaVersion: "0.1.0",
+      root: opts.root,
+      checkedAt: now.toISOString(),
+      status: "empty",
+      summary: "No almanacs found. Start with the offline demo.",
+      provider,
+      almanacs: [],
+      nextBestAction: demoAction,
+      nextActions: [
+        demoAction,
+        {
+          label: "Check local setup",
+          command: `almanac doctor${rootArg(opts.root)}`,
+          reason:
+            "Doctor checks runtime readiness, provider keys, and root hygiene without creating anything.",
+          providerRequired: false,
+          mutates: false,
+        },
+      ],
+    };
+  }
+
+  const almanacs = items.map((item) => startAlmanacSummary(item, opts.root));
+  const focus = chooseStartFocus(almanacs);
+  const status = almanacs.every((item) => item.health === "ok") ? "ready" : "attention";
+  const attentionCount = almanacs.filter((item) => item.health !== "ok").length;
+  const summary =
+    status === "ready"
+      ? `${almanacs.length} almanac(s) found and ready.`
+      : `${almanacs.length} almanac(s) found; ${attentionCount} need attention.`;
+
+  return {
+    schemaVersion: "0.1.0",
+    root: opts.root,
+    checkedAt: now.toISOString(),
+    status,
+    summary,
+    provider,
+    almanacs,
+    nextBestAction: focus.nextAction,
+    nextActions: uniqueStartActions([
+      focus.nextAction,
+      {
+        label: "Review installed almanacs",
+        command: `almanac list${rootArg(opts.root)}`,
+        reason: "List all local almanacs with compact health and count summaries.",
+        providerRequired: false,
+        mutates: false,
+      },
+      {
+        label: "Run maintenance dry-run",
+        command: `almanac maintain ${focus.id} --dry-run${rootArg(opts.root)}`,
+        reason: "Maintenance dry-run explains due validation, repairs, and cleanup before writing.",
+        providerRequired: false,
+        mutates: false,
+      },
+    ]),
+  };
+}
+
+function startProviderStatus(): StartProviderStatus {
+  const embeddings = resolveEmbeddingProviderConfig(process.env);
+  return {
+    anthropic:
+      process.env.ANTHROPIC_API_KEY === undefined ||
+      process.env.ANTHROPIC_API_KEY.length === 0
+        ? "missing"
+        : "set",
+    braveSearch:
+      process.env.BRAVE_SEARCH_API_KEY === undefined ||
+      process.env.BRAVE_SEARCH_API_KEY.length === 0
+        ? "missing"
+        : "set",
+    embeddings: embeddings.status === "configured" ? "configured" : "not-configured",
+  };
+}
+
+function startDemoAction(root: string): StartAction {
+  return {
+    label: "Create the offline demo",
+    command: `almanac demo${rootArg(root)}`,
+    reason:
+      "The demo is provider-free and creates a complete sample with references, checks, and tools.",
+    providerRequired: false,
+    mutates: true,
+  };
+}
+
+function startAlmanacSummary(
+  item: LifecycleInventoryItem,
+  root: string,
+): StartAlmanacSummary {
+  const usability = lifecycleUsability(item);
+  return {
+    id: item.almanacId,
+    name: item.displayName,
+    health: item.lifecycle.status,
+    usability,
+    references: {
+      extractedKnowledge: item.lifecycle.knowledge.facts,
+      tools: item.lifecycle.knowledge.tools,
+      retrieval: item.lifecycle.knowledge.retrieval,
+    },
+    checks: {
+      validation: item.lifecycle.benchmark.status,
+      answer: item.lifecycle.answer.status,
+      refresh: item.lifecycle.refresh.status,
+    },
+    issues: item.lifecycle.issues,
+    nextAction: startActionForItem(item, root),
+  };
+}
+
+function startActionForItem(item: LifecycleInventoryItem, root: string): StartAction {
+  const rootSuffix = rootArg(root);
+  if (item.lifecycle.status === "broken" || item.lifecycle.status === "failed") {
+    return {
+      label: "Review the blocked almanac",
+      command: `almanac status ${item.almanacId}${rootSuffix}`,
+      reason: item.lifecycle.issues[0] ?? "The almanac is not currently usable.",
+      providerRequired: false,
+      mutates: false,
+    };
+  }
+  if (item.lifecycle.benchmark.status !== "passed") {
+    const hasBenchmarkFixtures =
+      item.lifecycle.benchmark.positiveFixtures !== null ||
+      item.lifecycle.benchmark.negativeFixtures !== null;
+    return {
+      label: hasBenchmarkFixtures ? "Run validation checks" : "Create validation checks",
+      command: hasBenchmarkFixtures
+        ? `almanac benchmark ${item.almanacId}${rootSuffix}`
+        : `almanac benchmark ${item.almanacId} --init${rootSuffix}`,
+      reason:
+        "Validation checks make sure compiled tools still return cited, expected results.",
+      providerRequired: false,
+      mutates: !hasBenchmarkFixtures,
+    };
+  }
+  if (item.lifecycle.answer.status !== "ready") {
+    return {
+      label: "Create answer checks",
+      command: `almanac ask-fixtures init ${item.almanacId}${rootSuffix}`,
+      reason:
+        "Answer checks let Almanac replay saved answers and report answer readiness.",
+      providerRequired: false,
+      mutates: true,
+    };
+  }
+  if (item.lifecycle.refresh.status === "due") {
+    return {
+      label: "Review due maintenance",
+      command: `almanac maintain ${item.almanacId} --dry-run${rootSuffix}`,
+      reason: "Maintenance dry-run shows refresh and validation work before applying it.",
+      providerRequired: false,
+      mutates: false,
+    };
+  }
+  return {
+    label: "Open status",
+    command: `almanac status ${item.almanacId}${rootSuffix}`,
+    reason: "This almanac is ready; status shows references, checks, and recent history.",
+    providerRequired: false,
+    mutates: false,
+  };
+}
+
+function chooseStartFocus(items: StartAlmanacSummary[]): StartAlmanacSummary {
+  return [...items].sort((a, b) => startFocusScore(b) - startFocusScore(a))[0]!;
+}
+
+function startFocusScore(item: StartAlmanacSummary): number {
+  const healthScore: Record<LifecycleOverallStatus, number> = {
+    broken: 100,
+    failed: 90,
+    attention: 50,
+    ok: 0,
+  };
+  let score = healthScore[item.health];
+  if (item.usability.status === "not-usable") score += 20;
+  if (item.usability.status === "limited") score += 10;
+  if (item.checks.validation !== "passed") score += 8;
+  if (item.checks.answer !== "ready") score += 6;
+  if (item.checks.refresh === "due") score += 2;
+  return score;
+}
+
+function uniqueStartActions(actions: StartAction[]): StartAction[] {
+  const seen = new Set<string>();
+  const out: StartAction[] = [];
+  for (const action of actions) {
+    if (seen.has(action.command)) continue;
+    seen.add(action.command);
+    out.push(action);
+  }
+  return out;
+}
+
+async function cmdStart(opts: StartOptions): Promise<void> {
+  const report = await buildStartReport(opts);
+  if (opts.json) {
+    process.stdout.write(JSON.stringify(report, null, 2) + "\n");
+    return;
+  }
+  process.stdout.write("almanac start\n");
+  process.stdout.write(`  root          ${report.root}\n`);
+  process.stdout.write(`  status        ${report.status} - ${report.summary}\n`);
+  process.stdout.write(
+    `  provider      Anthropic ${report.provider.anthropic}, ` +
+      `Brave Search ${report.provider.braveSearch}, ` +
+      `embeddings ${report.provider.embeddings}\n`,
+  );
+  process.stdout.write(
+    "  vocabulary    references = citable source material, checks = validation, history = saved runs\n",
+  );
+
+  if (report.almanacs.length > 0) {
+    process.stdout.write("\nalmanacs:\n");
+    for (const item of report.almanacs) {
+      process.stdout.write(
+        `  - ${item.id} (${item.name}): health=${item.health}, ` +
+          `usability=${item.usability.status}, ` +
+          `references=${item.references.extractedKnowledge ?? "-"}, ` +
+          `tools=${item.references.tools ?? "-"}, ` +
+          `checks=${item.checks.validation}, answer=${item.checks.answer}, ` +
+          `refresh=${item.checks.refresh}\n`,
+      );
+      if (item.issues.length > 0) {
+        process.stdout.write(`    issue: ${item.issues[0]}\n`);
+      }
+    }
+  }
+
+  process.stdout.write("\nrecommended next step:\n");
+  process.stdout.write(`  ${report.nextBestAction.label}\n`);
+  process.stdout.write(`  reason: ${report.nextBestAction.reason}\n`);
+  process.stdout.write(`  command: ${report.nextBestAction.command}\n`);
+
+  if (report.nextActions.length > 1) {
+    process.stdout.write("\nother useful commands:\n");
+    for (const action of report.nextActions.slice(1)) {
+      process.stdout.write(`  - ${action.label}: ${action.command}\n`);
+    }
+  }
 }
 
 async function cmdList(opts: ListOptions): Promise<void> {
@@ -9535,6 +9843,13 @@ program
   .option("--force", "Replace an existing demo almanac at the same id")
   .addOption(rootOption)
   .action(cmdDemo);
+
+program
+  .command("start")
+  .description("guide first-run setup and show the next best action")
+  .option("--json", "Emit JSON instead of a human-readable guide")
+  .addOption(rootOption)
+  .action(cmdStart);
 
 program
   .command("list")
