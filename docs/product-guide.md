@@ -88,12 +88,14 @@ almanac status sqlite-demo --root "$tmp"
 almanac status sqlite-demo --json --root "$tmp"
 ```
 
-`status` is the operator summary for one installed almanac. It combines compile
-state, actual fact/tool counts, benchmark coverage, answer readiness, refresh
-due state, latest saved runs, issues, and ordered next actions. It is
-provider-free and complements `inspect` and `profile`: use `status` to decide
-whether the almanac is usable now, then use the detailed commands when a next
-action points there.
+`status` is the operator summary for one installed almanac. Its human output
+uses guided terminology: health, references, extracted knowledge, checks,
+answer checks, and history. The JSON keeps the precise machine fields for
+scripts. It combines compile state, actual knowledge/tool counts, validation
+coverage, answer readiness, refresh due state, latest saved history, issues,
+and ordered next actions. It is provider-free and complements `inspect` and
+`profile`: use `status` to decide whether the almanac is usable now, then use
+the detailed commands when a next action points there.
 
 ## Registration visibility
 
@@ -171,15 +173,17 @@ Expected shape:
 
 ```text
 expert profile: sqlite-demo (SQLite Operations Demo)
-  status         usable
-  evidence       3 facts from 3 sources
-  source review  approved, 3 accepted / 0 rejected (docs=3)
-  benchmark      2/2 passed, citationRate 100%
+  health         usable
+  extracted knowledge 3 item(s) from 3 references
+  references     approved, 3 accepted / 0 rejected (docs=3)
+  checks         2/2 passed, citationRate 100%
 ```
 
 Use `profile --json` in scripts or release gates. The JSON includes identity,
 evidence counts, source coverage, fact type/freshness distribution, benchmark
-status, readiness gaps, artifact paths, and next actions.
+status, readiness gaps, artifact paths, and next actions. The human view favors
+the guided vocabulary so non-specialist users do not need to learn the on-disk
+terms before judging readiness.
 
 ## Source review
 

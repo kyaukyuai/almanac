@@ -910,6 +910,22 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.runs.readError).toBeNull();
   });
 
+  test("status human output uses guided terminology", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(["status", "legacy", "--root", root]);
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("health        attention");
+    expect(result.stdout).toContain("references = citable source material");
+    expect(result.stdout).toContain("extracted knowledge present, 7 item(s), 2 tools");
+    expect(result.stdout).toContain("checks        missing");
+    expect(result.stdout).toContain("answer checks not-ready");
+    expect(result.stdout).toContain("latest history none");
+    expect(result.stdout).not.toContain("benchmark     ");
+  });
+
   test("maintain --json emits a provider-free dry-run maintenance report", async () => {
     await writeLegacyCountFixture({ completed: true });
     await writeFile(join(root, "almanac-legacy-0.1.0.tar.gz"), "fake", "utf8");
@@ -988,6 +1004,29 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(report.nextActions).toContainEqual(
       expect.stringContaining("almanac refresh run legacy"),
     );
+  });
+
+  test("maintain human output uses guided terminology", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    await writeFile(join(root, "almanac-legacy-0.1.0.tar.gz"), "fake", "utf8");
+
+    const result = runCli(["maintain", "legacy", "--dry-run", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+      VOYAGE_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("health        due");
+    expect(result.stdout).toContain("references = citable source material");
+    expect(result.stdout).toContain("checks        missing");
+    expect(result.stdout).toContain("answer checks not-ready");
+    expect(result.stdout).toContain("latest history none");
+    expect(result.stdout).toContain("planned checks:");
+    expect(result.stdout).toContain("planned answer checks:");
+    expect(result.stdout).toContain("history cleanup:");
   });
 
   test("maintain --json surfaces stale registration repair candidates", async () => {
@@ -1181,8 +1220,8 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("maintenance: partial");
-    expect(result.stdout).toContain("status        broken");
-    expect(result.stdout).toContain("blocked refresh: almanac artifacts are broken");
+    expect(result.stdout).toContain("health        broken");
+    expect(result.stdout).toContain("blocked refresh: almanac files are broken");
     expect(result.stdout).toContain("broken-directory");
     expect(result.stdout).toContain("manifest.json missing");
   });
@@ -1616,7 +1655,7 @@ describe("almanac CLI legacy artifact counts", () => {
 
     const status = runCli(["status", "sqlite-demo", "--root", root]);
     expect(status.status).toBe(0);
-    expect(status.stdout).toContain("latest maintenance maintenance");
+    expect(status.stdout).toContain("latest maintenance history maintenance");
     expect(status.stdout).toContain("label=pr3-smoke");
   });
 
@@ -2019,7 +2058,7 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("almanac status: failed-status");
-    expect(result.stdout).toContain("status        failed");
+    expect(result.stdout).toContain("health        failed");
     expect(result.stdout).toContain("usability     not-usable");
     expect(result.stdout).toContain("failed stages: 05-fact-extraction");
     expect(result.stdout).toContain(
@@ -2035,7 +2074,7 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("almanac status: partial (partial)");
-    expect(result.stdout).toContain("status        broken");
+    expect(result.stdout).toContain("health        broken");
     expect(result.stdout).toContain("manifest.json missing");
   });
 
@@ -2343,7 +2382,7 @@ describe("almanac CLI legacy artifact counts", () => {
 
     const profile = runCli(["profile", "timeout-fixture", "--root", root]);
     expect(profile.status).toBe(0);
-    expect(profile.stdout).toContain("status         not-ready");
+    expect(profile.stdout).toContain("health         not-ready");
     expect(profile.stdout).toContain(
       "failure guidance: provider or network failure",
     );
@@ -2470,15 +2509,18 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.status).toBe(0);
     expect(profile.stderr).toBe("");
     expect(profile.stdout).toContain("expert profile: sqlite-demo (SQLite Operations Demo)");
-    expect(profile.stdout).toContain("status         usable");
-    expect(profile.stdout).toContain("evidence       3 facts from 3 sources");
+    expect(profile.stdout).toContain("health         usable");
+    expect(profile.stdout).toContain("references = citable source material");
+    expect(profile.stdout).toContain("extracted knowledge 3 item(s) from 3 references");
+    expect(profile.stdout).toContain("references     approved, 3 accepted / 0 rejected");
     expect(profile.stdout).toContain("retrieval      fts-only");
-    expect(profile.stdout).toContain("benchmark      2/2 passed, citationRate 100%");
-    expect(profile.stdout).toContain("answer mode    needs-validation");
-    expect(profile.stdout).toContain("ask fixtures   0 found");
-    expect(profile.stdout).toContain("ask suite      not-run");
+    expect(profile.stdout).toContain("checks         2/2 passed, citationRate 100%");
+    expect(profile.stdout).toContain("knowledge types");
+    expect(profile.stdout).toContain("answer readiness needs-validation");
+    expect(profile.stdout).toContain("answer checks  0 found");
+    expect(profile.stdout).toContain("answer check suite not-run");
     expect(profile.stdout).toContain("quality gate   missing");
-    expect(profile.stdout).toContain("no ask replay fixtures");
+    expect(profile.stdout).toContain("no answer checks");
     expect(profile.stdout).toContain("sqlite-transactions");
 
     const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
@@ -2625,7 +2667,7 @@ describe("almanac CLI product onboarding", () => {
     const profileWithRefresh = runCli(["profile", "sqlite-demo", "--root", root]);
     expect(profileWithRefresh.status).toBe(0);
     expect(profileWithRefresh.stderr).toBe("");
-    expect(profileWithRefresh.stdout).toContain("status         usable");
+    expect(profileWithRefresh.stdout).toContain("health         usable");
     expect(profileWithRefresh.stdout).toContain("refresh        last ok");
     expect(profileWithRefresh.stdout).toContain("label=rc-smoke");
 
@@ -2982,7 +3024,7 @@ describe("almanac CLI product onboarding", () => {
 
     const failedProfile = runCli(["profile", "sqlite-demo", "--root", root]);
     expect(failedProfile.status).toBe(0);
-    expect(failedProfile.stdout).toContain("status         needs-validation");
+    expect(failedProfile.stdout).toContain("health         needs-validation");
     expect(failedProfile.stdout).toContain(
       `latest refresh run failed: ${failedRefreshId}`,
     );
@@ -4163,16 +4205,16 @@ describe("almanac CLI product onboarding", () => {
     ]);
     expect(answerProfileAfterSuite.status).toBe(0);
     expect(answerProfileAfterSuite.stdout).toContain(
-      "answer mode    needs-validation",
+      "answer readiness needs-validation",
     );
     expect(answerProfileAfterSuite.stdout).toContain(
-      "ask fixtures   1 found (tests/ask.jsonl:1)",
+      "answer checks  1 found (tests/ask.jsonl:1)",
     );
     expect(answerProfileAfterSuite.stdout).toContain(
-      "ask suite      passed, 1/1 passed",
+      "answer check suite passed, 1/1 passed",
     );
     expect(answerProfileAfterSuite.stdout).toContain("latest answer  none");
-    expect(answerProfileAfterSuite.stdout).toContain("no saved answer artifacts");
+    expect(answerProfileAfterSuite.stdout).toContain("no saved answer history");
 
     const answerProfileJsonAfterSuite = runCli([
       "profile",
@@ -4276,9 +4318,9 @@ describe("almanac CLI product onboarding", () => {
 
     expect(profile.status).toBe(0);
     expect(profile.stderr).toBe("");
-    expect(profile.stdout).toContain("status         needs-validation");
+    expect(profile.stdout).toContain("health         needs-validation");
     expect(profile.stdout).toContain(
-      "high-trust accepted sources contribute no facts: sqlite-latest-docs (snapshot)",
+      "high-trust accepted references contribute no extracted knowledge: sqlite-latest-docs (snapshot)",
     );
     expect(profile.stdout).not.toContain("sqlite-index-docs (index-only)");
 
@@ -4354,9 +4396,9 @@ describe("almanac CLI product onboarding", () => {
     const profile = runCli(["profile", "sqlite-demo", "--root", root]);
     expect(profile.status).toBe(0);
     expect(profile.stderr).toBe("");
-    expect(profile.stdout).toContain("status         needs-validation");
+    expect(profile.stdout).toContain("health         needs-validation");
     expect(profile.stdout).toContain(
-      "benchmark coverage below minimum: 1 positive / 1 negative / 2 total",
+      "checks coverage below minimum: 1 positive / 1 negative / 2 total",
     );
 
     const profileJson = runCli(["profile", "sqlite-demo", "--root", root, "--json"]);
