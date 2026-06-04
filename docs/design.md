@@ -1185,7 +1185,24 @@ read-only studio HTML/API and localhost boundary checks, Enterprise AI fresh
 compile benchmark at 185 facts and 15/15 passed fixtures, real-provider
 Enterprise AI answer with one citation, and saved-run replay pass.
 
-### v0.15+ (long-tail)
+### v0.15 planned — Guided activation
+
+v0.15 is planned as the Guided Activation release:
+
+- introduce activation milestones derived from existing lifecycle, benchmark,
+  answer readiness, saved answer, replay, and maintenance state,
+- extend natural-language intake into an explicit create path when the user
+  provides references and confirms provider-backed work,
+- surface suggested questions and first-answer next actions before users need
+  to understand answer artifacts,
+- show replay and fixture-promotion guidance after saved answers,
+- upgrade local Studio from passive inventory to an activation dashboard with
+  milestones, suggested questions, and copyable next commands.
+
+See [`docs/v0.15-plan.md`](./v0.15-plan.md) for scope, non-goals, PR sequence,
+and planned release smoke targets.
+
+### v0.16+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
