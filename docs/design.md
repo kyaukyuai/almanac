@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.13.0 shipped** · last updated 2026-06-04.
+Status: **v0.14.0 shipped** · last updated 2026-06-04.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1157,20 +1157,33 @@ Enterprise AI fresh compile benchmark at 407 facts and 15/15 passed fixtures,
 valid real-provider Enterprise AI abstention, saved-run replay pass, and
 maintenance dry-run reporting provider-free planned steps.
 
-### v0.14 planned — First-run guided experience
+### v0.14.0 — First-run guided experience
 
-v0.14 is planned as the First-Run Guided Experience release:
+v0.14.0 shipped the First-Run Guided Experience release:
 
-- add `almanac start` as a no-key guided entry point,
-- add `almanac start "<goal>"` as a natural-language intake and setup plan,
-- introduce user-facing references/checks/history/health vocabulary on guided
-  surfaces while preserving existing artifact schemas,
-- bootstrap sqlite-demo answer readiness without provider credentials,
-- add `almanac studio` as a local read-only dashboard for installed almanacs,
+- `almanac start` adds a no-key guided entry point for empty roots, demo
+  creation, existing almanac status, and next best actions.
+- `almanac start "<goal>"` adds deterministic natural-language intake that
+  drafts slug, scope, source checklist, provider boundary, and runnable
+  commands without writing files or calling a provider.
+- Guided surfaces introduce references, knowledge, checks, answer readiness,
+  history, and health vocabulary while preserving existing artifact schemas.
+- `ask-fixtures init --seed-demo` bootstraps sqlite-demo answer readiness
+  without provider credentials.
+- `almanac studio` adds a local read-only dashboard for installed almanacs,
   health, latest history, and next best actions.
 
 See [`docs/v0.14-plan.md`](./v0.14-plan.md) for scope, non-goals, PR sequence,
-and planned release smoke targets.
+and the shipped implementation sequence. The concrete release-candidate
+runbook is [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md).
+
+The v0.14 release gate passed on 2026-06-04 with `git diff --check`,
+`bun run typecheck`, `bun test`, source and linked CLI checks, provider-free
+guided start, natural-language planning, sqlite-demo answer-readiness bootstrap
+through seeded ask fixtures and refresh-backed ask-suite evidence, local
+read-only studio HTML/API and localhost boundary checks, Enterprise AI fresh
+compile benchmark at 185 facts and 15/15 passed fixtures, real-provider
+Enterprise AI answer with one citation, and saved-run replay pass.
 
 ### v0.15+ (long-tail)
 

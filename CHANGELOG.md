@@ -11,6 +11,43 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.14.0] — 2026-06-04
+
+### Added
+
+- **Guided first-run entry point.** `almanac start` now gives new users a
+  no-key path from an empty root to a concrete next action, existing almanac
+  status, or sqlite-demo creation.
+- **Natural-language intake.** `almanac start "<goal>"` drafts a planning-only
+  setup summary with slug, scope, source checklist, provider boundary, and
+  runnable commands without writing files or calling a provider.
+- **Local read-only studio.** `almanac studio` starts a localhost-only
+  dashboard over installed almanacs, health, latest history, and copyable next
+  commands.
+- **Seeded answer-readiness bootstrap.** `ask-fixtures init --seed-demo`
+  creates a deterministic sqlite-demo answer fixture so no-key users can run
+  `ask-suite` and make answer readiness visible without credentials.
+- **v0.14 RC smoke runbook.** `docs/v0.14-rc-smoke.md` covers guided start,
+  natural-language planning, user-facing vocabulary, seeded answer readiness,
+  studio checks, and credentialed Enterprise AI compile/ask/replay validation.
+
+### Changed
+
+- **Guided vocabulary.** Status, profile, maintenance, and first-run surfaces
+  now expose references, knowledge, checks, answer readiness, history, and next
+  actions in user-facing terms while preserving lower-level artifact schemas.
+- **First-success path.** README and product docs now lead users through
+  `start`, demo, readiness, maintenance, and studio before requiring them to
+  learn sources, facts, fixtures, and artifacts.
+
+### Fixed
+
+- **No-key answer readiness gap.** A fresh sqlite-demo can now reach ready
+  answer posture through seeded deterministic fixtures and saved ask-suite
+  evidence.
+- **Studio safety boundary.** The read-only dashboard is documented and smoked
+  against localhost-only startup, HTML/API inventory checks, and clean shutdown.
+
 ## [0.13.0] — 2026-06-04
 
 ### Added
@@ -991,7 +1028,16 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...HEAD
+[0.14.0]: https://github.com/kyaukyuai/almanac/compare/v0.13.0...v0.14.0
+[0.13.0]: https://github.com/kyaukyuai/almanac/compare/v0.12.0...v0.13.0
+[0.12.0]: https://github.com/kyaukyuai/almanac/compare/v0.11.0...v0.12.0
+[0.11.0]: https://github.com/kyaukyuai/almanac/compare/v0.10.0...v0.11.0
+[0.10.0]: https://github.com/kyaukyuai/almanac/compare/v0.9.0...v0.10.0
+[0.9.0]: https://github.com/kyaukyuai/almanac/compare/v0.8.0...v0.9.0
+[0.8.0]: https://github.com/kyaukyuai/almanac/compare/v0.7.0...v0.8.0
+[0.7.0]: https://github.com/kyaukyuai/almanac/compare/v0.6.0...v0.7.0
+[0.6.0]: https://github.com/kyaukyuai/almanac/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/kyaukyuai/almanac/compare/v0.4.2...v0.5.0
 [0.4.2]: https://github.com/kyaukyuai/almanac/compare/v0.4.1...v0.4.2
 [0.4.1]: https://github.com/kyaukyuai/almanac/compare/v0.4.0...v0.4.1
