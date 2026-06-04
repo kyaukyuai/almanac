@@ -97,6 +97,7 @@ Ask Almanac for the safest first step. This does not require API keys.
 ```bash
 tmp=$(mktemp -d)
 almanac start --root "$tmp"
+almanac start "Build an almanac for production AI governance checks" --root "$tmp"
 almanac demo --root "$tmp"
 almanac start --root "$tmp"
 almanac list --root "$tmp"
@@ -115,6 +116,10 @@ almanac import ./almanac-sqlite-demo-0.1.0.tar.gz --root "$handoff_root" --apply
 almanac status sqlite-demo --root "$handoff_root"
 almanac wiki sqlite-demo --root "$tmp"
 ```
+
+`start "<goal>"` is planning-only: it drafts a domain, scope, reference
+checklist, first questions, and an explicit `almanac new ...` command. It does
+not compile, call a provider, or write files until you run a follow-up command.
 
 The demo creates a complete local almanac with curated SQLite facts, source
 review metadata, default tools, contract files, a Skill adapter, and human
