@@ -1157,7 +1157,22 @@ Enterprise AI fresh compile benchmark at 407 facts and 15/15 passed fixtures,
 valid real-provider Enterprise AI abstention, saved-run replay pass, and
 maintenance dry-run reporting provider-free planned steps.
 
-### v0.14+ (long-tail)
+### v0.14 planned — First-run guided experience
+
+v0.14 is planned as the First-Run Guided Experience release:
+
+- add `almanac start` as a no-key guided entry point,
+- add `almanac start "<goal>"` as a natural-language intake and setup plan,
+- introduce user-facing references/checks/history/health vocabulary on guided
+  surfaces while preserving existing artifact schemas,
+- bootstrap sqlite-demo answer readiness without provider credentials,
+- add `almanac studio` as a local read-only dashboard for installed almanacs,
+  health, latest history, and next best actions.
+
+See [`docs/v0.14-plan.md`](./v0.14-plan.md) for scope, non-goals, PR sequence,
+and planned release smoke targets.
+
+### v0.15+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
