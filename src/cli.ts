@@ -1943,6 +1943,34 @@ type LifecycleBenchmarkStatus =
   | "unreadable";
 type LifecycleRefreshStatus = "due" | "not-due" | "unknown";
 type LifecycleUsabilityStatus = "usable" | "limited" | "not-usable";
+type ActivationMilestone =
+  | "oriented"
+  | "planned"
+  | "compiled"
+  | "validated"
+  | "answer-ready"
+  | "first-answer"
+  | "replayable"
+  | "maintainable";
+type ActivationStatus = "blocked" | "in-progress" | "complete";
+
+interface ActivationNextAction {
+  command: string;
+  reason: string;
+  providerRequired: boolean;
+}
+
+interface ActivationReport {
+  status: ActivationStatus;
+  milestone: ActivationMilestone;
+  milestoneLabel: string;
+  nextMilestone: ActivationMilestone | null;
+  nextMilestoneLabel: string | null;
+  summary: string;
+  evidence: string[];
+  gaps: string[];
+  nextAction: ActivationNextAction | null;
+}
 
 interface LifecycleInventoryItem {
   almanacId: string;
@@ -2026,6 +2054,7 @@ interface AlmanacStatusReport {
   manifest: AlmanacManifest | null;
   status: LifecycleOverallStatus;
   usability: LifecycleUsability;
+  activation: ActivationReport;
   lifecycle: LifecycleInventoryItem["lifecycle"];
   runs: LifecycleLatestRuns;
   nextActions: string[];
@@ -2385,6 +2414,19 @@ async function readAlmanacStatusReport(
       ? [`view saved runs: almanac runs ${id}${rootArg(opts.root)}`]
       : [`inspect runs directory: ${join(dir, ".runs")}`]),
   ]);
+  const lifecycle = {
+    ...item.lifecycle,
+    issues: uniqueStrings([...item.lifecycle.issues, ...runReadError]),
+    nextActions,
+  };
+  const activation = buildActivationReport({
+    almanacId: item.almanacId,
+    manifest: item.manifest,
+    lifecycle,
+    runs,
+    nextActions,
+    root: opts.root,
+  });
 
   return {
     almanacId: item.almanacId,
@@ -2393,11 +2435,8 @@ async function readAlmanacStatusReport(
     manifest: item.manifest,
     status: item.lifecycle.status,
     usability: lifecycleUsability(item),
-    lifecycle: {
-      ...item.lifecycle,
-      issues: uniqueStrings([...item.lifecycle.issues, ...runReadError]),
-      nextActions,
-    },
+    activation,
+    lifecycle,
     runs,
     nextActions,
   };
@@ -3345,6 +3384,268 @@ function lifecycleUsability(item: LifecycleInventoryItem): LifecycleUsability {
   };
 }
 
+const ACTIVATION_MILESTONE_LABELS: Record<ActivationMilestone, string> = {
+  oriented: "oriented",
+  planned: "planned",
+  compiled: "compiled",
+  validated: "validated",
+  "answer-ready": "answer ready",
+  "first-answer": "first answer saved",
+  replayable: "replayable",
+  maintainable: "maintainable",
+};
+
+function buildActivationReport(args: {
+  almanacId: string;
+  manifest: AlmanacManifest | null;
+  lifecycle: AlmanacStatusReport["lifecycle"];
+  runs: LifecycleLatestRuns;
+  nextActions: string[];
+  root: string;
+}): ActivationReport {
+  const lifecycle = args.lifecycle;
+  const rootSuffix = rootArg(args.root);
+  const blocked =
+    lifecycle.status === "broken" ||
+    lifecycle.status === "failed" ||
+    lifecycle.compile.status === "failed" ||
+    lifecycle.knowledge.status === "unreadable" ||
+    lifecycle.benchmark.status === "failed";
+  const evidence: string[] = ["almanac is visible in this root"];
+  const gaps: string[] = [];
+
+  const compiled =
+    lifecycle.compile.status === "ok" &&
+    lifecycle.knowledge.status === "present" &&
+    (lifecycle.knowledge.facts ?? 0) > 0 &&
+    (lifecycle.knowledge.tools ?? 0) > 0 &&
+    lifecycle.knowledge.toolsReadable;
+  if (compiled) {
+    evidence.push(
+      `compiled with ${lifecycle.knowledge.facts ?? 0} extracted knowledge item(s) and ${lifecycle.knowledge.tools ?? 0} tool(s)`,
+    );
+  } else {
+    gaps.push(compiledGap(lifecycle));
+  }
+
+  const validated = compiled && lifecycle.benchmark.status === "passed";
+  if (validated) {
+    evidence.push(
+      lifecycle.benchmark.total === null
+        ? "checks passed"
+        : `checks passed ${lifecycle.benchmark.passed ?? 0}/${lifecycle.benchmark.total}`,
+    );
+  } else if (compiled) {
+    gaps.push(`checks are ${lifecycle.benchmark.status}`);
+  }
+
+  const answerReady = validated && lifecycle.answer.status === "ready";
+  if (answerReady) {
+    evidence.push("answer readiness is ready");
+  } else if (validated) {
+    gaps.push(`answer readiness is ${lifecycle.answer.status}`);
+  }
+
+  const latestAnswer = args.runs.byKind.answer;
+  const firstAnswer =
+    latestAnswer !== null &&
+    (latestAnswer.status === "ok" || latestAnswer.status === "abstained");
+  if (firstAnswer) {
+    evidence.push(
+      `saved answer history ${latestAnswer.runId} is ${latestAnswer.status}`,
+    );
+  } else if (answerReady) {
+    gaps.push("no saved answer history yet");
+  }
+
+  const replayable =
+    firstAnswer &&
+    answerReady &&
+    (lifecycle.answer.suite?.status === "passed" ||
+      lifecycle.answer.latestSuite === "passed");
+  if (replayable) {
+    evidence.push("saved answer checks are replayable");
+  } else if (firstAnswer) {
+    gaps.push("saved answer has not been promoted into a passing answer check");
+  }
+
+  const latestMaintenance = args.runs.byKind.maintenance;
+  const maintainable =
+    !blocked &&
+    latestMaintenance !== null &&
+    (latestMaintenance.status === "ok" ||
+      latestMaintenance.status === "not-due" ||
+      latestMaintenance.status === "skipped");
+  if (maintainable) {
+    evidence.push(`maintenance history ${latestMaintenance.runId} is ${latestMaintenance.status}`);
+  } else if (replayable || answerReady) {
+    gaps.push("maintenance dry-run/apply history is not recorded yet");
+  }
+
+  const milestone: ActivationMilestone = maintainable
+    ? "maintainable"
+    : replayable
+      ? "replayable"
+      : firstAnswer
+        ? "first-answer"
+        : answerReady
+          ? "answer-ready"
+          : validated
+            ? "validated"
+            : compiled
+              ? "compiled"
+              : "oriented";
+  const nextMilestone = nextActivationMilestone({
+    compiled,
+    validated,
+    answerReady,
+    firstAnswer,
+    replayable,
+    maintainable,
+  });
+  const nextAction = activationNextAction({
+    almanacId: args.almanacId,
+    manifest: args.manifest,
+    lifecycle,
+    runs: args.runs,
+    nextActions: args.nextActions,
+    rootSuffix,
+    nextMilestone,
+  });
+  const status: ActivationStatus =
+    blocked ? "blocked" : nextMilestone === null ? "complete" : "in-progress";
+  const milestoneLabel = ACTIVATION_MILESTONE_LABELS[milestone];
+  const nextMilestoneLabel =
+    nextMilestone === null ? null : ACTIVATION_MILESTONE_LABELS[nextMilestone];
+  const summary =
+    nextMilestoneLabel === null
+      ? `${milestoneLabel}; routine maintenance is available`
+      : `${milestoneLabel}; next ${nextMilestoneLabel}`;
+
+  return {
+    status,
+    milestone,
+    milestoneLabel,
+    nextMilestone,
+    nextMilestoneLabel,
+    summary,
+    evidence: uniqueStrings(evidence),
+    gaps: uniqueStrings(gaps),
+    nextAction,
+  };
+}
+
+function compiledGap(lifecycle: AlmanacStatusReport["lifecycle"]): string {
+  if (lifecycle.compile.status !== "ok") return `compile is ${lifecycle.compile.status}`;
+  if (lifecycle.knowledge.status !== "present") {
+    return `extracted knowledge is ${lifecycle.knowledge.status}`;
+  }
+  if ((lifecycle.knowledge.facts ?? 0) <= 0) {
+    return "no extracted knowledge is available";
+  }
+  if ((lifecycle.knowledge.tools ?? 0) <= 0) return "no tools are available";
+  if (!lifecycle.knowledge.toolsReadable) return "tools are unreadable";
+  return "compile is not usable yet";
+}
+
+function nextActivationMilestone(args: {
+  compiled: boolean;
+  validated: boolean;
+  answerReady: boolean;
+  firstAnswer: boolean;
+  replayable: boolean;
+  maintainable: boolean;
+}): ActivationMilestone | null {
+  if (args.maintainable) return null;
+  if (!args.compiled) return "compiled";
+  if (!args.validated) return "validated";
+  if (!args.answerReady) return "answer-ready";
+  if (!args.firstAnswer) return "first-answer";
+  if (!args.replayable) return "replayable";
+  if (!args.maintainable) return "maintainable";
+  return null;
+}
+
+function activationNextAction(args: {
+  almanacId: string;
+  manifest: AlmanacManifest | null;
+  lifecycle: AlmanacStatusReport["lifecycle"];
+  runs: LifecycleLatestRuns;
+  nextActions: string[];
+  rootSuffix: string;
+  nextMilestone: ActivationMilestone | null;
+}): ActivationNextAction | null {
+  const command =
+    args.nextMilestone === null
+      ? `almanac maintain ${args.almanacId} --dry-run${args.rootSuffix}`
+      : activationNextCommand(args);
+  if (command === null) return null;
+  return {
+    command,
+    reason:
+      args.nextMilestone === null
+        ? "keep the almanac maintainable"
+        : `advance to ${ACTIVATION_MILESTONE_LABELS[args.nextMilestone]}`,
+    providerRequired: activationCommandNeedsProvider(command),
+  };
+}
+
+function activationNextCommand(args: {
+  almanacId: string;
+  manifest: AlmanacManifest | null;
+  lifecycle: AlmanacStatusReport["lifecycle"];
+  runs: LifecycleLatestRuns;
+  nextActions: string[];
+  rootSuffix: string;
+  nextMilestone: ActivationMilestone | null;
+}): string | null {
+  if (args.nextMilestone === null) return null;
+  if (args.nextMilestone === "compiled") {
+    return (
+      firstActionContaining(args.nextActions, "almanac update ") ??
+      firstActionContaining(args.nextActions, "rebuild knowledge index") ??
+      args.nextActions[0] ??
+      null
+    );
+  }
+  if (args.nextMilestone === "validated") {
+    return (
+      firstActionContaining(args.nextActions, "almanac benchmark ") ??
+      `almanac benchmark ${args.almanacId}${args.rootSuffix}`
+    );
+  }
+  if (args.nextMilestone === "answer-ready") {
+    return (
+      firstActionContaining(args.nextActions, "ask-fixtures ") ??
+      firstActionContaining(args.nextActions, "ask-suite ") ??
+      firstActionContaining(args.nextActions, "almanac ask ") ??
+      answerChecksInitCommand(args.almanacId, args.rootSuffix, args.manifest)
+    );
+  }
+  if (args.nextMilestone === "first-answer") {
+    return `almanac ask ${args.almanacId} "<question>" --save${args.rootSuffix}`;
+  }
+  if (args.nextMilestone === "replayable") {
+    const latestAnswer = args.runs.byKind.answer;
+    return latestAnswer === null
+      ? `almanac ask ${args.almanacId} "<question>" --save${args.rootSuffix}`
+      : `almanac ask-replay ${args.almanacId} --from-runs${args.rootSuffix}`;
+  }
+  if (args.nextMilestone === "maintainable") {
+    return `almanac maintain ${args.almanacId} --dry-run${args.rootSuffix}`;
+  }
+  return null;
+}
+
+function activationCommandNeedsProvider(command: string): boolean {
+  return (
+    command.startsWith("almanac new ") ||
+    command.includes(" almanac new ") ||
+    command.startsWith("almanac ask ") ||
+    command.includes(" almanac ask ")
+  );
+}
+
 function compactRunSummary(run: RunToolArtifactSummary | null): string {
   if (run === null) return "none";
   const subject =
@@ -3380,6 +3681,14 @@ function formatLifecycleBenchmark(
       : `, fixtures ${benchmark.positiveFixtures} positive / ${benchmark.negativeFixtures} negative`;
   const issue = benchmark.issue === undefined ? "" : ` (${benchmark.issue})`;
   return `${result}${citation}${fixtures}${issue}`;
+}
+
+function formatActivationReport(activation: ActivationReport): string {
+  const next =
+    activation.nextMilestoneLabel === null
+      ? ""
+      : ` -> ${activation.nextMilestoneLabel}`;
+  return `${activation.milestoneLabel}${next}, ${activation.status}`;
 }
 
 function formatLifecycleAnswer(
@@ -4057,6 +4366,17 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
   process.stdout.write(
     `  usability     ${report.usability.status} - ${formatGuidedIssue(report.usability.reason)}\n`,
   );
+  process.stdout.write(
+    `  activation    ${formatActivationReport(report.activation)}\n`,
+  );
+  if (report.activation.nextAction !== null) {
+    const provider = report.activation.nextAction.providerRequired
+      ? " (provider required)"
+      : "";
+    process.stdout.write(
+      `  activation next ${formatGuidedAction(report.activation.nextAction.command)}${provider}\n`,
+    );
+  }
   process.stdout.write(`  vocabulary    ${guidedVocabularyLine()}\n`);
   process.stdout.write(`  dir           ${report.almanacDir}\n`);
   if (report.manifest !== null) {

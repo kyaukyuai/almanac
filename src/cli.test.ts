@@ -855,6 +855,13 @@ describe("almanac CLI legacy artifact counts", () => {
       almanacId: string;
       status: string;
       usability: { status: string; reason: string };
+      activation: {
+        status: string;
+        milestone: string;
+        nextMilestone: string | null;
+        nextAction: { command: string; providerRequired: boolean } | null;
+        gaps: string[];
+      };
       lifecycle: {
         compile: { status: string; completed: number };
         knowledge: {
@@ -885,6 +892,18 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.status).toBe("attention");
     expect(status.usability.status).toBe("limited");
     expect(status.usability.reason).toContain("benchmark missing");
+    expect(status.activation).toEqual(
+      expect.objectContaining({
+        status: "in-progress",
+        milestone: "compiled",
+        nextMilestone: "validated",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac benchmark legacy --init"),
+          providerRequired: false,
+        }),
+      }),
+    );
+    expect(status.activation.gaps).toContain("checks are missing");
     expect(status.lifecycle.compile).toMatchObject({
       status: "ok",
       completed: STAGE_IDS.length,
@@ -918,6 +937,8 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("health        attention");
+    expect(result.stdout).toContain("activation    compiled -> validated, in-progress");
+    expect(result.stdout).toContain("activation next create validation checks: almanac benchmark legacy --init");
     expect(result.stdout).toContain("references = citable source material");
     expect(result.stdout).toContain("extracted knowledge present, 7 item(s), 2 tools");
     expect(result.stdout).toContain("checks        missing");
@@ -1670,8 +1691,32 @@ describe("almanac CLI legacy artifact counts", () => {
 
     const status = runCli(["status", "sqlite-demo", "--root", root]);
     expect(status.status).toBe(0);
+    expect(status.stdout).toContain("activation    maintainable, complete");
     expect(status.stdout).toContain("latest maintenance history maintenance");
     expect(status.stdout).toContain("label=pr3-smoke");
+
+    const statusJson = runCli(["status", "sqlite-demo", "--json", "--root", root]);
+    expect(statusJson.status).toBe(0);
+    expect(
+      (JSON.parse(statusJson.stdout) as {
+        activation: {
+          status: string;
+          milestone: string;
+          nextMilestone: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).activation,
+    ).toEqual(
+      expect.objectContaining({
+        status: "complete",
+        milestone: "maintainable",
+        nextMilestone: null,
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac maintain sqlite-demo --dry-run"),
+          providerRequired: false,
+        }),
+      }),
+    );
   });
 
   test("maintain --apply runs ask-suite with provider-free refresh when fixtures exist", async () => {
@@ -3058,6 +3103,32 @@ describe("almanac CLI product onboarding", () => {
     const demo = runCli(["demo", "--root", root], noProviderEnv);
     expect(demo.status).toBe(0);
 
+    const initialStatus = runCli(
+      ["status", "sqlite-demo", "--json", "--root", root],
+      noProviderEnv,
+    );
+    expect(initialStatus.status).toBe(0);
+    expect(
+      (JSON.parse(initialStatus.stdout) as {
+        activation: {
+          milestone: string;
+          nextMilestone: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).activation,
+    ).toEqual(
+      expect.objectContaining({
+        milestone: "validated",
+        nextMilestone: "answer-ready",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining(
+            "ask-fixtures init sqlite-demo --seed-demo",
+          ),
+          providerRequired: false,
+        }),
+      }),
+    );
+
     const dryRun = runCli(
       ["maintain", "sqlite-demo", "--dry-run", "--json", "--root", root],
       noProviderEnv,
@@ -3158,6 +3229,30 @@ describe("almanac CLI product onboarding", () => {
     expect(profile.stdout).toContain("answer checks  1 found");
     expect(profile.stdout).toContain("quality gate   pass");
     expect(profile.stdout).toContain("save real answer history");
+
+    const readyStatus = runCli(
+      ["status", "sqlite-demo", "--json", "--root", root],
+      noProviderEnv,
+    );
+    expect(readyStatus.status).toBe(0);
+    expect(
+      (JSON.parse(readyStatus.stdout) as {
+        activation: {
+          milestone: string;
+          nextMilestone: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).activation,
+    ).toEqual(
+      expect.objectContaining({
+        milestone: "answer-ready",
+        nextMilestone: "first-answer",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining('almanac ask sqlite-demo "<question>" --save'),
+          providerRequired: true,
+        }),
+      }),
+    );
   }, { timeout: 12_000 });
 
   test("run invokes compiled tools with stable output and exit codes", async () => {
@@ -3963,6 +4058,35 @@ describe("almanac CLI product onboarding", () => {
         observed: expect.objectContaining({
           status: "ok",
           citationsCount: 1,
+        }),
+      }),
+    );
+
+    const firstAnswerStatus = runCli([
+      "status",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(firstAnswerStatus.status).toBe(0);
+    expect(
+      (JSON.parse(firstAnswerStatus.stdout) as {
+        activation: {
+          milestone: string;
+          nextMilestone: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).activation,
+    ).toEqual(
+      expect.objectContaining({
+        milestone: "first-answer",
+        nextMilestone: "answer-ready",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining(
+            "ask-fixtures init sqlite-demo",
+          ),
+          providerRequired: false,
         }),
       }),
     );
