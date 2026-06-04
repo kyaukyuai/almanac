@@ -488,6 +488,108 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("start guides an empty root to the provider-free demo", () => {
+    const result = runCli(["start", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    expect(result.stdout).toContain("almanac start");
+    expect(result.stdout).toContain("status        empty");
+    expect(result.stdout).toContain("Create the offline demo");
+    expect(result.stdout).toContain(`command: almanac demo --root ${root}`);
+    expect(result.stdout).toContain("references = citable source material");
+    expect(result.stdout).toContain("Anthropic missing");
+  });
+
+  test("start --json emits a stable empty-root guide", () => {
+    const result = runCli(["start", "--json", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      schemaVersion: string;
+      status: string;
+      almanacs: unknown[];
+      provider: { anthropic: string; braveSearch: string };
+      nextBestAction: {
+        label: string;
+        command: string;
+        providerRequired: boolean;
+        mutates: boolean;
+      };
+      nextActions: Array<{ command: string }>;
+    };
+
+    expect(parsed.schemaVersion).toBe("0.1.0");
+    expect(parsed.status).toBe("empty");
+    expect(parsed.almanacs).toEqual([]);
+    expect(parsed.provider).toMatchObject({
+      anthropic: "missing",
+      braveSearch: "missing",
+    });
+    expect(parsed.nextBestAction).toMatchObject({
+      label: "Create the offline demo",
+      command: `almanac demo --root ${root}`,
+      providerRequired: false,
+      mutates: true,
+    });
+    expect(parsed.nextActions.map((action) => action.command)).toContain(
+      `almanac doctor --root ${root}`,
+    );
+  });
+
+  test("start summarizes existing almanacs and recommends validation", async () => {
+    await writeLegacyCountFixture({ completed: true });
+
+    const result = runCli(["start", "--json", "--root", root], {
+      ANTHROPIC_API_KEY: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      summary: string;
+      almanacs: Array<{
+        id: string;
+        name: string;
+        health: string;
+        usability: { status: string };
+        references: { extractedKnowledge: number; tools: number };
+        checks: { validation: string; answer: string; refresh: string };
+        nextAction: { label: string; command: string; providerRequired: boolean };
+      }>;
+      nextBestAction: { label: string; command: string; providerRequired: boolean };
+    };
+
+    expect(parsed.status).toBe("attention");
+    expect(parsed.summary).toContain("1 almanac(s) found");
+    expect(parsed.almanacs).toHaveLength(1);
+    expect(parsed.almanacs[0]).toMatchObject({
+      id: "legacy",
+      name: "Legacy Domain",
+      health: "attention",
+      references: { extractedKnowledge: 7, tools: 2 },
+      checks: {
+        validation: "missing",
+        answer: "not-ready",
+        refresh: "due",
+      },
+    });
+    expect(parsed.nextBestAction).toMatchObject({
+      label: "Create validation checks",
+      command: `almanac benchmark legacy --init --root ${root}`,
+      providerRequired: false,
+    });
+  });
+
   test("doctor --json reports root hygiene without selecting one almanac", async () => {
     await writeLegacyCountFixture({ completed: true });
     await mkdir(join(root, "partial"), { recursive: true });

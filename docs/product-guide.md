@@ -4,6 +4,18 @@ This guide covers the product-facing path: prove the tool works without API
 keys, inspect the generated artifact, review its expertise profile, review
 sources, and gate changes with human golden fixtures.
 
+## Guided start
+
+```bash
+almanac start
+almanac start --json
+```
+
+`start` is the provider-free first-run guide. On an empty root, it recommends
+the offline demo and shows the exact command to run. On a root with installed
+almanacs, it summarizes health, references, checks, answer readiness, refresh
+state, and the next best action without mutating files.
+
 ## Offline demo
 
 ```bash
