@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.15 RC prepared** · last updated 2026-06-04.
+Status: **v0.15.0 shipped** · last updated 2026-06-04.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1185,23 +1185,23 @@ read-only studio HTML/API and localhost boundary checks, Enterprise AI fresh
 compile benchmark at 185 facts and 15/15 passed fixtures, real-provider
 Enterprise AI answer with one citation, and saved-run replay pass.
 
-### v0.15 release candidate — Guided activation
+### v0.15.0 — Guided activation
 
-v0.15 is the Guided Activation release candidate:
+v0.15.0 shipped the Guided Activation release:
 
-- introduce activation milestones derived from existing lifecycle, benchmark,
-  answer readiness, saved answer, replay, and maintenance state,
-- extend natural-language intake into an explicit create path when the user
-  provides references and confirms provider-backed work,
-- surface suggested questions and first-answer next actions before users need
-  to understand answer artifacts,
-- show replay and fixture-promotion guidance after saved answers,
-- upgrade local Studio from passive inventory to an activation dashboard with
-  milestones, suggested questions, and copyable next commands.
+- Activation milestones are derived from existing lifecycle, benchmark, answer
+  readiness, saved answer, replay, and maintenance state.
+- Natural-language intake can become an explicit create path when the user
+  provides references and confirms provider-backed work.
+- Suggested questions and first-answer next actions are visible before users
+  need to understand answer artifacts.
+- Saved answers show replay and fixture-promotion guidance.
+- Local Studio now acts as an activation dashboard with milestones, suggested
+  questions, and copyable next commands.
 
 See [`docs/v0.15-plan.md`](./v0.15-plan.md) for scope, non-goals, PR sequence,
-and release smoke targets. The concrete release-candidate runbook is
-[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
+and the shipped implementation sequence. The concrete release-candidate
+runbook is [`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
 
 The v0.15 release gate passed on 2026-06-04 with `git diff --check`,
 `bun run typecheck`, `bun test`, source and linked CLI checks, provider-free

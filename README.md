@@ -245,7 +245,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.14.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.15.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -273,12 +273,13 @@ Current shipped lines include:
   repair/cleanup candidates, scheduler handoff snippets, and ask fixture upkeep
 - `v0.14`: guided first-run start, natural-language intake, user-facing
   vocabulary, no-key answer-readiness bootstrap, and local read-only studio
+- `v0.15`: activation milestones, guided create apply, suggested questions,
+  first-answer guidance, replay prompts, and Studio activation state
 
-`v0.14.0` makes first success less technical: users can start with one command,
-describe a goal in natural language, see health and next actions in guided
-language, bootstrap answer readiness on the sqlite demo without keys, and open
-a localhost-only read-only dashboard before learning the internal artifact
-model.
+`v0.15.0` turns first-run guidance into guided activation: users can move from
+an empty root to a reviewed create path, answer-ready checks, suggested
+questions, a saved first answer, deterministic replay, and maintenance handoff
+without first learning the internal artifact model.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
