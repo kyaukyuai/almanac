@@ -3583,6 +3583,71 @@ function startProviderStatus(): StartProviderStatus {
   };
 }
 
+function guidedVocabularyLine(): string {
+  return (
+    "health = usability state, references = citable source material, " +
+    "extracted knowledge = grounded facts, checks = validation, history = saved runs"
+  );
+}
+
+function formatGuidedIssue(issue: string): string {
+  return issue
+    .replace(/\bno durable facts extracted\b/g, "no durable extracted knowledge available")
+    .replace(/\balmanac artifacts are broken\b/g, "almanac files are broken")
+    .replace(/\bactual artifacts\b/g, "actual files")
+    .replace(/\banswer mode\b/g, "answer readiness")
+    .replace(/\bevidence sources\b/g, "references")
+    .replace(/\bsaved runs\b/g, "history")
+    .replace(/\bask replay fixtures\b/g, "answer checks")
+    .replace(/\bask fixtures\b/g, "answer checks")
+    .replace(/\bhuman benchmark fixtures\b/g, "validation checks")
+    .replace(/\bbenchmark fixtures\b/g, "validation checks")
+    .replace(/\bbenchmark report\b/g, "checks report")
+    .replace(/\bbenchmark\b/g, "checks")
+    .replace(/\bfacts\/tools\b/g, "extracted knowledge/tools")
+    .replace(/\bfacts\b/g, "extracted knowledge")
+    .replace(/\bsources\b/g, "references")
+    .replace(/\bsource\b/g, "reference")
+    .replace(/\bfixture\(s\)/g, "check(s)")
+    .replace(/\bfixtures\b/g, "checks")
+    .replace(/\bartifacts\b/g, "history")
+    .replace(/\bartifact\b/g, "history record");
+}
+
+function formatGuidedAction(action: string): string {
+  const separator = action.indexOf(": ");
+  if (separator === -1) return action;
+  return formatGuidedIssue(action.slice(0, separator)) + action.slice(separator);
+}
+
+function formatGuidedLifecycleBenchmark(
+  benchmark: LifecycleInventoryItem["lifecycle"]["benchmark"],
+): string {
+  return formatGuidedIssue(formatLifecycleBenchmark(benchmark)).replace(
+    /, checks /g,
+    ", validation set ",
+  );
+}
+
+function formatGuidedLifecycleAnswer(
+  answer: LifecycleInventoryItem["lifecycle"]["answer"],
+): string {
+  return formatGuidedIssue(formatLifecycleAnswer(answer));
+}
+
+function maintenanceStepDisplayLabel(id: MaintenancePlanStep["id"]): string {
+  switch (id) {
+    case "benchmark":
+      return "checks";
+    case "ask-suite":
+      return "answer checks";
+    case "cleanup":
+      return "history cleanup";
+    case "refresh":
+      return "refresh";
+  }
+}
+
 function normalizeStartGoal(goalParts: string[]): string | null {
   const goal = goalParts.join(" ").replace(/\s+/g, " ").trim();
   if (goal.length === 0) return null;
@@ -3843,7 +3908,7 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
       `embeddings ${report.provider.embeddings}\n`,
   );
   process.stdout.write(
-    "  vocabulary    references = citable source material, checks = validation, history = saved runs\n",
+    `  vocabulary    ${guidedVocabularyLine()}\n`,
   );
 
   if (report.goalDraft !== null) {
@@ -3976,10 +4041,11 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
   process.stdout.write(
     `almanac status: ${report.almanacId} (${report.displayName})\n`,
   );
-  process.stdout.write(`  status        ${report.status}\n`);
+  process.stdout.write(`  health        ${report.status}\n`);
   process.stdout.write(
-    `  usability     ${report.usability.status} - ${report.usability.reason}\n`,
+    `  usability     ${report.usability.status} - ${formatGuidedIssue(report.usability.reason)}\n`,
   );
+  process.stdout.write(`  vocabulary    ${guidedVocabularyLine()}\n`);
   process.stdout.write(`  dir           ${report.almanacDir}\n`);
   if (report.manifest !== null) {
     process.stdout.write(`  domain        ${report.manifest.domain}\n`);
@@ -3995,21 +4061,21 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       `${report.lifecycle.compile.running.length} running)\n`,
   );
   process.stdout.write(
-    `  knowledge     ${report.lifecycle.knowledge.status}, ` +
-      `${report.lifecycle.knowledge.facts ?? "-"} facts, ` +
+    `  extracted knowledge ${report.lifecycle.knowledge.status}, ` +
+      `${report.lifecycle.knowledge.facts ?? "-"} item(s), ` +
       `${report.lifecycle.knowledge.tools ?? "-"} tools, ` +
       `retrieval ${report.lifecycle.knowledge.retrieval ?? "unknown"}\n`,
   );
   if (report.lifecycle.knowledge.countsMatch === false) {
     process.stdout.write(
-      `  manifest      facts/tools ${report.lifecycle.knowledge.manifestFacts} / ${report.lifecycle.knowledge.manifestTools}\n`,
+      `  manifest      extracted knowledge/tools ${report.lifecycle.knowledge.manifestFacts} / ${report.lifecycle.knowledge.manifestTools}\n`,
     );
   }
   process.stdout.write(
-    `  benchmark     ${formatLifecycleBenchmark(report.lifecycle.benchmark)}\n`,
+    `  checks        ${formatGuidedLifecycleBenchmark(report.lifecycle.benchmark)}\n`,
   );
   process.stdout.write(
-    `  answer        ${formatLifecycleAnswer(report.lifecycle.answer)}\n`,
+    `  answer checks ${formatGuidedLifecycleAnswer(report.lifecycle.answer)}\n`,
   );
   process.stdout.write(
     `  refresh       ${formatLifecycleRefresh(report.lifecycle.refresh)}\n`,
@@ -4018,30 +4084,30 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
     `  registration  ${formatLifecycleRegistration(report.lifecycle.registration)}\n`,
   );
   if (report.runs.readError === null) {
-    process.stdout.write(`  latest run    ${compactRunSummary(report.runs.latest)}\n`);
+    process.stdout.write(`  latest history ${compactRunSummary(report.runs.latest)}\n`);
     process.stdout.write(
-      `  latest answer ${compactRunSummary(report.runs.byKind.answer)}\n`,
+      `  latest answer history ${compactRunSummary(report.runs.byKind.answer)}\n`,
     );
     process.stdout.write(
-      `  latest refresh ${compactRunSummary(report.runs.byKind.refresh)}\n`,
+      `  latest refresh history ${compactRunSummary(report.runs.byKind.refresh)}\n`,
     );
     process.stdout.write(
-      `  latest maintenance ${compactRunSummary(report.runs.byKind.maintenance)}\n`,
+      `  latest maintenance history ${compactRunSummary(report.runs.byKind.maintenance)}\n`,
     );
   } else {
-    process.stdout.write(`  saved runs    unreadable: ${report.runs.readError}\n`);
+    process.stdout.write(`  history       unreadable: ${report.runs.readError}\n`);
   }
 
   if (report.lifecycle.issues.length > 0) {
     process.stdout.write(`\nissues:\n`);
     for (const issue of report.lifecycle.issues) {
-      process.stdout.write(`  - ${issue}\n`);
+      process.stdout.write(`  - ${formatGuidedIssue(issue)}\n`);
     }
   }
   if (report.nextActions.length > 0) {
     process.stdout.write(`\nnext actions:\n`);
     for (const action of report.nextActions) {
-      process.stdout.write(`  - ${action}\n`);
+      process.stdout.write(`  - ${formatGuidedAction(action)}\n`);
     }
   }
 }
@@ -4558,23 +4624,26 @@ function firstActionContaining(
 function formatMaintenanceReportHuman(report: MaintenanceReport): string {
   const lines = [
     `maintenance: ${report.almanacId} (${report.version ?? "unknown"})`,
-    `  status        ${report.status}`,
+    `  health        ${report.status}`,
     `  dry-run       ${report.dryRun ? "yes" : "no"}`,
-    `  usability     ${report.usability.status} - ${report.usability.reason}`,
+    `  usability     ${report.usability.status} - ${formatGuidedIssue(report.usability.reason)}`,
+    `  vocabulary    ${guidedVocabularyLine()}`,
     `  dir           ${report.almanacDir}`,
     `  refresh       ${formatLifecycleRefresh(report.refresh)}`,
-    `  benchmark     ${formatLifecycleBenchmark(report.benchmark)}`,
-    `  answer        ${formatLifecycleAnswer(report.answer)}`,
+    `  checks        ${formatGuidedLifecycleBenchmark(report.benchmark)}`,
+    `  answer checks ${formatGuidedLifecycleAnswer(report.answer)}`,
     `  registration  ${formatLifecycleRegistration(report.registration)}`,
-    `  latest run    ${compactRunSummary(report.artifacts.latestRun)}`,
+    `  latest history ${compactRunSummary(report.artifacts.latestRun)}`,
     "",
     "plan:",
   ];
   for (const step of report.plan) {
     const provider = step.providerRequired ? ", provider required" : "";
     const artifact =
-      step.expectedArtifact === null ? "" : `, artifact ${step.expectedArtifact}`;
-    lines.push(`  - ${step.status} ${step.id}: ${step.reason}${provider}${artifact}`);
+      step.expectedArtifact === null ? "" : `, expected file ${step.expectedArtifact}`;
+    lines.push(
+      `  - ${step.status} ${maintenanceStepDisplayLabel(step.id)}: ${formatGuidedIssue(step.reason)}${provider}${artifact}`,
+    );
     if (step.command !== null) {
       lines.push(`    ${step.command}`);
     }
@@ -4593,7 +4662,7 @@ function formatMaintenanceReportHuman(report: MaintenanceReport): string {
     }
   }
 
-  lines.push("", "cleanup:");
+  lines.push("", "history cleanup:");
   if (report.artifacts.cleanupCandidates.length === 0) {
     lines.push("  (none)");
   } else {
@@ -4611,13 +4680,13 @@ function formatMaintenanceReportHuman(report: MaintenanceReport): string {
   if (report.issues.length > 0) {
     lines.push("", "issues:");
     for (const issue of report.issues) {
-      lines.push(`  - ${issue}`);
+      lines.push(`  - ${formatGuidedIssue(issue)}`);
     }
   }
   if (report.nextActions.length > 0) {
     lines.push("", "next actions:");
     for (const action of report.nextActions) {
-      lines.push(`  - ${action}`);
+      lines.push(`  - ${formatGuidedAction(action)}`);
     }
   }
   return lines.join("\n") + "\n";
@@ -6367,7 +6436,7 @@ function maintainUsageError(message: string): never {
 function formatMaintenanceApplyHuman(result: MaintenanceApplyResult): string {
   const lines = [
     `maintenance apply: ${result.almanacId} (${result.version ?? "unknown"})`,
-    `status: ${result.status}`,
+    `health: ${result.status}`,
     `exit: ${result.exitCode}`,
     `started: ${result.startedAt}`,
     `finished: ${result.finishedAt}`,
@@ -6379,24 +6448,26 @@ function formatMaintenanceApplyHuman(result: MaintenanceApplyResult): string {
       `refresh: ${result.refresh.status} ${result.refresh.refreshId} exit=${result.refresh.exitCode}`,
     );
     if (result.refresh.artifactRelPath !== undefined) {
-      lines.push(`refresh-artifact: ${result.refresh.artifactRelPath}`);
+      lines.push(`refresh history: ${result.refresh.artifactRelPath}`);
     }
   }
   if (result.benchmark !== null) {
-    lines.push(`benchmark: ${result.benchmark?.status ?? "unknown"}`);
+    lines.push(`checks: ${result.benchmark?.status ?? "unknown"}`);
   }
   if (result.askSuite !== null && result.askSuite !== undefined) {
-    lines.push(`ask-suite: ${formatMaintenanceAskSuiteSummary(result.askSuite)}`);
+    lines.push(`answer checks: ${formatMaintenanceAskSuiteSummary(result.askSuite)}`);
   }
   if (result.savedArtifact !== null) {
-    lines.push(`artifact: ${result.savedArtifact.path}`);
+    lines.push(`history record: ${result.savedArtifact.path}`);
   }
   lines.push("steps:");
   for (const step of result.steps) {
     const exit = step.exitCode === undefined ? "" : ` exit=${step.exitCode}`;
     const artifact =
-      step.artifactRelPath === undefined ? "" : ` artifact=${step.artifactRelPath}`;
-    lines.push(`  - ${step.id} ${step.status}${exit}${artifact}: ${step.reason}`);
+      step.artifactRelPath === undefined ? "" : ` history=${step.artifactRelPath}`;
+    lines.push(
+      `  - ${step.id} ${step.status}${exit}${artifact}: ${formatGuidedIssue(step.reason)}`,
+    );
   }
   if (result.error !== undefined) {
     lines.push(`error: ${result.error.code}: ${result.error.message}`);
@@ -7032,13 +7103,14 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
 
   process.stdout.write(`expert profile: ${manifest.almanacId} (${manifest.displayName})\n`);
-  process.stdout.write(`  status         ${profile.status}\n`);
+  process.stdout.write(`  health         ${profile.status}\n`);
   process.stdout.write(`  domain         ${manifest.domain}\n`);
   if (domainSpec !== null) {
     process.stdout.write(`  summary        ${clipText(domainSpec.summary)}\n`);
   }
+  process.stdout.write(`  vocabulary     ${guidedVocabularyLine()}\n`);
   process.stdout.write(
-    `  evidence       ${facts.length} facts from ${uniqueFactSources} source${uniqueFactSources === 1 ? "" : "s"}\n`,
+    `  extracted knowledge ${facts.length} item(s) from ${uniqueFactSources} reference${uniqueFactSources === 1 ? "" : "s"}\n`,
   );
   process.stdout.write(`  retrieval      ${retrieval.summary}\n`);
   if (knowledge?.vectorIndex !== undefined) {
@@ -7048,29 +7120,29 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   }
   if (sources !== null) {
     process.stdout.write(
-      `  source review  ${sources.status}, ${acceptedSources.length} accepted / ${sources.rejected.length} rejected (${nonZeroCoverage(sources.coverage)})\n`,
+      `  references     ${sources.status}, ${acceptedSources.length} accepted / ${sources.rejected.length} rejected (${nonZeroCoverage(sources.coverage)})\n`,
     );
   }
   process.stdout.write(
     `  freshness      ${nonZeroCounts(profile.evidence.freshnessClasses)}\n`,
   );
   process.stdout.write(
-    `  fact types     ${nonZeroCounts(profile.evidence.factTypes)}\n`,
+    `  knowledge types ${nonZeroCounts(profile.evidence.factTypes)}\n`,
   );
   if (benchmarkReport !== null) {
     process.stdout.write(
-      `  benchmark      ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}` +
+      `  checks         ${benchmarkReport.summary.passed}/${benchmarkReport.summary.total} passed, citationRate ${formatRate(benchmarkReport.summary.citationRate)}` +
         (benchmarkSet !== null
-          ? `, fixtures ${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)}`
+          ? `, validation set ${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)}`
           : "") +
         "\n",
     );
   } else if (benchmarkSet !== null) {
     process.stdout.write(
-      `  benchmark      not run (${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)} fixtures)\n`,
+      `  checks         not run (${formatBenchmarkFixturesWithCoverage(benchmarkSet, benchmarkCoverage)} checks)\n`,
     );
   } else {
-    process.stdout.write("  benchmark      fixtures missing\n");
+    process.stdout.write("  checks         missing\n");
   }
   if (
     refreshRunVisibility.latest !== null ||
@@ -7084,12 +7156,12 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
       }\n`,
     );
   }
-  process.stdout.write(`  answer mode    ${answerReadiness.status}\n`);
+  process.stdout.write(`  answer readiness ${answerReadiness.status}\n`);
   process.stdout.write(
-    `  ask fixtures   ${formatAnswerReadinessFixtures(answerReadiness)}\n`,
+    `  answer checks  ${formatAnswerReadinessFixtures(answerReadiness)}\n`,
   );
   process.stdout.write(
-    `  ask suite      ${formatAnswerReadinessSuite(answerReadiness)}\n`,
+    `  answer check suite ${formatAnswerReadinessSuite(answerReadiness)}\n`,
   );
   process.stdout.write(
     `  latest answer  ${formatAnswerReadinessLatest(answerReadiness)}\n`,
@@ -7109,13 +7181,13 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     }
   }
 
-  process.stdout.write(`\nevidence sources:\n`);
+  process.stdout.write(`\nreferences:\n`);
   if (evidenceSources.length === 0) {
     process.stdout.write("  (none)\n");
   } else {
     for (const source of evidenceSources.slice(0, 5)) {
       process.stdout.write(
-        `  - ${source.id}  ${source.kind}  trust=${source.trust.toFixed(2)}  facts=${source.facts}  ${source.ingestionMode}/${source.refreshIntervalHours}h\n`,
+        `  - ${source.id}  ${source.kind}  trust=${source.trust.toFixed(2)}  knowledge=${source.facts}  ${source.ingestionMode}/${source.refreshIntervalHours}h\n`,
       );
     }
   }
@@ -7133,7 +7205,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   if (issues.length > 0) {
     process.stdout.write(`\nreadiness gaps:\n`);
     for (const issue of issues) {
-      process.stdout.write(`  - ${issue}\n`);
+      process.stdout.write(`  - ${formatGuidedIssue(issue)}\n`);
     }
   }
   const answerIssues = [
@@ -7143,13 +7215,13 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   if (answerIssues.length > 0) {
     process.stdout.write(`\nanswer readiness gaps:\n`);
     for (const issue of answerIssues) {
-      process.stdout.write(`  - ${issue}\n`);
+      process.stdout.write(`  - ${formatGuidedIssue(issue)}\n`);
     }
   }
 
   process.stdout.write(`\nnext actions:\n`);
   for (const action of nextActions) {
-    process.stdout.write(`  - ${action}\n`);
+    process.stdout.write(`  - ${formatGuidedAction(action)}\n`);
   }
 }
 
