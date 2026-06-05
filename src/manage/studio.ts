@@ -122,6 +122,10 @@ export interface StartStudioServerOptions {
   port: number;
   loadSnapshot: () => Promise<StudioSnapshot>;
   loadStatus: (almanacId: string) => Promise<StudioAlmanacCard | null>;
+  runOperation?: (
+    almanacId: string,
+    operationId: string,
+  ) => Promise<unknown>;
 }
 
 export interface StudioServerHandle {
@@ -232,10 +236,34 @@ async function handleStudioRequest(
   request: Request,
   options: StartStudioServerOptions,
 ): Promise<Response> {
+  const url = new URL(request.url);
+  if (request.method === "POST") {
+    const operationMatch = url.pathname.match(
+      /^\/api\/operations\/([^/]+)\/([^/]+)\/run$/,
+    );
+    if (operationMatch === null) {
+      return jsonResponse({ error: "method-not-allowed" }, 405);
+    }
+    if (options.runOperation === undefined) {
+      return jsonResponse({ error: "operation-runner-unavailable" }, 501);
+    }
+    const almanacId = decodeURIComponent(operationMatch[1] ?? "");
+    const operationId = decodeURIComponent(operationMatch[2] ?? "");
+    try {
+      return jsonResponse(await options.runOperation(almanacId, operationId));
+    } catch (cause) {
+      return jsonResponse(
+        {
+          error: "operation-run-failed",
+          message: (cause as Error).message,
+        },
+        500,
+      );
+    }
+  }
   if (request.method !== "GET") {
     return jsonResponse({ error: "method-not-allowed" }, 405);
   }
-  const url = new URL(request.url);
   if (url.pathname === "/" || url.pathname === "/index.html") {
     const snapshot = await options.loadSnapshot();
     return new Response(renderStudioHtml(snapshot), {
