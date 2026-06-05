@@ -134,10 +134,13 @@ golden benchmark fixtures.
 
 `ask-fixtures init --seed-demo` and the Stage 12 `refresh run --ask-suite`
 bootstrap answer readiness without provider credentials for the offline demo.
-`maintain --dry-run` previews future upkeep. `studio` opens a local read-only
-dashboard when you want a browser view:
+`maintain --dry-run` previews future upkeep. `operations` lists explicit
+guided operations, and `studio` opens a local dashboard with Run buttons for
+safe provider-free operations:
 
 ```bash
+almanac operations sqlite-demo --root "$tmp"
+almanac operations run sqlite-demo <operation-id> --root "$tmp"
 almanac studio --root "$tmp"
 ```
 
@@ -276,14 +279,10 @@ Current shipped lines include:
 - `v0.15`: activation milestones, guided create apply, suggested questions,
   first-answer guidance, replay prompts, and Studio activation state
 
-`v0.15.0` turns first-run guidance into guided activation: users can move from
-an empty root to a reviewed create path, answer-ready checks, suggested
-questions, a saved first answer, deterministic replay, and maintenance handoff
-without first learning the internal artifact model.
-
-The next planned line is `v0.16`: Actionable Studio / Guided Operations. It
-focuses on running safe provider-free next actions from Studio and a shared
-guided operation model while keeping provider-backed work explicit.
+The v0.16 RC line turns guided activation into guided operations: users can
+list the safe local work available for an almanac, run provider-free bounded
+operations from the CLI or Studio, save answer-readiness evidence, and keep
+provider-backed work as explicit CLI handoff.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -406,6 +405,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.16 plan](./docs/v0.16-plan.md): Actionable Studio, guided operations,
   provider-free local action execution, operation result envelopes, and
   evidence persistence simplification
+- [v0.16 RC smoke](./docs/v0.16-rc-smoke.md): release-candidate validation for
+  guided operation listing, provider-free operation runner, Studio action
+  API/UI, evidence save, maintenance dry-run, and Enterprise AI provider smoke
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history

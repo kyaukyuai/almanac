@@ -69,8 +69,14 @@ describe("studio server", () => {
       almanacs: [
         {
           ...fixtureCard(),
-          recommendedOperation: fixtureRunnableOperation(),
-          operations: [fixtureRunnableOperation(), fixtureOperation()],
+          recommendedOperation: fixtureOperation(),
+          operations: [
+            fixtureOperation("op-handoff-1111111111"),
+            fixtureOperation("op-handoff-2222222222"),
+            fixtureOperation("op-handoff-3333333333"),
+            fixtureOperation("op-handoff-4444444444"),
+            fixtureRunnableOperation(),
+          ],
         },
       ],
     });
@@ -325,9 +331,9 @@ function fixtureCard(): StudioAlmanacCard {
   };
 }
 
-function fixtureOperation() {
+function fixtureOperation(id = "op-handoff-1234567890") {
   return {
-    id: "op-handoff-1234567890",
+    id,
     label: "Ask first question",
     description: "Save the first cited answer or valid abstention.",
     category: "handoff",

@@ -107,27 +107,36 @@ the detailed commands when a next action points there.
 ## Local studio
 
 ```bash
+almanac operations sqlite-demo --root "$tmp"
+almanac operations run sqlite-demo <operation-id> --root "$tmp"
 almanac studio --root "$tmp"
 almanac studio --host 127.0.0.1 --port 4631 --root "$tmp"
 ```
 
-`studio` starts a read-only localhost dashboard for the selected root. It
-shows installed almanacs, health, references, checks, answer readiness, refresh
-status, registration status, latest history, activation milestones, suggested
-questions, issues, and the next best action. It does not mutate files,
-fixtures, registrations, or artifacts. Mutating actions are shown only as
-copyable CLI commands.
+`operations` lists structured guided operations for one almanac. Each operation
+declares its provider boundary, mutation level, Studio runnable state, fallback
+command, and blocked reason when it cannot be run locally.
+
+`studio` starts a localhost dashboard for the selected root. It shows installed
+almanacs, health, references, checks, answer readiness, refresh status,
+registration status, latest history, activation milestones, suggested
+questions, issues, and guided operations. Safe provider-free operations can be
+run from Studio through explicit operation ids; provider-backed, external, and
+unsupported operations remain copyable CLI handoffs.
 
 The server binds to localhost only. Use Ctrl-C to stop it. The first version is
-intentionally plain: it is an orientation surface for personal/local use, not a
-hosted management plane.
+intentionally plain: it is an orientation and safe local action surface for
+personal/local use, not a hosted management plane or source editor.
 
 The v0.14 RC smoke checks the local HTML page, `/api/inventory`, copyable
 commands, localhost-only binding, and clean Ctrl-C shutdown in
 [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). The v0.15 RC smoke extends
 that coverage to activation milestones, first-answer guidance, suggested
 questions, and `/api/status/:almanacId` in
-[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
+[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md). The v0.16 RC smoke validates
+guided operation listing, the provider-free operation runner, Studio POST
+actions, inline action results, evidence save, and provider handoff in
+[`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
 
 ## Registration visibility
 
@@ -573,7 +582,9 @@ see [`v0.11-rc-smoke.md`](./v0.11-rc-smoke.md).
 For the v0.14 guided first-run and seeded answer-readiness release-candidate
 smoke sequence, see [`v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For the v0.15
 guided activation, first-answer, replay, and Studio activation smoke sequence,
-see [`v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
+see [`v0.15-rc-smoke.md`](./v0.15-rc-smoke.md). For the v0.16 guided
+operations and Studio action smoke sequence, see
+[`v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
 
 Minimal answer-mode smoke:
 

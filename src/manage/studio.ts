@@ -302,7 +302,7 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     card.operations.length === 0
       ? `<p class="muted">No guided operations available</p>`
       : card.operations
-          .slice(0, 4)
+          .slice(0, 6)
           .map((operation) => renderGuidedOperation(card.almanacId, operation))
           .join("\n");
   const suggestedQuestions =
