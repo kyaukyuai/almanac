@@ -1204,6 +1204,23 @@ describe("almanac CLI legacy artifact counts", () => {
         nextAction: { command: string; providerRequired: boolean } | null;
         gaps: string[];
       };
+      operations: Array<{
+        id: string;
+        label: string;
+        category: string;
+        mutation: string;
+        providerRequired: boolean;
+        studioRunnable: boolean;
+        command: string;
+      }>;
+      recommendedOperation: {
+        label: string;
+        category: string;
+        mutation: string;
+        providerRequired: boolean;
+        studioRunnable: boolean;
+        command: string;
+      } | null;
       lifecycle: {
         compile: { status: string; completed: number };
         knowledge: {
@@ -1246,6 +1263,24 @@ describe("almanac CLI legacy artifact counts", () => {
       }),
     );
     expect(status.activation.gaps).toContain("checks are missing");
+    expect(status.recommendedOperation).toEqual(
+      expect.objectContaining({
+        label: "Run validation",
+        category: "validate",
+        mutation: "almanac-write",
+        providerRequired: false,
+        studioRunnable: false,
+        command: expect.stringContaining("almanac benchmark legacy --init"),
+      }),
+    );
+    expect(status.operations).toContainEqual(
+      expect.objectContaining({
+        id: expect.stringMatching(/^op-validate-[a-f0-9]{10}$/),
+        label: "Run validation",
+        category: "validate",
+        command: expect.stringContaining("almanac benchmark legacy --init"),
+      }),
+    );
     expect(status.lifecycle.compile).toMatchObject({
       status: "ok",
       completed: STAGE_IDS.length,
@@ -1281,6 +1316,7 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("health        attention");
     expect(result.stdout).toContain("activation    compiled -> validated, in-progress");
     expect(result.stdout).toContain("activation next create validation checks: almanac benchmark legacy --init");
+    expect(result.stdout).toContain("operation     Run validation (validate, almanac-write, no provider, CLI handoff)");
     expect(result.stdout).toContain("references = citable source material");
     expect(result.stdout).toContain("extracted knowledge present, 7 item(s), 2 tools");
     expect(result.stdout).toContain("checks        missing");
@@ -4212,6 +4248,12 @@ describe("almanac CLI product onboarding", () => {
         }>;
         nextActions: Array<{ command: string; providerRequired: boolean }>;
       };
+      recommendedOperation: {
+        label: string;
+        category: string;
+        studioRunnable: boolean;
+        command: string;
+      } | null;
     };
     expect(statusReport.firstAnswer.status).toBe("not-started");
     expect(statusReport.firstAnswer.suggestedQuestions[0]).toEqual(
@@ -4224,10 +4266,19 @@ describe("almanac CLI product onboarding", () => {
       }),
     );
     expect(statusReport.firstAnswer.nextActions).toEqual([]);
+    expect(statusReport.recommendedOperation).toEqual(
+      expect.objectContaining({
+        label: "Manage answer checks",
+        category: "validate",
+        studioRunnable: false,
+        command: expect.stringContaining("almanac ask-fixtures init sqlite-demo"),
+      }),
+    );
 
     const statusHuman = runCli(["status", "sqlite-demo", "--root", root]);
     expect(statusHuman.status).toBe(0);
     expect(statusHuman.stdout).toContain("first answer");
+    expect(statusHuman.stdout).toContain("operation     Manage answer checks");
     expect(statusHuman.stdout).toContain("suggested questions");
     expect(statusHuman.stdout).toContain("What makes SQLite transactions atomic?");
 
@@ -4242,11 +4293,23 @@ describe("almanac CLI product onboarding", () => {
     expect(
       (JSON.parse(profileJson.stdout) as {
         firstAnswer: { suggestedQuestions: Array<{ question: string }> };
+        recommendedOperation: { command: string; studioRunnable: boolean } | null;
       }).firstAnswer.suggestedQuestions[0]?.question,
     ).toBe("What makes SQLite transactions atomic?");
+    expect(
+      (JSON.parse(profileJson.stdout) as {
+        recommendedOperation: { command: string; studioRunnable: boolean } | null;
+      }).recommendedOperation,
+    ).toEqual(
+      expect.objectContaining({
+        command: expect.stringContaining("almanac ask-fixtures init sqlite-demo"),
+        studioRunnable: false,
+      }),
+    );
 
     const profileHuman = runCli(["profile", "sqlite-demo", "--root", root]);
     expect(profileHuman.status).toBe(0);
+    expect(profileHuman.stdout).toContain("operation");
     expect(profileHuman.stdout).toContain("first answer suggestions");
     expect(profileHuman.stdout).toContain(
       "almanac ask sqlite-demo 'What makes SQLite transactions atomic?' --save",

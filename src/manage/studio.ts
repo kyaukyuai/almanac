@@ -16,6 +16,20 @@ export interface StudioCommand {
   mutates: boolean;
 }
 
+export interface StudioGuidedOperation {
+  id: string;
+  label: string;
+  description: string;
+  category: string;
+  providerRequired: boolean;
+  mutation: string;
+  confirmation: boolean;
+  command: string;
+  studioRunnable: boolean;
+  expectedArtifacts: string[];
+  blockedReason: string | null;
+}
+
 export interface StudioHistorySummary {
   latest: string;
   answer: string;
@@ -73,6 +87,8 @@ export interface StudioAlmanacCard {
   activation: StudioActivationSummary;
   suggestedQuestions: StudioSuggestedQuestion[];
   issues: string[];
+  recommendedOperation: StudioGuidedOperation | null;
+  operations: StudioGuidedOperation[];
   nextBestAction: StudioCommand;
   commands: StudioCommand[];
 }
@@ -254,6 +270,13 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     .slice(0, 5)
     .map(renderCommand)
     .join("\n");
+  const operations =
+    card.operations.length === 0
+      ? `<p class="muted">No guided operations available</p>`
+      : card.operations
+          .slice(0, 4)
+          .map(renderGuidedOperation)
+          .join("\n");
   const suggestedQuestions =
     card.suggestedQuestions.length === 0
       ? `<p class="muted">No suggested questions available</p>`
@@ -288,6 +311,10 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
   <section>
     <h3>Next Action</h3>
     ${renderCommand(card.nextBestAction)}
+  </section>
+  <section>
+    <h3>Guided Operations</h3>
+    ${operations}
   </section>
   <section>
     <h3>Suggested Questions</h3>
@@ -338,6 +365,28 @@ function renderActivation(activation: StudioActivationSummary): string {
   <ol class="milestones">${milestones}</ol>
   <ul>${detailList}</ul>
   ${next}
+</div>`;
+}
+
+function renderGuidedOperation(operation: StudioGuidedOperation): string {
+  const runnable = operation.studioRunnable ? "studio runnable" : "CLI handoff";
+  const provider = operation.providerRequired ? "provider key" : "no key";
+  const blocked =
+    operation.blockedReason === null
+      ? ""
+      : `<p>${escapeHtml(operation.blockedReason)}</p>`;
+  return `<div class="command">
+  <div class="command-meta">
+    <strong>${escapeHtml(operation.label)}</strong>
+    <span>${escapeHtml(operation.category)}</span>
+    <span>${escapeHtml(operation.mutation)}</span>
+    <span>${provider}</span>
+    <span>${runnable}</span>
+  </div>
+  <p>${escapeHtml(operation.description)}</p>
+  ${blocked}
+  <pre><code>${escapeHtml(operation.command)}</code></pre>
+  <button type="button" data-copy="${escapeAttribute(operation.command)}">Copy</button>
 </div>`;
 }
 
