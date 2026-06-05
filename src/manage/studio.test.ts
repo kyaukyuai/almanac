@@ -63,6 +63,28 @@ describe("studio server", () => {
     expect(html).not.toContain("SQLite <Demo>");
   });
 
+  test("renders run controls only for runnable guided operations", () => {
+    const html = renderStudioHtml({
+      ...fixtureSnapshot(),
+      almanacs: [
+        {
+          ...fixtureCard(),
+          recommendedOperation: fixtureRunnableOperation(),
+          operations: [fixtureRunnableOperation(), fixtureOperation()],
+        },
+      ],
+    });
+
+    expect(html).toContain('data-run-operation="op-refresh-abcdef1234"');
+    expect(html).toContain('data-almanac-id="sqlite-demo"');
+    expect(html).toContain('data-confirmation="true"');
+    expect(html).toContain('data-operation-result="op-refresh-abcdef1234"');
+    expect(html).toContain("Fallback command");
+    expect(html).toContain("/api/operations/");
+    expect(html).not.toContain('data-run-operation="op-handoff-1234567890"');
+    expect(html).toContain("provider-backed operation uses CLI handoff");
+  });
+
   test("serves read-only html and status APIs without provider credentials", async () => {
     server = startStudioServer({
       host: "127.0.0.1",
@@ -317,5 +339,22 @@ function fixtureOperation() {
     studioRunnable: false,
     expectedArtifacts: [".runs/answer-*.json"],
     blockedReason: "provider-backed operation uses CLI handoff",
+  };
+}
+
+function fixtureRunnableOperation() {
+  return {
+    id: "op-refresh-abcdef1234",
+    label: "Save readiness evidence",
+    description: "Persist answer-readiness evidence through a refresh artifact.",
+    category: "refresh",
+    providerRequired: false,
+    mutation: "artifact-write",
+    confirmation: true,
+    command:
+      "almanac refresh run sqlite-demo --from-stage 12-benchmark-run --ask-suite --save --root /tmp/almanac-root",
+    studioRunnable: true,
+    expectedArtifacts: [".runs/refresh-*.json"],
+    blockedReason: null,
   };
 }

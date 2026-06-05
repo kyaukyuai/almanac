@@ -303,7 +303,7 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
       ? `<p class="muted">No guided operations available</p>`
       : card.operations
           .slice(0, 4)
-          .map(renderGuidedOperation)
+          .map((operation) => renderGuidedOperation(card.almanacId, operation))
           .join("\n");
   const suggestedQuestions =
     card.suggestedQuestions.length === 0
@@ -396,14 +396,20 @@ function renderActivation(activation: StudioActivationSummary): string {
 </div>`;
 }
 
-function renderGuidedOperation(operation: StudioGuidedOperation): string {
+function renderGuidedOperation(
+  almanacId: string,
+  operation: StudioGuidedOperation,
+): string {
   const runnable = operation.studioRunnable ? "studio runnable" : "CLI handoff";
   const provider = operation.providerRequired ? "provider key" : "no key";
   const blocked =
     operation.blockedReason === null
       ? ""
       : `<p>${escapeHtml(operation.blockedReason)}</p>`;
-  return `<div class="command">
+  const runButton = operation.studioRunnable
+    ? `<button type="button" data-run-operation="${escapeAttribute(operation.id)}" data-almanac-id="${escapeAttribute(almanacId)}" data-confirmation="${operation.confirmation ? "true" : "false"}" data-command="${escapeAttribute(operation.command)}" data-operation-label="${escapeAttribute(operation.label)}">Run</button>`
+    : "";
+  return `<div class="command" data-operation="${escapeAttribute(operation.id)}">
   <div class="command-meta">
     <strong>${escapeHtml(operation.label)}</strong>
     <span>${escapeHtml(operation.category)}</span>
@@ -414,7 +420,11 @@ function renderGuidedOperation(operation: StudioGuidedOperation): string {
   <p>${escapeHtml(operation.description)}</p>
   ${blocked}
   <pre><code>${escapeHtml(operation.command)}</code></pre>
-  <button type="button" data-copy="${escapeAttribute(operation.command)}">Copy</button>
+  <div class="command-actions">
+    ${runButton}
+    <button type="button" data-copy="${escapeAttribute(operation.command)}">Copy</button>
+  </div>
+  <div class="operation-result" data-operation-result="${escapeAttribute(operation.id)}" role="status" aria-live="polite"></div>
 </div>`;
 }
 
@@ -426,7 +436,9 @@ function renderSuggestedQuestion(question: StudioSuggestedQuestion): string {
   </div>
   <p>${escapeHtml(question.question)}</p>
   <pre><code>${escapeHtml(question.saveCommand)}</code></pre>
-  <button type="button" data-copy="${escapeAttribute(question.saveCommand)}">Copy</button>
+  <div class="command-actions">
+    <button type="button" data-copy="${escapeAttribute(question.saveCommand)}">Copy</button>
+  </div>
 </div>`;
 }
 
@@ -445,7 +457,9 @@ function renderCommand(command: StudioCommand): string {
       : `<p>${escapeHtml(command.reason)}</p>`
   }
   <pre><code>${escapeHtml(command.command)}</code></pre>
-  <button type="button" data-copy="${escapeAttribute(command.command)}">Copy</button>
+  <div class="command-actions">
+    <button type="button" data-copy="${escapeAttribute(command.command)}">Copy</button>
+  </div>
 </div>`;
 }
 
@@ -534,17 +548,32 @@ ul{margin:0;padding-left:18px;font-size:13px}
 .command-meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#526064}
 .command-meta strong{color:#1c2528}
 .command p,.question p{font-size:12px;color:#526064;margin-top:6px}
-pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;background:#eef1f2;border-radius:6px;padding:9px;padding-right:58px}
-button{position:absolute;right:10px;bottom:10px;border:1px solid #9aa7aa;background:#ffffff;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer}
+pre{margin:8px 0 0;white-space:pre-wrap;word-break:break-word;font-size:12px;line-height:1.45;background:#eef1f2;border-radius:6px;padding:9px}
+.command-actions{display:flex;justify-content:flex-end;gap:6px;margin-top:8px}
+button{border:1px solid #9aa7aa;background:#ffffff;border-radius:6px;padding:4px 8px;font-size:12px;cursor:pointer}
+button[disabled]{cursor:not-allowed;opacity:.65}
+.operation-result:empty{display:none}
+.operation-result{border:1px solid #d9dedf;border-radius:8px;background:#ffffff;margin-top:8px;padding:9px;font-size:12px}
+.operation-result strong{display:block;margin-bottom:4px}
+.operation-result p{margin-top:4px}
+.operation-result ul{margin-top:4px}
+.operation-result[data-status="ok"]{border-color:#5e8f63;background:#f5fbf6}
+.operation-result[data-status="attention"]{border-color:#9d8358;background:#fff9ed}
+.operation-result[data-status="failed"],.operation-result[data-status="blocked"]{border-color:#b66a67;background:#fff5f4}
 .empty{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px}
 @media (max-width:720px){header{align-items:flex-start;flex-direction:column;padding:22px 18px}.root{text-align:left}main{padding:18px}.grid{grid-template-columns:1fr}.meta{grid-template-columns:1fr}}
-@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p,.activation p,.activation-head span{color:#a8b4b8}.command,.question,.activation{background:#151c1f;border-color:#334044}.command-meta strong,.activation-head strong{color:#edf1f2}.milestones li{border-color:#334044;color:#a8b4b8}.milestones [data-state="done"]{background:#152916;color:#8dd394;border-color:#47794d}.milestones [data-state="next"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
+@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p,.activation p,.activation-head span{color:#a8b4b8}.command,.question,.activation{background:#151c1f;border-color:#334044}.command-meta strong,.activation-head strong{color:#edf1f2}.milestones li{border-color:#334044;color:#a8b4b8}.milestones [data-state="done"]{background:#152916;color:#8dd394;border-color:#47794d}.milestones [data-state="next"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}.operation-result{background:#182023;border-color:#334044}.operation-result[data-status="ok"]{background:#142417;border-color:#47794d}.operation-result[data-status="attention"]{background:#2b2416;border-color:#8b6b35}.operation-result[data-status="failed"],.operation-result[data-status="blocked"]{background:#2d1716;border-color:#8c4e4a}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
 `;
 }
 
 function studioJs(): string {
   return `
 document.addEventListener("click", async (event) => {
+  const runButton = event.target.closest("button[data-run-operation]");
+  if (runButton) {
+    await runOperation(runButton);
+    return;
+  }
   const button = event.target.closest("button[data-copy]");
   if (!button) return;
   const command = button.getAttribute("data-copy");
@@ -556,5 +585,84 @@ document.addEventListener("click", async (event) => {
     button.textContent = "Select";
   }
 });
+
+async function runOperation(button) {
+  const operationId = button.getAttribute("data-run-operation");
+  const almanacId = button.getAttribute("data-almanac-id");
+  const command = button.getAttribute("data-command") || "";
+  const label = button.getAttribute("data-operation-label") || operationId;
+  const needsConfirmation = button.getAttribute("data-confirmation") === "true";
+  if (needsConfirmation && !window.confirm("Run " + label + "?")) return;
+
+  const panel = button.closest("[data-operation]");
+  const result = panel ? panel.querySelector("[data-operation-result]") : null;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "Running";
+  setOperationResult(result, {
+    status: "running",
+    summary: "Operation is running.",
+    artifactsWritten: [],
+    nextOperation: null
+  }, command);
+
+  try {
+    const response = await fetch(
+      "/api/operations/" + encodeURIComponent(almanacId) + "/" +
+        encodeURIComponent(operationId) + "/run",
+      { method: "POST" }
+    );
+    const body = await response.json();
+    if (!response.ok && body.status === undefined) {
+      body.status = "failed";
+      body.summary = body.message || body.error || "Operation failed.";
+    }
+    setOperationResult(result, body, command);
+  } catch (error) {
+    setOperationResult(result, {
+      status: "failed",
+      summary: error && error.message ? error.message : "Operation failed.",
+      artifactsWritten: [],
+      nextOperation: null
+    }, command);
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function setOperationResult(container, result, fallbackCommand) {
+  if (!container) return;
+  const status = result.status || "unknown";
+  const artifacts = Array.isArray(result.artifactsWritten)
+    ? result.artifactsWritten
+    : [];
+  const artifactHtml = artifacts.length === 0
+    ? '<p class="muted">No artifacts written</p>'
+    : '<ul>' + artifacts.map((item) => '<li>' + escapeHtml(String(item)) + '</li>').join("") + '</ul>';
+  const nextOperation = result.nextOperation
+    ? '<p>Next: ' + escapeHtml(result.nextOperation.label || result.nextOperation.id || "guided operation") + '</p>'
+    : '<p class="muted">No next operation returned</p>';
+  container.setAttribute("data-status", status);
+  container.innerHTML =
+    '<strong>Status: ' + escapeHtml(status) + '</strong>' +
+    '<p>' + escapeHtml(result.summary || "Operation completed.") + '</p>' +
+    artifactHtml +
+    nextOperation +
+    '<p class="muted">Fallback command</p>' +
+    '<pre><code>' + escapeHtml(fallbackCommand) + '</code></pre>';
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>"']/g, (char) => {
+    switch (char) {
+      case "&": return "&amp;";
+      case "<": return "&lt;";
+      case ">": return "&gt;";
+      case '"': return "&quot;";
+      default: return "&#39;";
+    }
+  });
+}
 `;
 }
