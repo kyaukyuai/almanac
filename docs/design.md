@@ -1212,17 +1212,19 @@ maintenance dry-run, Enterprise AI fresh compile benchmark at 138 facts and
 15/15 passed fixtures, valid real-provider Enterprise AI abstention with
 quality pass, and saved-run replay pass.
 
-### v0.16 planning — Actionable Studio / Guided Operations
+### v0.16 RC — Actionable Studio / Guided Operations
 
-v0.16 is planned as the Actionable Studio / Guided Operations release:
+v0.16 is the Actionable Studio / Guided Operations release:
 
 - Recommended next actions become structured guided operations with provider,
   mutation, confirmation, command, and result metadata.
 - Safe provider-free operations can be executed locally instead of only copied:
   ask-suite, saved-run replay, answer-readiness evidence save, benchmark rerun,
-  maintenance dry-run, and inventory reload.
+  and maintenance dry-run.
 - Studio gets localhost-only POST actions for bounded operations while GET/page
   load stays read-only.
+- Studio renders Run buttons only for safe runnable operations and shows inline
+  result panels with status, artifacts, next operation, and fallback command.
 - Provider-backed compile, discovery, embeddings, and real answer generation
   remain explicit CLI handoffs.
 - The answer-readiness gap from v0.15 is addressed: "checks passed but evidence
@@ -1230,7 +1232,8 @@ v0.16 is planned as the Actionable Studio / Guided Operations release:
   detail.
 
 See [`docs/v0.16-plan.md`](./v0.16-plan.md) for scope, non-goals, safety
-boundary, and PR sequence.
+boundary, and PR sequence. See [`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md)
+for the provider-free and Enterprise AI release-candidate smoke sequence.
 
 ### v0.17+ (long-tail)
 

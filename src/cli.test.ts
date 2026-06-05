@@ -4335,6 +4335,15 @@ describe("almanac CLI product onboarding", () => {
         studioRunnable: true,
       }),
     );
+    const inspectOperation = readyReport.operations.find((operation) =>
+      operation.command.startsWith("almanac inspect sqlite-demo")
+    );
+    expect(inspectOperation).toEqual(
+      expect.objectContaining({
+        providerRequired: false,
+        studioRunnable: false,
+      }),
+    );
 
     const askSuiteRun = runCli([
       "operations",

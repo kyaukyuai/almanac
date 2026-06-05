@@ -4064,11 +4064,7 @@ function guidedOperationStudioRunnable(args: {
   }
   if (
     args.command.startsWith("almanac ask-suite ") ||
-    args.command.startsWith("almanac ask-replay ") ||
-    args.command.startsWith("almanac status ") ||
-    args.command.startsWith("almanac profile ") ||
-    args.command.startsWith("almanac inspect ") ||
-    args.command.startsWith("almanac runs ")
+    args.command.startsWith("almanac ask-replay ")
   ) {
     return true;
   }
@@ -4081,7 +4077,7 @@ function guidedOperationStudioRunnable(args: {
       args.command.includes("12-benchmark-run")
     );
   }
-  return args.category === "inspect" && args.mutation === "none";
+  return false;
 }
 
 function guidedOperationBlockedReason(args: {
@@ -6201,12 +6197,15 @@ async function studioCardFromItem(
     activation,
     firstAnswer,
   );
-  const operations = buildGuidedOperations({
-    activation,
-    firstAnswer,
-    preferredAction: activationAction,
-    nextActions: item.lifecycle.nextActions,
-  });
+  const operations = uniqueGuidedOperations([
+    ...buildGuidedOperations({
+      activation,
+      firstAnswer,
+      preferredAction: activationAction,
+      nextActions: item.lifecycle.nextActions,
+    }),
+    ...(await readMaintenanceGuidedOperations(item.almanacId, { root })),
+  ]);
   const startAction = studioCommandFromStartAction(startActionForItem(item, root));
   const nextBestAction =
     activationAction === null
