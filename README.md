@@ -281,6 +281,10 @@ an empty root to a reviewed create path, answer-ready checks, suggested
 questions, a saved first answer, deterministic replay, and maintenance handoff
 without first learning the internal artifact model.
 
+The next planned line is `v0.16`: Actionable Studio / Guided Operations. It
+focuses on running safe provider-free next actions from Studio and a shared
+guided operation model while keeping provider-backed work explicit.
+
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
 ## Benchmarks
@@ -399,6 +403,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.15 RC smoke](./docs/v0.15-rc-smoke.md): release-candidate validation
   for guided activation, mock guided create apply, first-answer guidance,
   Studio activation, and Enterprise AI provider smoke
+- [v0.16 plan](./docs/v0.16-plan.md): Actionable Studio, guided operations,
+  provider-free local action execution, operation result envelopes, and
+  evidence persistence simplification
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
