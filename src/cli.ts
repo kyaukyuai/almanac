@@ -1963,6 +1963,33 @@ interface ActivationNextAction {
   providerRequired: boolean;
 }
 
+type GuidedOperationCategory =
+  | "validate"
+  | "replay"
+  | "refresh"
+  | "maintain"
+  | "handoff"
+  | "inspect";
+type GuidedOperationMutation =
+  | "none"
+  | "artifact-write"
+  | "almanac-write"
+  | "external";
+
+interface GuidedOperation {
+  id: string;
+  label: string;
+  description: string;
+  category: GuidedOperationCategory;
+  providerRequired: boolean;
+  mutation: GuidedOperationMutation;
+  confirmation: boolean;
+  command: string;
+  studioRunnable: boolean;
+  expectedArtifacts: string[];
+  blockedReason: string | null;
+}
+
 interface ActivationReport {
   status: ActivationStatus;
   milestone: ActivationMilestone;
@@ -2092,6 +2119,8 @@ interface AlmanacStatusReport {
   usability: LifecycleUsability;
   activation: ActivationReport;
   firstAnswer: FirstAnswerGuidance;
+  operations: GuidedOperation[];
+  recommendedOperation: GuidedOperation | null;
   lifecycle: LifecycleInventoryItem["lifecycle"];
   runs: LifecycleLatestRuns;
   nextActions: string[];
@@ -2505,6 +2534,13 @@ async function readAlmanacStatusReport(
     canAsk:
       lifecycle.answer.status === "ready" || runs.byKind.answer !== null,
   });
+  const preferredAction = preferredActivationAction(activation, firstAnswer);
+  const operations = buildGuidedOperations({
+    activation,
+    firstAnswer,
+    preferredAction,
+    nextActions,
+  });
 
   return {
     almanacId: item.almanacId,
@@ -2515,6 +2551,8 @@ async function readAlmanacStatusReport(
     usability: lifecycleUsability(item),
     activation,
     firstAnswer,
+    operations,
+    recommendedOperation: operations[0] ?? null,
     lifecycle,
     runs,
     nextActions,
@@ -3725,6 +3763,303 @@ function activationCommandNeedsProvider(command: string): boolean {
   );
 }
 
+function preferredActivationAction(
+  activation: ActivationReport,
+  firstAnswer: FirstAnswerGuidance,
+): ActivationNextAction | null {
+  if (
+    (activation.nextMilestone === "first-answer" ||
+      activation.nextMilestone === "replayable") &&
+    firstAnswer.nextActions.length > 0
+  ) {
+    return firstAnswer.nextActions[0]!;
+  }
+  return activation.nextAction;
+}
+
+function buildGuidedOperations(args: {
+  activation: ActivationReport;
+  firstAnswer: FirstAnswerGuidance;
+  preferredAction: ActivationNextAction | null;
+  nextActions: string[];
+}): GuidedOperation[] {
+  const candidates: GuidedOperation[] = [];
+  if (args.preferredAction !== null) {
+    candidates.push(guidedOperationFromActivationAction(args.preferredAction));
+  }
+  for (const action of args.firstAnswer.nextActions) {
+    candidates.push(guidedOperationFromActivationAction(action));
+  }
+  if (args.activation.nextAction !== null) {
+    candidates.push(guidedOperationFromActivationAction(args.activation.nextAction));
+  }
+  for (const action of args.nextActions) {
+    candidates.push(guidedOperationFromActionString(action));
+  }
+  return uniqueGuidedOperations(candidates);
+}
+
+function guidedOperationFromActivationAction(
+  action: ActivationNextAction,
+): GuidedOperation {
+  const parsed = parseLabeledCommand(action.command);
+  return guidedOperationFromCommand({
+    command: parsed.command,
+    reason: action.reason,
+    providerRequired: action.providerRequired,
+    label: guidedOperationLabel(parsed.command, parsed.label),
+  });
+}
+
+function guidedOperationFromActionString(action: string): GuidedOperation {
+  const parsed = parseLabeledCommand(action);
+  return guidedOperationFromCommand({
+    command: parsed.command,
+    label: guidedOperationLabel(parsed.command, parsed.label),
+  });
+}
+
+function guidedOperationFromCommand(args: {
+  command: string;
+  label: string;
+  reason?: string;
+  providerRequired?: boolean;
+}): GuidedOperation {
+  const providerRequired =
+    args.providerRequired === true || guidedOperationNeedsProvider(args.command);
+  const category = guidedOperationCategory(args.command);
+  const mutation = guidedOperationMutation(args.command);
+  const studioRunnable = guidedOperationStudioRunnable({
+    command: args.command,
+    category,
+    mutation,
+    providerRequired,
+  });
+  const blockedReason = guidedOperationBlockedReason({
+    command: args.command,
+    mutation,
+    providerRequired,
+    studioRunnable,
+  });
+  return {
+    id: guidedOperationId(category, args.command),
+    label: args.label,
+    description:
+      args.reason ?? guidedOperationDescription(args.command, category, mutation),
+    category,
+    providerRequired,
+    mutation,
+    confirmation: mutation !== "none",
+    command: args.command,
+    studioRunnable,
+    expectedArtifacts: guidedOperationExpectedArtifacts(args.command),
+    blockedReason,
+  };
+}
+
+function uniqueGuidedOperations(operations: GuidedOperation[]): GuidedOperation[] {
+  const seen = new Set<string>();
+  const out: GuidedOperation[] = [];
+  for (const operation of operations) {
+    if (seen.has(operation.command)) continue;
+    seen.add(operation.command);
+    out.push(operation);
+  }
+  return out;
+}
+
+function guidedOperationId(
+  category: GuidedOperationCategory,
+  command: string,
+): string {
+  return `op-${category}-${sha256Hex(command).slice(0, 10)}`;
+}
+
+function guidedOperationLabel(command: string, fallback = "Run command"): string {
+  if (command.startsWith("almanac ask-replay ")) return "Replay saved answer";
+  if (command.startsWith("almanac ask-fixtures ")) return "Manage answer checks";
+  if (command.startsWith("almanac ask-suite ")) return "Run answer checks";
+  if (command.startsWith("almanac ask ")) return "Ask first question";
+  if (command.startsWith("almanac benchmark ")) return "Run validation";
+  if (command.startsWith("almanac refresh run ")) return "Save readiness evidence";
+  if (command.startsWith("almanac maintain ")) return "Check maintenance";
+  if (command.startsWith("almanac runs ")) return "Inspect history";
+  if (command.startsWith("almanac status ")) return "Open status";
+  if (command.startsWith("almanac profile ")) return "Open profile";
+  if (command.startsWith("almanac inspect ")) return "Inspect almanac";
+  if (command.startsWith("almanac studio")) return "Open Studio";
+  return fallback;
+}
+
+function guidedOperationDescription(
+  command: string,
+  category: GuidedOperationCategory,
+  mutation: GuidedOperationMutation,
+): string {
+  if (command.startsWith("almanac ask-suite ")) {
+    return "Run saved answer checks without provider calls.";
+  }
+  if (command.startsWith("almanac ask-replay ")) {
+    return "Replay saved answer history without provider calls.";
+  }
+  if (command.startsWith("almanac refresh run ") && command.includes("--ask-suite")) {
+    return "Persist answer-readiness evidence through a refresh artifact.";
+  }
+  if (command.startsWith("almanac maintain ")) {
+    return "Check refresh, validation, answer checks, and cleanup work.";
+  }
+  if (command.startsWith("almanac benchmark ")) {
+    return "Run validation fixtures through the runtime.";
+  }
+  if (mutation === "artifact-write") return "Write a bounded run artifact.";
+  if (mutation === "almanac-write") return "Modify local almanac files.";
+  if (mutation === "external") return "Update external client or filesystem state.";
+  if (category === "inspect") return "Inspect local almanac state.";
+  return "Run the recommended guided operation.";
+}
+
+function guidedOperationCategory(command: string): GuidedOperationCategory {
+  if (
+    command.startsWith("almanac benchmark ") ||
+    command.startsWith("almanac ask-suite ") ||
+    command.startsWith("almanac ask-fixtures ")
+  ) {
+    return "validate";
+  }
+  if (command.startsWith("almanac ask-replay ")) return "replay";
+  if (command.startsWith("almanac refresh ")) return "refresh";
+  if (command.startsWith("almanac maintain ")) return "maintain";
+  if (
+    command.startsWith("almanac new ") ||
+    command.startsWith("almanac update ") ||
+    command.startsWith("almanac ask ") ||
+    command.startsWith("almanac feed ") ||
+    command.startsWith("almanac register ") ||
+    command.startsWith("almanac export ") ||
+    command.startsWith("almanac wiki ")
+  ) {
+    return "handoff";
+  }
+  return "inspect";
+}
+
+function guidedOperationNeedsProvider(command: string): boolean {
+  if (
+    command.startsWith("almanac new ") ||
+    command.includes(" almanac new ") ||
+    command.startsWith("almanac update ") ||
+    command.includes(" almanac update ") ||
+    command.startsWith("almanac ask ") ||
+    command.includes(" almanac ask ")
+  ) {
+    return true;
+  }
+  if (command.startsWith("almanac refresh run ")) {
+    return !(command.includes("--ask-suite") && command.includes("12-benchmark-run"));
+  }
+  return false;
+}
+
+function guidedOperationMutation(command: string): GuidedOperationMutation {
+  if (
+    command.startsWith("almanac register ") ||
+    command.includes(" register ") ||
+    command.startsWith("almanac export ") ||
+    command.startsWith("almanac wiki ")
+  ) {
+    return "external";
+  }
+  if (
+    command.startsWith("almanac new ") ||
+    command.startsWith("almanac update ") ||
+    command.startsWith("almanac feed ") ||
+    command.startsWith("almanac ask-fixtures ") ||
+    command.includes(" --init") ||
+    command.includes(" --apply")
+  ) {
+    return "almanac-write";
+  }
+  if (
+    command.includes(" --save") ||
+    command.startsWith("almanac refresh run ") ||
+    command.includes(" --prune")
+  ) {
+    return "artifact-write";
+  }
+  return "none";
+}
+
+function guidedOperationStudioRunnable(args: {
+  command: string;
+  category: GuidedOperationCategory;
+  mutation: GuidedOperationMutation;
+  providerRequired: boolean;
+}): boolean {
+  if (args.providerRequired) return false;
+  if (args.mutation === "external" || args.mutation === "almanac-write") {
+    return false;
+  }
+  if (args.command.startsWith("almanac benchmark ")) {
+    return !args.command.includes(" --init");
+  }
+  if (
+    args.command.startsWith("almanac ask-suite ") ||
+    args.command.startsWith("almanac ask-replay ") ||
+    args.command.startsWith("almanac status ") ||
+    args.command.startsWith("almanac profile ") ||
+    args.command.startsWith("almanac inspect ") ||
+    args.command.startsWith("almanac runs ")
+  ) {
+    return true;
+  }
+  if (args.command.startsWith("almanac maintain ")) {
+    return args.command.includes(" --dry-run");
+  }
+  if (args.command.startsWith("almanac refresh run ")) {
+    return (
+      args.command.includes("--ask-suite") &&
+      args.command.includes("12-benchmark-run")
+    );
+  }
+  return args.category === "inspect" && args.mutation === "none";
+}
+
+function guidedOperationBlockedReason(args: {
+  command: string;
+  mutation: GuidedOperationMutation;
+  providerRequired: boolean;
+  studioRunnable: boolean;
+}): string | null {
+  if (args.studioRunnable) return null;
+  if (args.providerRequired) return "provider-backed operation uses CLI handoff";
+  if (args.mutation === "external") return "external operation uses CLI handoff";
+  if (args.mutation === "almanac-write") {
+    return "almanac-writing operation uses CLI handoff";
+  }
+  return "Studio action runner does not support this command yet";
+}
+
+function guidedOperationExpectedArtifacts(command: string): string[] {
+  if (command.startsWith("almanac ask ") && command.includes(" --save")) {
+    return [".runs/answer-*.json"];
+  }
+  if (command.startsWith("almanac ask-fixtures ")) return ["tests/ask.jsonl"];
+  if (command.startsWith("almanac benchmark ")) {
+    return command.includes(" --init")
+      ? ["tests/positive.jsonl", "tests/negative.jsonl"]
+      : [".compile/benchmark-result.json"];
+  }
+  if (command.startsWith("almanac refresh run ") && command.includes(" --save")) {
+    return [".runs/refresh-*.json"];
+  }
+  if (command.startsWith("almanac maintain ") && command.includes(" --save")) {
+    return [".runs/maintenance-*.json"];
+  }
+  if (command.startsWith("almanac export ")) return ["*.tar.gz"];
+  if (command.startsWith("almanac wiki ")) return ["wiki/"];
+  return [];
+}
+
 async function readDomainSpecForGuidance(
   almanacDir: string,
 ): Promise<DomainSpec | null> {
@@ -3997,6 +4332,15 @@ function formatActivationReport(activation: ActivationReport): string {
       ? ""
       : ` -> ${activation.nextMilestoneLabel}`;
   return `${activation.milestoneLabel}${next}, ${activation.status}`;
+}
+
+function formatGuidedOperationSummary(operation: GuidedOperation): string {
+  const studio = operation.studioRunnable ? "studio runnable" : "CLI handoff";
+  const provider = operation.providerRequired ? "provider required" : "no provider";
+  return (
+    `${operation.label} (${operation.category}, ${operation.mutation}, ` +
+    `${provider}, ${studio}): ${formatGuidedAction(operation.command)}`
+  );
 }
 
 function formatFirstAnswerGuidanceSummary(
@@ -4957,6 +5301,11 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       `  activation next ${formatGuidedAction(report.activation.nextAction.command)}${provider}\n`,
     );
   }
+  if (report.recommendedOperation !== null) {
+    process.stdout.write(
+      `  operation     ${formatGuidedOperationSummary(report.recommendedOperation)}\n`,
+    );
+  }
   process.stdout.write(
     `  first answer  ${formatFirstAnswerGuidanceSummary(report.firstAnswer)}\n`,
   );
@@ -5167,6 +5516,12 @@ async function studioCardFromItem(
     activation,
     firstAnswer,
   );
+  const operations = buildGuidedOperations({
+    activation,
+    firstAnswer,
+    preferredAction: activationAction,
+    nextActions: item.lifecycle.nextActions,
+  });
   const startAction = studioCommandFromStartAction(startActionForItem(item, root));
   const nextBestAction =
     activationAction === null
@@ -5224,6 +5579,8 @@ async function studioCardFromItem(
     },
     suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
+    recommendedOperation: operations[0] ?? null,
+    operations,
     nextBestAction,
     commands,
   };
@@ -5233,14 +5590,7 @@ function preferredStudioActivationAction(
   activation: ActivationReport,
   firstAnswer: FirstAnswerGuidance,
 ): ActivationNextAction | null {
-  if (
-    (activation.nextMilestone === "first-answer" ||
-      activation.nextMilestone === "replayable") &&
-    firstAnswer.nextActions.length > 0
-  ) {
-    return firstAnswer.nextActions[0]!;
-  }
-  return activation.nextAction;
+  return preferredActivationAction(activation, firstAnswer);
 }
 
 function studioHistorySummary(runs: LifecycleLatestRuns): StudioHistorySummary {
@@ -8303,6 +8653,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     );
   }
   nextActions.push(`diagnose artifacts: almanac doctor ${id}${rootSuffix}`);
+  const statusReportForOperations = await readAlmanacStatusReport(id, opts);
 
   const profile = {
     almanacDir: dir,
@@ -8361,6 +8712,8 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     refresh: refreshRunVisibility,
     answer: answerReadiness,
     firstAnswer,
+    operations: statusReportForOperations.operations,
+    recommendedOperation: statusReportForOperations.recommendedOperation,
     artifacts: {
       domainSpec: domainSpec === null ? null : domainSpecPath(dir),
       facts: factsJsonlPath(dir),
@@ -8452,6 +8805,11 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   process.stdout.write(
     `  first answer   ${formatFirstAnswerGuidanceSummary(firstAnswer)}\n`,
   );
+  if (profile.recommendedOperation !== null) {
+    process.stdout.write(
+      `  operation      ${formatGuidedOperationSummary(profile.recommendedOperation)}\n`,
+    );
+  }
 
   if (domainSpec !== null) {
     process.stdout.write(`\ncapabilities:\n`);

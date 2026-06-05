@@ -110,6 +110,17 @@ describe("studio server", () => {
     expect(status.body.activation.nextAction?.command).toContain(
       "almanac ask sqlite-demo",
     );
+    expect(status.body.recommendedOperation).toEqual(
+      expect.objectContaining({
+        label: "Ask first question",
+        category: "handoff",
+        providerRequired: true,
+        studioRunnable: false,
+      }),
+    );
+    expect(status.body.operations[0]?.command).toContain(
+      "almanac ask sqlite-demo",
+    );
 
     const missing = await fetch(`${server.url}/api/status/missing`);
     expect(missing.status).toBe(404);
@@ -192,6 +203,8 @@ function fixtureCard(): StudioAlmanacCard {
       },
     ],
     issues: [],
+    recommendedOperation: fixtureOperation(),
+    operations: [fixtureOperation()],
     nextBestAction: {
       label: "Open status",
       command: "almanac status sqlite-demo --root /tmp/almanac-root",
@@ -207,5 +220,22 @@ function fixtureCard(): StudioAlmanacCard {
         mutates: false,
       },
     ],
+  };
+}
+
+function fixtureOperation() {
+  return {
+    id: "op-handoff-1234567890",
+    label: "Ask first question",
+    description: "Save the first cited answer or valid abstention.",
+    category: "handoff",
+    providerRequired: true,
+    mutation: "artifact-write",
+    confirmation: true,
+    command:
+      "almanac ask sqlite-demo 'Are SQLite transactions atomic?' --save --root /tmp/almanac-root",
+    studioRunnable: false,
+    expectedArtifacts: [".runs/answer-*.json"],
+    blockedReason: "provider-backed operation uses CLI handoff",
   };
 }
