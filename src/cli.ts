@@ -5666,10 +5666,24 @@ async function cmdOperationsRun(
   operationId: string,
   opts: OperationsOptions,
 ): Promise<void> {
+  const result = await runGuidedOperationById(id, operationId, opts);
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(result, null, 2) + "\n"
+      : formatGuidedOperationRunHuman(result),
+  );
+  process.exitCode = result.exitCode;
+}
+
+async function runGuidedOperationById(
+  id: string,
+  operationId: string,
+  opts: OperationsOptions,
+): Promise<GuidedOperationRunResult> {
   const report = await readGuidedOperationListReport(id, opts);
   const operation =
     report.operations.find((item) => item.id === operationId) ?? null;
-  const result =
+  return (
     operation === null
       ? await blockedGuidedOperationRun({
           almanacId: report.almanacId,
@@ -5679,14 +5693,8 @@ async function cmdOperationsRun(
           operation: null,
           reason: `unknown operation id: ${operationId}`,
         })
-      : await runGuidedProviderFreeOperation(report, operation);
-
-  process.stdout.write(
-    opts.json === true
-      ? JSON.stringify(result, null, 2) + "\n"
-      : formatGuidedOperationRunHuman(result),
+      : await runGuidedProviderFreeOperation(report, operation)
   );
-  process.exitCode = result.exitCode;
 }
 
 function operationsUsageError(message: string): never {
@@ -6078,6 +6086,8 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
       port,
       loadSnapshot: () => buildStudioSnapshot(opts.root),
       loadStatus: (almanacId) => buildStudioStatus(opts.root, almanacId),
+      runOperation: (almanacId, operationId) =>
+        runGuidedOperationById(almanacId, operationId, { root: opts.root }),
     });
     const started = {
       schemaVersion: "0.1.0" as const,
@@ -6086,6 +6096,9 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
       port: handle.server.port,
       url: handle.url,
       readOnly: true,
+      actions: {
+        providerFree: true,
+      },
     };
     process.stdout.write(
       opts.json === true

@@ -127,6 +127,86 @@ describe("studio server", () => {
 
     const post = await fetch(`${server.url}/api/inventory`, { method: "POST" });
     expect(post.status).toBe(405);
+
+    const unavailableAction = await fetch(
+      `${server.url}/api/operations/sqlite-demo/op-validate-1234567890/run`,
+      { method: "POST" },
+    ).then(async (response) => ({
+      status: response.status,
+      body: (await response.json()) as { error: string },
+    }));
+    expect(unavailableAction).toEqual({
+      status: 501,
+      body: { error: "operation-runner-unavailable" },
+    });
+  });
+
+  test("serves localhost POST action API through injected runner", async () => {
+    const calls: Array<{ almanacId: string; operationId: string }> = [];
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async (almanacId) =>
+        almanacId === "sqlite-demo" ? fixtureCard() : null,
+      runOperation: async (almanacId, operationId) => {
+        calls.push({ almanacId, operationId });
+        if (operationId === "op-fail") {
+          throw new Error("operation exploded");
+        }
+        return {
+          schemaVersion: "0.1.0",
+          almanacId,
+          operationId,
+          status: "ok",
+          exitCode: 0,
+          provider: { expected: false, actual: false },
+          artifactsWritten: [".runs/refresh-test.json"],
+          summary: "readiness evidence saved",
+          reasons: [],
+          nextOperation: null,
+        };
+      },
+    });
+
+    const action = await fetch(
+      `${server.url}/api/operations/sqlite-demo/op-refresh-abcdef1234/run`,
+      { method: "POST" },
+    ).then(async (response) => ({
+      status: response.status,
+      body: (await response.json()) as {
+        almanacId: string;
+        operationId: string;
+        status: string;
+        artifactsWritten: string[];
+      },
+    }));
+
+    expect(action.status).toBe(200);
+    expect(action.body).toEqual(
+      expect.objectContaining({
+        almanacId: "sqlite-demo",
+        operationId: "op-refresh-abcdef1234",
+        status: "ok",
+        artifactsWritten: [".runs/refresh-test.json"],
+      }),
+    );
+    expect(calls).toEqual([
+      { almanacId: "sqlite-demo", operationId: "op-refresh-abcdef1234" },
+    ]);
+
+    const failedAction = await fetch(
+      `${server.url}/api/operations/sqlite-demo/op-fail/run`,
+      { method: "POST" },
+    ).then(async (response) => ({
+      status: response.status,
+      body: (await response.json()) as { error?: string; message?: string },
+    }));
+    expect(failedAction.status).toBe(500);
+    expect(failedAction.body).toEqual({
+      error: "operation-run-failed",
+      message: "operation exploded",
+    });
   });
 });
 
