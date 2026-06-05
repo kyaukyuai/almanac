@@ -14,6 +14,7 @@
  *                                          onwards and re-runs the pipeline)
  *   almanac list [opts]                    list compiled almanacs under the root
  *   almanac status <id> [opts]             show a compact lifecycle summary
+ *   almanac operations <id> [opts]         list or run guided operations
  *   almanac maintain [id] [opts]           plan/apply due maintenance
  *   almanac repair <id> [opts]             audit/apply low-risk repairs
  *   almanac cleanup [opts]                 audit/apply root cleanup candidates
@@ -1829,6 +1830,11 @@ interface StatusOptions {
   json?: boolean;
 }
 
+interface OperationsOptions {
+  root: string;
+  json?: boolean;
+}
+
 interface StartOptions {
   root: string;
   json?: boolean;
@@ -1988,6 +1994,41 @@ interface GuidedOperation {
   studioRunnable: boolean;
   expectedArtifacts: string[];
   blockedReason: string | null;
+}
+
+interface GuidedOperationListReport {
+  schemaVersion: "0.1.0";
+  almanacId: string;
+  root: string;
+  almanacDir: string;
+  generatedAt: string;
+  recommendedOperation: GuidedOperation | null;
+  operations: GuidedOperation[];
+}
+
+type GuidedOperationRunStatus = "ok" | "attention" | "failed" | "blocked";
+
+interface GuidedOperationRunResult {
+  schemaVersion: "0.1.0";
+  almanacId: string;
+  root: string;
+  almanacDir: string;
+  operationId: string;
+  operation: GuidedOperation | null;
+  status: GuidedOperationRunStatus;
+  exitCode: RunToolExitCode;
+  startedAt: string;
+  finishedAt: string;
+  durationMs: number;
+  provider: {
+    expected: boolean;
+    actual: boolean;
+  };
+  artifactsWritten: string[];
+  summary: string;
+  reasons: string[];
+  nextOperation: GuidedOperation | null;
+  result?: unknown;
 }
 
 interface ActivationReport {
@@ -3872,7 +3913,25 @@ function guidedOperationId(
   category: GuidedOperationCategory,
   command: string,
 ): string {
-  return `op-${category}-${sha256Hex(command).slice(0, 10)}`;
+  const hash = sha256Hex(guidedOperationIdentityCommand(command)).slice(0, 10);
+  return `op-${category}-${hash}`;
+}
+
+function guidedOperationIdentityCommand(command: string): string {
+  try {
+    const words = splitCommandWords(command);
+    const identityWords: string[] = [];
+    for (let i = 0; i < words.length; i += 1) {
+      if (words[i] === "--root") {
+        i += 1;
+        continue;
+      }
+      identityWords.push(words[i]!);
+    }
+    return identityWords.join(" ");
+  } catch {
+    return command.replace(/\s+--root\s+\S+/g, "");
+  }
 }
 
 function guidedOperationLabel(command: string, fallback = "Run command"): string {
@@ -3982,6 +4041,7 @@ function guidedOperationMutation(command: string): GuidedOperationMutation {
   if (
     command.includes(" --save") ||
     command.startsWith("almanac refresh run ") ||
+    command.startsWith("almanac benchmark ") ||
     command.includes(" --prune")
   ) {
     return "artifact-write";
@@ -4058,6 +4118,184 @@ function guidedOperationExpectedArtifacts(command: string): string[] {
   if (command.startsWith("almanac export ")) return ["*.tar.gz"];
   if (command.startsWith("almanac wiki ")) return ["wiki/"];
   return [];
+}
+
+async function readGuidedOperationListReport(
+  id: string,
+  opts: OperationsOptions,
+): Promise<GuidedOperationListReport> {
+  const statusReport = await readAlmanacStatusReport(id, opts);
+  const maintenanceOperations = await readMaintenanceGuidedOperations(id, opts);
+  const operations = uniqueGuidedOperations([
+    ...statusReport.operations,
+    ...maintenanceOperations,
+  ]);
+  const recommendedOperation =
+    statusReport.recommendedOperation === null
+      ? operations[0] ?? null
+      : operations.find((operation) =>
+          operation.command === statusReport.recommendedOperation?.command
+        ) ?? statusReport.recommendedOperation;
+
+  return {
+    schemaVersion: "0.1.0",
+    almanacId: statusReport.almanacId,
+    root: opts.root,
+    almanacDir: statusReport.almanacDir,
+    generatedAt: new Date().toISOString(),
+    recommendedOperation,
+    operations,
+  };
+}
+
+async function readMaintenanceGuidedOperations(
+  id: string,
+  opts: OperationsOptions,
+): Promise<GuidedOperation[]> {
+  try {
+    const report = await readMaintenanceReport(id, {
+      root: opts.root,
+      dryRun: true,
+      askSuite: true,
+    });
+    return report.plan
+      .filter((step) => step.status === "planned" && step.command !== null)
+      .map((step) =>
+        guidedOperationFromCommand({
+          command: step.command!,
+          label: guidedOperationLabel(step.command!),
+          reason: step.reason,
+          providerRequired: step.providerRequired,
+        })
+      );
+  } catch {
+    return [];
+  }
+}
+
+type SupportedGuidedOperationKind =
+  | "benchmark"
+  | "ask-suite"
+  | "ask-replay-runs"
+  | "refresh-ask-suite"
+  | "maintain-dry-run";
+
+interface SupportedGuidedOperation {
+  kind: SupportedGuidedOperationKind;
+  words: string[];
+  label?: string;
+}
+
+function supportedGuidedOperation(
+  almanacId: string,
+  operation: GuidedOperation,
+): SupportedGuidedOperation | string {
+  let words: string[];
+  try {
+    words = splitCommandWords(operation.command);
+  } catch (e) {
+    return (e as Error).message;
+  }
+  if (words[0] !== "almanac") return "only almanac CLI operations are supported";
+
+  if (words[1] === "benchmark") {
+    if (words[2] !== almanacId) return "operation targets a different almanac";
+    if (commandHasFlag(words, "--init")) {
+      return "benchmark fixture initialization writes almanac files";
+    }
+    return { kind: "benchmark", words };
+  }
+
+  if (words[1] === "ask-suite") {
+    if (words[2] !== almanacId) return "operation targets a different almanac";
+    if (commandHasFlag(words, "--judge")) {
+      return "ask-suite --judge requires an LLM provider";
+    }
+    return { kind: "ask-suite", words };
+  }
+
+  if (words[1] === "ask-replay") {
+    if (words[2] !== almanacId) return "operation targets a different almanac";
+    if (!commandHasFlag(words, "--from-runs")) {
+      return "only ask-replay --from-runs is supported";
+    }
+    if (commandHasFlag(words, "--judge")) {
+      return "ask-replay --judge requires an LLM provider";
+    }
+    return {
+      kind: "ask-replay-runs",
+      words,
+      label: commandOptionValue(words, "--label") ?? undefined,
+    };
+  }
+
+  if (words[1] === "refresh" && words[2] === "run") {
+    if (words[3] !== almanacId) return "operation targets a different almanac";
+    if (commandOptionValue(words, "--from-stage") !== "12-benchmark-run") {
+      return "only refresh run from Stage 12 is provider-free";
+    }
+    if (
+      !commandHasFlag(words, "--ask-suite") ||
+      !commandHasFlag(words, "--save")
+    ) {
+      return "refresh operation must include --ask-suite and --save";
+    }
+    return { kind: "refresh-ask-suite", words };
+  }
+
+  if (words[1] === "maintain") {
+    if (words[2] !== almanacId) return "operation targets a different almanac";
+    if (!commandHasFlag(words, "--dry-run")) {
+      return "only maintain --dry-run is supported";
+    }
+    if (commandHasFlag(words, "--apply") || commandHasFlag(words, "--all")) {
+      return "maintenance apply/all operations are outside this runner";
+    }
+    return { kind: "maintain-dry-run", words };
+  }
+
+  return "operation command is not supported by the provider-free runner";
+}
+
+function splitCommandWords(command: string): string[] {
+  const words: string[] = [];
+  let current = "";
+  let quote: "'" | '"' | null = null;
+  for (let i = 0; i < command.length; i += 1) {
+    const char = command[i]!;
+    if (quote === null && /\s/.test(char)) {
+      if (current.length > 0) {
+        words.push(current);
+        current = "";
+      }
+      continue;
+    }
+    if (char === "\\" && quote !== "'") {
+      i += 1;
+      if (i < command.length) current += command[i]!;
+      continue;
+    }
+    if ((char === "'" || char === '"') && (quote === null || quote === char)) {
+      quote = quote === null ? char : null;
+      continue;
+    }
+    current += char;
+  }
+  if (quote !== null) {
+    throw new Error("operation command has an unterminated quote");
+  }
+  if (current.length > 0) words.push(current);
+  return words;
+}
+
+function commandHasFlag(words: string[], flag: string): boolean {
+  return words.includes(flag);
+}
+
+function commandOptionValue(words: string[], flag: string): string | null {
+  const index = words.indexOf(flag);
+  if (index === -1) return null;
+  return words[index + 1] ?? null;
 }
 
 async function readDomainSpecForGuidance(
@@ -5387,6 +5625,440 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
       process.stdout.write(`  - ${formatGuidedAction(action)}\n`);
     }
   }
+}
+
+async function cmdOperations(
+  args: string[] | undefined,
+  opts: OperationsOptions,
+): Promise<void> {
+  const parts = args ?? [];
+  if (parts.length === 1) {
+    await cmdOperationsList(parts[0]!, opts);
+    return;
+  }
+  if (parts.length === 2 && parts[0] === "list") {
+    await cmdOperationsList(parts[1]!, opts);
+    return;
+  }
+  if (parts.length === 3 && parts[0] === "run") {
+    await cmdOperationsRun(parts[1]!, parts[2]!, opts);
+    return;
+  }
+  operationsUsageError(
+    "usage: almanac operations <id> or almanac operations run <id> <operation-id>",
+  );
+}
+
+async function cmdOperationsList(
+  id: string,
+  opts: OperationsOptions,
+): Promise<void> {
+  const report = await readGuidedOperationListReport(id, opts);
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(report, null, 2) + "\n"
+      : formatGuidedOperationListHuman(report),
+  );
+}
+
+async function cmdOperationsRun(
+  id: string,
+  operationId: string,
+  opts: OperationsOptions,
+): Promise<void> {
+  const report = await readGuidedOperationListReport(id, opts);
+  const operation =
+    report.operations.find((item) => item.id === operationId) ?? null;
+  const result =
+    operation === null
+      ? await blockedGuidedOperationRun({
+          almanacId: report.almanacId,
+          root: report.root,
+          almanacDir: report.almanacDir,
+          operationId,
+          operation: null,
+          reason: `unknown operation id: ${operationId}`,
+        })
+      : await runGuidedProviderFreeOperation(report, operation);
+
+  process.stdout.write(
+    opts.json === true
+      ? JSON.stringify(result, null, 2) + "\n"
+      : formatGuidedOperationRunHuman(result),
+  );
+  process.exitCode = result.exitCode;
+}
+
+function operationsUsageError(message: string): never {
+  process.stderr.write(`error: operations: ${message}\n`);
+  process.exit(2);
+}
+
+async function runGuidedProviderFreeOperation(
+  report: GuidedOperationListReport,
+  operation: GuidedOperation,
+): Promise<GuidedOperationRunResult> {
+  if (operation.providerRequired) {
+    return blockedGuidedOperationRun({
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      reason: operation.blockedReason ?? "operation requires a provider",
+    });
+  }
+  if (!operation.studioRunnable) {
+    return blockedGuidedOperationRun({
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      reason: operation.blockedReason ?? "operation is not runnable",
+    });
+  }
+
+  const supported = supportedGuidedOperation(report.almanacId, operation);
+  if (typeof supported === "string") {
+    return blockedGuidedOperationRun({
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      reason: supported,
+    });
+  }
+
+  const started = new Date();
+  const startedAt = started.toISOString();
+  try {
+    const execution = await executeGuidedOperation(report, operation, supported);
+    const finishedAt = new Date().toISOString();
+    let nextOperation = report.recommendedOperation;
+    try {
+      const nextReport = await readGuidedOperationListReport(report.almanacId, {
+        root: report.root,
+      });
+      nextOperation = nextReport.recommendedOperation;
+    } catch {
+      nextOperation = report.recommendedOperation;
+    }
+    return {
+      schemaVersion: "0.1.0",
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      status: execution.status,
+      exitCode: execution.exitCode,
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - started.getTime(),
+      provider: {
+        expected: false,
+        actual: false,
+      },
+      artifactsWritten: execution.artifactsWritten,
+      summary: execution.summary,
+      reasons: execution.reasons,
+      nextOperation,
+      result: execution.result,
+    };
+  } catch (e) {
+    const finishedAt = new Date().toISOString();
+    return {
+      schemaVersion: "0.1.0",
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      status: "failed",
+      exitCode: 1,
+      startedAt,
+      finishedAt,
+      durationMs: new Date(finishedAt).getTime() - started.getTime(),
+      provider: {
+        expected: false,
+        actual: false,
+      },
+      artifactsWritten: [],
+      summary: `${operation.label} failed`,
+      reasons: [unknownErrorMessage(e)],
+      nextOperation: report.recommendedOperation,
+    };
+  }
+}
+
+interface GuidedOperationExecutionResult {
+  status: GuidedOperationRunStatus;
+  exitCode: RunToolExitCode;
+  artifactsWritten: string[];
+  summary: string;
+  reasons: string[];
+  result: unknown;
+}
+
+async function executeGuidedOperation(
+  report: GuidedOperationListReport,
+  operation: GuidedOperation,
+  supported: SupportedGuidedOperation,
+): Promise<GuidedOperationExecutionResult> {
+  if (supported.kind === "benchmark") {
+    return executeGuidedBenchmark(report);
+  }
+  if (supported.kind === "ask-suite") {
+    return executeGuidedAskSuite(report);
+  }
+  if (supported.kind === "ask-replay-runs") {
+    return executeGuidedAskReplay(report, supported.label);
+  }
+  if (supported.kind === "refresh-ask-suite") {
+    return executeGuidedRefreshAskSuite(report);
+  }
+  if (supported.kind === "maintain-dry-run") {
+    return executeGuidedMaintainDryRun(report);
+  }
+  return {
+    status: "blocked",
+    exitCode: 2,
+    artifactsWritten: [],
+    summary: `${operation.label} is not supported`,
+    reasons: ["operation command is not supported by the provider-free runner"],
+    result: null,
+  };
+}
+
+async function executeGuidedBenchmark(
+  report: GuidedOperationListReport,
+): Promise<GuidedOperationExecutionResult> {
+  const manifest = await readManifest(report.almanacDir);
+  let state = await readCompileState(report.almanacDir);
+  const runner = createBenchmarkRunRunner();
+  state = await runStandaloneStage({
+    almanacDir: report.almanacDir,
+    state,
+    manifest,
+    stageId: "12-benchmark-run",
+    runner,
+  });
+  await writeCompileState(report.almanacDir, state);
+  const benchmark = await readBenchmarkReportIfPresent(report.almanacDir);
+  if (benchmark === null) {
+    throw new Error(
+      `benchmark report was not written: ${benchmarkResultPath(report.almanacDir)}`,
+    );
+  }
+  const failed = benchmark.summary.failed + benchmark.summary.errored;
+  return {
+    status: failed === 0 ? "ok" : "attention",
+    exitCode: failed === 0 ? 0 : 1,
+    artifactsWritten: [".compile/benchmark-result.json"],
+    summary:
+      failed === 0
+        ? `validation passed ${benchmark.summary.passed}/${benchmark.summary.total}`
+        : `validation needs attention: failed=${benchmark.summary.failed}, errored=${benchmark.summary.errored}`,
+    reasons: failed === 0 ? [] : ["benchmark failed or errored"],
+    result: benchmark,
+  };
+}
+
+async function executeGuidedAskSuite(
+  report: GuidedOperationListReport,
+): Promise<GuidedOperationExecutionResult> {
+  const suite = await runAskSuite({ almanacDir: report.almanacDir });
+  const exitCode = exitCodeForAskSuite(suite);
+  return {
+    status: exitCode === 0 ? "ok" : "attention",
+    exitCode,
+    artifactsWritten: [],
+    summary:
+      exitCode === 0
+        ? `answer checks passed ${suite.passed}/${suite.total}`
+        : `answer checks need attention: failed=${suite.failed}, errored=${suite.errored}`,
+    reasons: exitCode === 0 ? [] : ["ask-suite failed or errored"],
+    result: suite,
+  };
+}
+
+async function executeGuidedAskReplay(
+  report: GuidedOperationListReport,
+  label: string | undefined,
+): Promise<GuidedOperationExecutionResult> {
+  const replay = await runAskReplayFromSavedRuns({
+    almanacDir: report.almanacDir,
+    ...(label === undefined ? {} : { label: normalizeRunArtifactLabel(label) }),
+  });
+  const exitCode = exitCodeForAskReplay(replay);
+  return {
+    status: exitCode === 0 ? "ok" : "attention",
+    exitCode,
+    artifactsWritten: [],
+    summary:
+      exitCode === 0
+        ? `saved answer replay passed ${replay.passed}/${replay.total}`
+        : `saved answer replay needs attention: failed=${replay.failed}, errored=${replay.errored}`,
+    reasons: exitCode === 0 ? [] : ["ask-replay failed or errored"],
+    result: replay,
+  };
+}
+
+async function executeGuidedRefreshAskSuite(
+  report: GuidedOperationListReport,
+): Promise<GuidedOperationExecutionResult> {
+  const { runners } = buildRunners();
+  const refresh = await runRefresh({
+    almanacDir: report.almanacDir,
+    fromStage: "12-benchmark-run",
+    runners,
+    forgerVersion: FORGER_VERSION,
+    persistManifest: (manifest) =>
+      writeManifestWithActualCounts(report.almanacDir, manifest),
+    save: true,
+    askSuite: true,
+  });
+  return {
+    status:
+      refresh.exitCode === 0
+        ? refresh.health === "ok"
+          ? "ok"
+          : "attention"
+        : "failed",
+    exitCode: refresh.exitCode,
+    artifactsWritten:
+      refresh.savedArtifact === undefined ? [] : [refresh.savedArtifact.relPath],
+    summary:
+      refresh.exitCode === 0
+        ? `readiness evidence saved (${refresh.health})`
+        : `readiness evidence failed: ${refresh.error?.message ?? refresh.status}`,
+    reasons:
+      refresh.exitCode === 0
+        ? refresh.health === "ok"
+          ? []
+          : [`refresh health is ${refresh.health}`]
+        : [refresh.error?.message ?? `refresh status is ${refresh.status}`],
+    result: refresh,
+  };
+}
+
+async function executeGuidedMaintainDryRun(
+  report: GuidedOperationListReport,
+): Promise<GuidedOperationExecutionResult> {
+  const maintenance = await readMaintenanceReport(report.almanacId, {
+    root: report.root,
+    dryRun: true,
+    askSuite: true,
+  });
+  const blocked =
+    maintenance.status === "blocked" || maintenance.status === "broken";
+  return {
+    status: blocked ? "blocked" : "ok",
+    exitCode: blocked ? 2 : 0,
+    artifactsWritten: [],
+    summary: `maintenance plan is ${maintenance.status}`,
+    reasons: blocked ? maintenance.issues : [],
+    result: maintenance,
+  };
+}
+
+async function blockedGuidedOperationRun(args: {
+  almanacId: string;
+  root: string;
+  almanacDir: string;
+  operationId: string;
+  operation: GuidedOperation | null;
+  reason: string;
+}): Promise<GuidedOperationRunResult> {
+  const now = new Date().toISOString();
+  return {
+    schemaVersion: "0.1.0",
+    almanacId: args.almanacId,
+    root: args.root,
+    almanacDir: args.almanacDir,
+    operationId: args.operationId,
+    operation: args.operation,
+    status: "blocked",
+    exitCode: 2,
+    startedAt: now,
+    finishedAt: now,
+    durationMs: 0,
+    provider: {
+      expected: args.operation?.providerRequired ?? false,
+      actual: false,
+    },
+    artifactsWritten: [],
+    summary: args.reason,
+    reasons: [args.reason],
+    nextOperation: null,
+  };
+}
+
+function formatGuidedOperationListHuman(
+  report: GuidedOperationListReport,
+): string {
+  const lines = [
+    `operations: ${report.almanacId}`,
+    `  root          ${report.root}`,
+    `  dir           ${report.almanacDir}`,
+  ];
+  if (report.recommendedOperation !== null) {
+    lines.push(
+      `  recommended   ${report.recommendedOperation.id} ${formatGuidedOperationSummary(report.recommendedOperation)}`,
+    );
+  }
+  lines.push("", "available:");
+  if (report.operations.length === 0) {
+    lines.push("  (none)");
+  } else {
+    for (const operation of report.operations) {
+      const runnable = operation.studioRunnable ? "yes" : "no";
+      const provider = operation.providerRequired ? "yes" : "no";
+      lines.push(
+        `  - ${operation.id} ${operation.label} ` +
+          `[${operation.category}, mutation=${operation.mutation}, provider=${provider}, runnable=${runnable}]`,
+      );
+      lines.push(`    ${operation.description}`);
+      lines.push(`    command: ${operation.command}`);
+      if (operation.blockedReason !== null) {
+        lines.push(`    blocked: ${operation.blockedReason}`);
+      }
+    }
+  }
+  return lines.join("\n") + "\n";
+}
+
+function formatGuidedOperationRunHuman(
+  result: GuidedOperationRunResult,
+): string {
+  const lines = [
+    `operation: ${result.operation?.label ?? result.operationId}`,
+    `  id            ${result.operationId}`,
+    `  status        ${result.status}`,
+    `  exitCode      ${result.exitCode}`,
+    `  provider      expected=${result.provider.expected ? "yes" : "no"}, actual=${result.provider.actual ? "yes" : "no"}`,
+    `  summary       ${result.summary}`,
+  ];
+  if (result.artifactsWritten.length > 0) {
+    lines.push("  artifacts");
+    for (const artifact of result.artifactsWritten) {
+      lines.push(`    - ${artifact}`);
+    }
+  }
+  if (result.reasons.length > 0) {
+    lines.push("  reasons");
+    for (const reason of result.reasons) {
+      lines.push(`    - ${reason}`);
+    }
+  }
+  if (result.nextOperation !== null) {
+    lines.push(
+      `  next          ${result.nextOperation.id} ${formatGuidedOperationSummary(result.nextOperation)}`,
+    );
+  }
+  return lines.join("\n") + "\n";
 }
 
 interface StudioOptions {
@@ -11886,6 +12558,13 @@ program
   .option("--json", "Emit JSON instead of a human-readable summary")
   .addOption(rootOption)
   .action(cmdStatus);
+
+program
+  .command("operations [args...]")
+  .description("list or run bounded provider-free guided operations")
+  .option("--json", "Emit JSON instead of a human-readable summary")
+  .addOption(rootOption)
+  .action(cmdOperations);
 
 program
   .command("studio")

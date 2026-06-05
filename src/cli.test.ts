@@ -4226,6 +4226,168 @@ describe("almanac CLI product onboarding", () => {
     expect(missingToolOption.stderr).toContain("missing required --tool");
   }, { timeout: 15_000 });
 
+  test("operations lists and runs bounded provider-free operations", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const initialList = runCli([
+      "operations",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(initialList.status).toBe(0);
+    const initialReport = JSON.parse(initialList.stdout) as {
+      recommendedOperation: {
+        id: string;
+        label: string;
+        command: string;
+        studioRunnable: boolean;
+      };
+      operations: Array<{
+        id: string;
+        command: string;
+        providerRequired: boolean;
+        studioRunnable: boolean;
+      }>;
+    };
+    expect(initialReport.recommendedOperation).toEqual(
+      expect.objectContaining({
+        label: "Manage answer checks",
+        studioRunnable: false,
+        command: expect.stringContaining("almanac ask-fixtures init sqlite-demo"),
+      }),
+    );
+
+    const initialListFromEnv = runCli(
+      ["operations", "sqlite-demo", "--json"],
+      { ALMANAC_ROOT: root },
+    );
+    expect(initialListFromEnv.status).toBe(0);
+    expect(
+      (JSON.parse(initialListFromEnv.stdout) as {
+        recommendedOperation: { id: string };
+      }).recommendedOperation.id,
+    ).toBe(initialReport.recommendedOperation.id);
+
+    const blockedRun = runCli([
+      "operations",
+      "run",
+      "sqlite-demo",
+      initialReport.recommendedOperation.id,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(blockedRun.status).toBe(2);
+    const blocked = JSON.parse(blockedRun.stdout) as {
+      status: string;
+      summary: string;
+      operation: { command: string };
+    };
+    expect(blocked.status).toBe("blocked");
+    expect(blocked.summary).toContain("almanac-writing operation");
+    expect(blocked.operation.command).toContain("ask-fixtures init");
+
+    const initAskFixtures = runCli([
+      "ask-fixtures",
+      "init",
+      "sqlite-demo",
+      "--seed-demo",
+      "--root",
+      root,
+    ]);
+    expect(initAskFixtures.status).toBe(0);
+
+    const readyList = runCli([
+      "operations",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(readyList.status).toBe(0);
+    const readyReport = JSON.parse(readyList.stdout) as {
+      operations: Array<{
+        id: string;
+        command: string;
+        providerRequired: boolean;
+        studioRunnable: boolean;
+      }>;
+    };
+    const askSuiteOperation = readyReport.operations.find((operation) =>
+      operation.command.startsWith("almanac ask-suite sqlite-demo")
+    );
+    expect(askSuiteOperation).toEqual(
+      expect.objectContaining({
+        providerRequired: false,
+        studioRunnable: true,
+      }),
+    );
+    const refreshEvidenceOperation = readyReport.operations.find((operation) =>
+      operation.command.startsWith("almanac refresh run sqlite-demo") &&
+      operation.command.includes("--from-stage 12-benchmark-run")
+    );
+    expect(refreshEvidenceOperation).toEqual(
+      expect.objectContaining({
+        providerRequired: false,
+        studioRunnable: true,
+      }),
+    );
+
+    const askSuiteRun = runCli([
+      "operations",
+      "run",
+      "sqlite-demo",
+      askSuiteOperation!.id,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(askSuiteRun.status).toBe(0);
+    const askSuiteResult = JSON.parse(askSuiteRun.stdout) as {
+      status: string;
+      provider: { expected: boolean; actual: boolean };
+      artifactsWritten: string[];
+      result: { total: number; passed: number };
+    };
+    expect(askSuiteResult).toEqual(
+      expect.objectContaining({
+        status: "ok",
+        provider: { expected: false, actual: false },
+        artifactsWritten: [],
+      }),
+    );
+    expect(askSuiteResult.result).toEqual(
+      expect.objectContaining({ total: 1, passed: 1 }),
+    );
+
+    const refreshRun = runCli([
+      "operations",
+      "run",
+      "sqlite-demo",
+      refreshEvidenceOperation!.id,
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshRun.status).toBe(0);
+    const refreshResult = JSON.parse(refreshRun.stdout) as {
+      status: string;
+      provider: { expected: boolean; actual: boolean };
+      artifactsWritten: string[];
+      result: { askSuite?: { status: string }; savedArtifact?: { relPath: string } };
+    };
+    expect(["ok", "attention"]).toContain(refreshResult.status);
+    expect(refreshResult.provider).toEqual({ expected: false, actual: false });
+    expect(refreshResult.artifactsWritten[0]).toMatch(/^\.runs\/refresh-/);
+    expect(refreshResult.result.askSuite?.status).toBe("passed");
+    expect(refreshResult.result.savedArtifact?.relPath).toBe(
+      refreshResult.artifactsWritten[0],
+    );
+  }, { timeout: 20_000 });
+
   test("status and profile expose first-answer suggested questions", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);
