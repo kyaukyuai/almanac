@@ -1212,7 +1212,27 @@ maintenance dry-run, Enterprise AI fresh compile benchmark at 138 facts and
 15/15 passed fixtures, valid real-provider Enterprise AI abstention with
 quality pass, and saved-run replay pass.
 
-### v0.16+ (long-tail)
+### v0.16 planning — Actionable Studio / Guided Operations
+
+v0.16 is planned as the Actionable Studio / Guided Operations release:
+
+- Recommended next actions become structured guided operations with provider,
+  mutation, confirmation, command, and result metadata.
+- Safe provider-free operations can be executed locally instead of only copied:
+  ask-suite, saved-run replay, answer-readiness evidence save, benchmark rerun,
+  maintenance dry-run, and inventory reload.
+- Studio gets localhost-only POST actions for bounded operations while GET/page
+  load stays read-only.
+- Provider-backed compile, discovery, embeddings, and real answer generation
+  remain explicit CLI handoffs.
+- The answer-readiness gap from v0.15 is addressed: "checks passed but evidence
+  not saved" becomes a visible guided operation instead of an implementation
+  detail.
+
+See [`docs/v0.16-plan.md`](./v0.16-plan.md) for scope, non-goals, safety
+boundary, and PR sequence.
+
+### v0.17+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
