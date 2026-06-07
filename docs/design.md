@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.15.0 shipped** · last updated 2026-06-04.
+Status: **v0.16.0 shipped** · last updated 2026-06-07.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1212,16 +1212,16 @@ maintenance dry-run, Enterprise AI fresh compile benchmark at 138 facts and
 15/15 passed fixtures, valid real-provider Enterprise AI abstention with
 quality pass, and saved-run replay pass.
 
-### v0.16 RC — Actionable Studio / Guided Operations
+### v0.16.0 — Actionable Studio / Guided Operations
 
-v0.16 is the Actionable Studio / Guided Operations release:
+v0.16.0 shipped the Actionable Studio / Guided Operations release:
 
-- Recommended next actions become structured guided operations with provider,
+- Recommended next actions are structured guided operations with provider,
   mutation, confirmation, command, and result metadata.
 - Safe provider-free operations can be executed locally instead of only copied:
   ask-suite, saved-run replay, answer-readiness evidence save, benchmark rerun,
   and maintenance dry-run.
-- Studio gets localhost-only POST actions for bounded operations while GET/page
+- Studio has localhost-only POST actions for bounded operations while GET/page
   load stays read-only.
 - Studio renders Run buttons only for safe runnable operations and shows inline
   result panels with status, artifacts, next operation, and fallback command.
@@ -1232,8 +1232,17 @@ v0.16 is the Actionable Studio / Guided Operations release:
   detail.
 
 See [`docs/v0.16-plan.md`](./v0.16-plan.md) for scope, non-goals, safety
-boundary, and PR sequence. See [`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md)
-for the provider-free and Enterprise AI release-candidate smoke sequence.
+boundary, and shipped implementation sequence. See
+[`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md) for the provider-free and
+Enterprise AI release-candidate smoke sequence.
+
+The v0.16 release gate passed on 2026-06-07 with `git diff --check`,
+`bun run typecheck`, `bun test`, source and linked CLI checks, sqlite-demo
+provider-free operation listing, CLI operation runner, answer-readiness
+evidence save, Studio action API/UI and localhost boundary checks, maintenance
+dry-run, Enterprise AI fresh compile benchmark at 374 facts and 15/15 passed
+fixtures, valid real-provider Enterprise AI abstention with quality pass, and
+saved-run replay pass.
 
 ### v0.17+ (long-tail)
 
