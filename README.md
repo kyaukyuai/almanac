@@ -248,7 +248,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.15.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.16.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -278,10 +278,12 @@ Current shipped lines include:
   vocabulary, no-key answer-readiness bootstrap, and local read-only studio
 - `v0.15`: activation milestones, guided create apply, suggested questions,
   first-answer guidance, replay prompts, and Studio activation state
+- `v0.16`: guided operation metadata, provider-free operation execution,
+  answer-readiness evidence save, and Studio Run buttons for bounded actions
 
-The v0.16 RC line turns guided activation into guided operations: users can
-list the safe local work available for an almanac, run provider-free bounded
-operations from the CLI or Studio, save answer-readiness evidence, and keep
+`v0.16.0` turns guided activation into guided operations: users can list the
+safe local work available for an almanac, run provider-free bounded operations
+from the CLI or Studio, save answer-readiness evidence, and keep
 provider-backed work as explicit CLI handoff.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
@@ -294,7 +296,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.15.0 RC | 138 | 6 (2) | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.16.0 RC | 374 | 6 (2) | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -343,6 +345,13 @@ mock guided create apply, sqlite-demo suggested questions, seeded answer
 readiness, mock first-answer guidance, saved answer replay, Studio activation
 HTML/API and localhost boundary checks, maintenance dry-run, Enterprise AI
 fresh compile benchmark at 138 facts and 15/15 fixtures, valid real-provider
+Enterprise AI abstention with quality pass, and saved-run replay pass.
+
+The v0.16.0 RC smoke passed the guided operations gate on `main`: static gates,
+source and linked CLI sanity, sqlite-demo provider-free operation listing,
+CLI operation runner, answer-readiness evidence save, Studio action API/UI,
+localhost and POST safety checks, maintenance dry-run, Enterprise AI fresh
+compile benchmark at 374 facts and 15/15 fixtures, valid real-provider
 Enterprise AI abstention with quality pass, and saved-run replay pass.
 
 ## Development

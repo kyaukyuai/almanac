@@ -11,6 +11,42 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.16.0] — 2026-06-07
+
+### Added
+
+- **Guided operation model.** `status`, `profile`, `operations`, and Studio now
+  surface structured next actions with provider, mutation, confirmation,
+  runnable, and blocked-reason metadata.
+- **Provider-free operation runner.** `almanac operations run <almanac>
+  <operation-id>` executes bounded local actions such as ask-suite validation,
+  saved-run replay, benchmark rerun, refresh evidence save, and maintenance
+  dry-run.
+- **Studio action API and UI.** `almanac studio` now exposes localhost-only
+  operation POST endpoints and Run buttons for safe provider-free operations,
+  with inline result panels and fallback commands.
+- **v0.16 RC smoke runbook.** `docs/v0.16-rc-smoke.md` covers CLI operation
+  execution, Studio action safety, answer-readiness evidence save, maintenance
+  dry-run handoff, and credentialed Enterprise AI compile/ask/replay smoke.
+
+### Changed
+
+- **From activation to operations.** The documented happy path now moves beyond
+  suggested commands: users can run safe local checks and save readiness
+  evidence without learning the underlying artifact command graph.
+- **Studio safety boundary.** Studio remains localhost-only and read-oriented
+  on page load, while allowing explicit provider-free bounded mutations through
+  operation ids instead of arbitrary shell commands.
+
+### Fixed
+
+- **Answer-readiness evidence gap.** Passing ask-suite checks can now be saved
+  through a guided refresh-evidence operation, making status/profile/Studio
+  reflect the new readiness state immediately.
+- **Provider-backed action safety.** Provider-required work stays as explicit
+  CLI handoff in operations and Studio instead of being runnable from the local
+  action surface.
+
 ## [0.15.0] — 2026-06-04
 
 ### Added
@@ -1067,7 +1103,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.15.0...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.16.0...HEAD
+[0.16.0]: https://github.com/kyaukyuai/almanac/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kyaukyuai/almanac/compare/v0.13.0...v0.14.0
 [0.13.0]: https://github.com/kyaukyuai/almanac/compare/v0.12.0...v0.13.0
