@@ -713,6 +713,13 @@ describe("almanac CLI legacy artifact counts", () => {
       status: string;
       almanacs: unknown[];
       provider: { anthropic: string; braveSearch: string };
+      firstUse: {
+        status: string;
+        stage: string;
+        nextStage: string | null;
+        nextAction: { command: string; providerRequired: boolean } | null;
+        gaps: string[];
+      };
       nextBestAction: {
         label: string;
         command: string;
@@ -729,6 +736,18 @@ describe("almanac CLI legacy artifact counts", () => {
       anthropic: "missing",
       braveSearch: "missing",
     });
+    expect(parsed.firstUse).toEqual(
+      expect.objectContaining({
+        status: "not-started",
+        stage: "empty-root",
+        nextStage: "planning",
+        nextAction: expect.objectContaining({
+          command: `almanac demo --root ${root}`,
+          providerRequired: false,
+        }),
+        gaps: ["no local almanac is visible in this root"],
+      }),
+    );
     expect(parsed.nextBestAction).toMatchObject({
       label: "Create the offline demo",
       command: `almanac demo --root ${root}`,
@@ -760,6 +779,12 @@ describe("almanac CLI legacy artifact counts", () => {
     const parsed = JSON.parse(result.stdout) as {
       status: string;
       summary: string;
+      firstUse: {
+        status: string;
+        stage: string;
+        nextStage: string | null;
+        nextAction: { command: string; providerRequired: boolean } | null;
+      };
       goalDraft: {
         goal: string;
         domain: string;
@@ -783,6 +808,17 @@ describe("almanac CLI legacy artifact counts", () => {
 
     expect(parsed.status).toBe("planning");
     expect(parsed.summary).toContain("Drafted a setup plan");
+    expect(parsed.firstUse).toEqual(
+      expect.objectContaining({
+        status: "in-progress",
+        stage: "planning",
+        nextStage: "source-checklist",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac new 'production AI governance checks'"),
+          providerRequired: true,
+        }),
+      }),
+    );
     expect(parsed.goalDraft).toMatchObject({
       goal: "Build an almanac for production AI governance checks",
       domain: "production AI governance checks",
@@ -838,6 +874,7 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.status).toBe(0);
     expect(result.stderr).toBe("");
     expect(result.stdout).toContain("status        planning");
+    expect(result.stdout).toContain("first use     setup planned; next references needed");
     expect(result.stdout).toContain("setup draft:");
     expect(result.stdout).toContain("domain        production AI governance checks");
     expect(result.stdout).toContain("references to gather:");
@@ -1204,6 +1241,13 @@ describe("almanac CLI legacy artifact counts", () => {
         nextAction: { command: string; providerRequired: boolean } | null;
         gaps: string[];
       };
+      firstUse: {
+        status: string;
+        stage: string;
+        nextStage: string | null;
+        nextAction: { command: string; providerRequired: boolean } | null;
+        gaps: string[];
+      };
       operations: Array<{
         id: string;
         label: string;
@@ -1263,6 +1307,18 @@ describe("almanac CLI legacy artifact counts", () => {
       }),
     );
     expect(status.activation.gaps).toContain("checks are missing");
+    expect(status.firstUse).toEqual(
+      expect.objectContaining({
+        status: "in-progress",
+        stage: "compiled",
+        nextStage: "validated",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac benchmark legacy --init"),
+          providerRequired: false,
+        }),
+      }),
+    );
+    expect(status.firstUse.gaps).toContain("checks are missing");
     expect(status.recommendedOperation).toEqual(
       expect.objectContaining({
         label: "Run validation",
@@ -1316,6 +1372,8 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("health        attention");
     expect(result.stdout).toContain("activation    compiled -> validated, in-progress");
     expect(result.stdout).toContain("activation next create validation checks: almanac benchmark legacy --init");
+    expect(result.stdout).toContain("first use     compiled; next validated");
+    expect(result.stdout).toContain("first-use next create validation checks: almanac benchmark legacy --init");
     expect(result.stdout).toContain("operation     Run validation (validate, almanac-write, no provider, CLI handoff)");
     expect(result.stdout).toContain("references = citable source material");
     expect(result.stdout).toContain("extracted knowledge present, 7 item(s), 2 tools");
@@ -2070,6 +2128,9 @@ describe("almanac CLI legacy artifact counts", () => {
     const status = runCli(["status", "sqlite-demo", "--root", root]);
     expect(status.status).toBe(0);
     expect(status.stdout).toContain("activation    maintainable, complete");
+    expect(status.stdout).toContain(
+      "first use     maintainable; first useful almanac path is complete",
+    );
     expect(status.stdout).toContain("latest maintenance history maintenance");
     expect(status.stdout).toContain("label=pr3-smoke");
 
@@ -2083,12 +2144,38 @@ describe("almanac CLI legacy artifact counts", () => {
           nextMilestone: string | null;
           nextAction: { command: string; providerRequired: boolean } | null;
         };
+        firstUse: {
+          status: string;
+          stage: string;
+          nextStage: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
       }).activation,
     ).toEqual(
       expect.objectContaining({
         status: "complete",
         milestone: "maintainable",
         nextMilestone: null,
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac maintain sqlite-demo --dry-run"),
+          providerRequired: false,
+        }),
+      }),
+    );
+    expect(
+      (JSON.parse(statusJson.stdout) as {
+        firstUse: {
+          status: string;
+          stage: string;
+          nextStage: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).firstUse,
+    ).toEqual(
+      expect.objectContaining({
+        status: "complete",
+        stage: "maintainable",
+        nextStage: null,
         nextAction: expect.objectContaining({
           command: expect.stringContaining("almanac maintain sqlite-demo --dry-run"),
           providerRequired: false,
@@ -4419,6 +4506,12 @@ describe("almanac CLI product onboarding", () => {
         }>;
         nextActions: Array<{ command: string; providerRequired: boolean }>;
       };
+      firstUse: {
+        status: string;
+        stage: string;
+        nextStage: string | null;
+        nextAction: { command: string; providerRequired: boolean } | null;
+      };
       recommendedOperation: {
         label: string;
         category: string;
@@ -4437,6 +4530,17 @@ describe("almanac CLI product onboarding", () => {
       }),
     );
     expect(statusReport.firstAnswer.nextActions).toEqual([]);
+    expect(statusReport.firstUse).toEqual(
+      expect.objectContaining({
+        status: "in-progress",
+        stage: "validated",
+        nextStage: "answer-ready",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac ask-fixtures init sqlite-demo"),
+          providerRequired: false,
+        }),
+      }),
+    );
     expect(statusReport.recommendedOperation).toEqual(
       expect.objectContaining({
         label: "Manage answer checks",
@@ -4449,6 +4553,7 @@ describe("almanac CLI product onboarding", () => {
     const statusHuman = runCli(["status", "sqlite-demo", "--root", root]);
     expect(statusHuman.status).toBe(0);
     expect(statusHuman.stdout).toContain("first answer");
+    expect(statusHuman.stdout).toContain("first use     validated; next answer ready");
     expect(statusHuman.stdout).toContain("operation     Manage answer checks");
     expect(statusHuman.stdout).toContain("suggested questions");
     expect(statusHuman.stdout).toContain("What makes SQLite transactions atomic?");
@@ -4461,16 +4566,22 @@ describe("almanac CLI product onboarding", () => {
       root,
     ]);
     expect(profileJson.status).toBe(0);
+    const profileReport = JSON.parse(profileJson.stdout) as {
+      firstAnswer: { suggestedQuestions: Array<{ question: string }> };
+      firstUse: { stage: string; nextStage: string | null };
+      recommendedOperation: { command: string; studioRunnable: boolean } | null;
+    };
+    expect(profileReport.firstAnswer.suggestedQuestions[0]?.question).toBe(
+      "What makes SQLite transactions atomic?",
+    );
+    expect(profileReport.firstUse).toEqual(
+      expect.objectContaining({
+        stage: "validated",
+        nextStage: "answer-ready",
+      }),
+    );
     expect(
-      (JSON.parse(profileJson.stdout) as {
-        firstAnswer: { suggestedQuestions: Array<{ question: string }> };
-        recommendedOperation: { command: string; studioRunnable: boolean } | null;
-      }).firstAnswer.suggestedQuestions[0]?.question,
-    ).toBe("What makes SQLite transactions atomic?");
-    expect(
-      (JSON.parse(profileJson.stdout) as {
-        recommendedOperation: { command: string; studioRunnable: boolean } | null;
-      }).recommendedOperation,
+      profileReport.recommendedOperation,
     ).toEqual(
       expect.objectContaining({
         command: expect.stringContaining("almanac ask-fixtures init sqlite-demo"),
@@ -4481,6 +4592,7 @@ describe("almanac CLI product onboarding", () => {
     const profileHuman = runCli(["profile", "sqlite-demo", "--root", root]);
     expect(profileHuman.status).toBe(0);
     expect(profileHuman.stdout).toContain("operation");
+    expect(profileHuman.stdout).toContain("first use      validated; next answer ready");
     expect(profileHuman.stdout).toContain("first answer suggestions");
     expect(profileHuman.stdout).toContain(
       "almanac ask sqlite-demo 'What makes SQLite transactions atomic?' --save",
@@ -4505,6 +4617,7 @@ describe("almanac CLI product onboarding", () => {
       "12-benchmark-run",
       "--ask-suite",
       "--save",
+      "--json",
       "--root",
       root,
     ]);
@@ -4523,11 +4636,23 @@ describe("almanac CLI product onboarding", () => {
         firstAnswer: {
           nextActions: Array<{ command: string; providerRequired: boolean }>;
         };
+        firstUse: { status: string; stage: string; nextStage: string | null };
       }).firstAnswer.nextActions[0],
     ).toEqual(
       expect.objectContaining({
         command: expect.stringContaining("--save"),
         providerRequired: true,
+      }),
+    );
+    expect(
+      (JSON.parse(readyStatusJson.stdout) as {
+        firstUse: { status: string; stage: string; nextStage: string | null };
+      }).firstUse,
+    ).toEqual(
+      expect.objectContaining({
+        status: "useful",
+        stage: "answer-ready",
+        nextStage: "first-answer",
       }),
     );
   }, { timeout: 15_000 });
@@ -4846,6 +4971,12 @@ describe("almanac CLI product onboarding", () => {
           nextMilestone: string | null;
           nextAction: { command: string; providerRequired: boolean } | null;
         };
+        firstUse: {
+          status: string;
+          stage: string;
+          nextStage: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
       }).activation,
     ).toEqual(
       expect.objectContaining({
@@ -4855,6 +4986,26 @@ describe("almanac CLI product onboarding", () => {
           command: expect.stringContaining(
             "ask-fixtures init sqlite-demo",
           ),
+          providerRequired: false,
+        }),
+      }),
+    );
+    expect(
+      (JSON.parse(firstAnswerStatus.stdout) as {
+        firstUse: {
+          status: string;
+          stage: string;
+          nextStage: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).firstUse,
+    ).toEqual(
+      expect.objectContaining({
+        status: "useful",
+        stage: "first-answer",
+        nextStage: "answer-ready",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("ask-fixtures init sqlite-demo"),
           providerRequired: false,
         }),
       }),
@@ -4969,6 +5120,55 @@ describe("almanac CLI product onboarding", () => {
     expect(askSuiteReport.observedStatusCounts.ok).toBe(1);
     expect(askSuiteReport.results[0]?.fixtureFile).toEqual(
       expect.objectContaining({ relPath: "tests/ask.jsonl", line: 1 }),
+    );
+
+    const refreshAskSuite = runCli([
+      "refresh",
+      "run",
+      "sqlite-demo",
+      "--from-stage",
+      "12-benchmark-run",
+      "--ask-suite",
+      "--save",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(refreshAskSuite.status).toBe(0);
+    const replayableRefresh = JSON.parse(refreshAskSuite.stdout) as {
+      refreshId: string;
+      savedArtifact?: { relPath: string };
+    };
+    const replayableRefreshArtifact = replayableRefresh.savedArtifact!.relPath;
+    const replayableRefreshRunId = replayableRefresh.refreshId;
+
+    const replayableStatus = runCli([
+      "status",
+      "sqlite-demo",
+      "--json",
+      "--root",
+      root,
+    ]);
+    expect(replayableStatus.status).toBe(0);
+    expect(
+      (JSON.parse(replayableStatus.stdout) as {
+        firstUse: {
+          status: string;
+          stage: string;
+          nextStage: string | null;
+          nextAction: { command: string; providerRequired: boolean } | null;
+        };
+      }).firstUse,
+    ).toEqual(
+      expect.objectContaining({
+        status: "useful",
+        stage: "replayable",
+        nextStage: "maintainable",
+        nextAction: expect.objectContaining({
+          command: expect.stringContaining("almanac maintain sqlite-demo --dry-run"),
+          providerRequired: false,
+        }),
+      }),
     );
 
     const fixturePath = join(root, "ask-fixtures.jsonl");
@@ -5132,6 +5332,7 @@ describe("almanac CLI product onboarding", () => {
     ).toEqual(
       [
         { kind: "tool", runId: savedTool.runId },
+        { kind: "refresh", runId: replayableRefreshRunId },
         { kind: "refresh", runId: refreshId },
       ].sort((a, b) => a.runId.localeCompare(b.runId)),
     );
@@ -5139,7 +5340,11 @@ describe("almanac CLI product onboarding", () => {
       (await readdir(join(almanacDirPath(root, "sqlite-demo"), ".runs")))
         .sort(),
     ).toEqual(
-      [savedTool.artifactRelPath.split("/").pop()!, `${refreshId}.json`]
+      [
+        savedTool.artifactRelPath.split("/").pop()!,
+        replayableRefreshArtifact.split("/").pop()!,
+        `${refreshId}.json`,
+      ]
         .sort(),
     );
 
