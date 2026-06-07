@@ -2043,6 +2043,37 @@ interface ActivationReport {
   nextAction: ActivationNextAction | null;
 }
 
+type FirstUseStage =
+  | "empty-root"
+  | "planning"
+  | "source-checklist"
+  | "compile-handoff"
+  | "compiled"
+  | "validated"
+  | "answer-ready"
+  | "first-answer"
+  | "replayable"
+  | "maintainable"
+  | "blocked";
+type FirstUseStatus =
+  | "not-started"
+  | "blocked"
+  | "in-progress"
+  | "useful"
+  | "complete";
+
+interface FirstUseReport {
+  status: FirstUseStatus;
+  stage: FirstUseStage;
+  stageLabel: string;
+  nextStage: FirstUseStage | null;
+  nextStageLabel: string | null;
+  summary: string;
+  evidence: string[];
+  gaps: string[];
+  nextAction: ActivationNextAction | null;
+}
+
 type FirstAnswerGuidanceStatus =
   | "not-started"
   | "saved-ok"
@@ -2159,6 +2190,7 @@ interface AlmanacStatusReport {
   status: LifecycleOverallStatus;
   usability: LifecycleUsability;
   activation: ActivationReport;
+  firstUse: FirstUseReport;
   firstAnswer: FirstAnswerGuidance;
   operations: GuidedOperation[];
   recommendedOperation: GuidedOperation | null;
@@ -2470,6 +2502,7 @@ interface StartAlmanacSummary {
     answer: AnswerReadinessStatus | "unknown";
     refresh: LifecycleRefreshStatus;
   };
+  firstUse: FirstUseReport;
   issues: string[];
   nextAction: StartAction;
 }
@@ -2481,6 +2514,7 @@ interface StartReport {
   status: StartReportStatus;
   summary: string;
   provider: StartProviderStatus;
+  firstUse: FirstUseReport;
   goalDraft: StartGoalDraft | null;
   almanacs: StartAlmanacSummary[];
   nextBestAction: StartAction;
@@ -2576,6 +2610,13 @@ async function readAlmanacStatusReport(
       lifecycle.answer.status === "ready" || runs.byKind.answer !== null,
   });
   const preferredAction = preferredActivationAction(activation, firstAnswer);
+  const firstUse = buildAlmanacFirstUseReport({
+    activation,
+    firstAnswer,
+    preferredAction,
+    lifecycle,
+    runs,
+  });
   const operations = buildGuidedOperations({
     activation,
     firstAnswer,
@@ -2591,6 +2632,7 @@ async function readAlmanacStatusReport(
     status: item.lifecycle.status,
     usability: lifecycleUsability(item),
     activation,
+    firstUse,
     firstAnswer,
     operations,
     recommendedOperation: operations[0] ?? null,
@@ -3553,6 +3595,20 @@ const ACTIVATION_MILESTONE_LABELS: Record<ActivationMilestone, string> = {
   maintainable: "maintainable",
 };
 
+const FIRST_USE_STAGE_LABELS: Record<FirstUseStage, string> = {
+  "empty-root": "empty root",
+  planning: "setup planned",
+  "source-checklist": "references needed",
+  "compile-handoff": "compile handoff",
+  compiled: "compiled",
+  validated: "validated",
+  "answer-ready": "answer ready",
+  "first-answer": "first answer saved",
+  replayable: "replayable",
+  maintainable: "maintainable",
+  blocked: "blocked",
+};
+
 function buildActivationReport(args: {
   almanacId: string;
   manifest: AlmanacManifest | null;
@@ -3691,6 +3747,78 @@ function buildActivationReport(args: {
     gaps: uniqueStrings(gaps),
     nextAction,
   };
+}
+
+function buildAlmanacFirstUseReport(args: {
+  activation: ActivationReport;
+  firstAnswer: FirstAnswerGuidance;
+  preferredAction: ActivationNextAction | null;
+  lifecycle: AlmanacStatusReport["lifecycle"];
+  runs: LifecycleLatestRuns;
+}): FirstUseReport {
+  const blocked =
+    args.activation.status === "blocked" ||
+    args.lifecycle.status === "broken" ||
+    args.lifecycle.status === "failed";
+  const stage: FirstUseStage = blocked
+    ? "blocked"
+    : firstUseStageFromActivation(args.activation.milestone);
+  const nextStage =
+    blocked ? null : firstUseNextStageFromActivation(args.activation.nextMilestone);
+  const status: FirstUseStatus =
+    blocked
+      ? "blocked"
+      : stage === "maintainable"
+        ? "complete"
+        : stage === "answer-ready" ||
+            stage === "first-answer" ||
+            stage === "replayable"
+          ? "useful"
+          : "in-progress";
+  const stageLabel = FIRST_USE_STAGE_LABELS[stage];
+  const nextStageLabel =
+    nextStage === null ? null : FIRST_USE_STAGE_LABELS[nextStage];
+  const evidence = [...args.activation.evidence];
+  const gaps = [...args.activation.gaps];
+  if (args.firstAnswer.status !== "not-started") {
+    evidence.push(`first answer is ${args.firstAnswer.status}`);
+  } else if (stage === "answer-ready") {
+    gaps.push("ask and save the first real question");
+  }
+  if (
+    args.runs.byKind.answer !== null &&
+    stage !== "replayable" &&
+    stage !== "maintainable"
+  ) {
+    gaps.push("promote saved answer history into replayable answer checks");
+  }
+  const summary =
+    nextStageLabel === null
+      ? `${stageLabel}; first useful almanac path is complete`
+      : `${stageLabel}; next ${nextStageLabel}`;
+  return {
+    status,
+    stage,
+    stageLabel,
+    nextStage,
+    nextStageLabel,
+    summary,
+    evidence: uniqueStrings(evidence),
+    gaps: uniqueStrings(gaps),
+    nextAction: args.preferredAction ?? args.activation.nextAction,
+  };
+}
+
+function firstUseNextStageFromActivation(
+  milestone: ActivationMilestone | null,
+): FirstUseStage | null {
+  return milestone === null ? null : firstUseStageFromActivation(milestone);
+}
+
+function firstUseStageFromActivation(milestone: ActivationMilestone): FirstUseStage {
+  if (milestone === "oriented") return "compile-handoff";
+  if (milestone === "planned") return "planning";
+  return milestone;
 }
 
 function compiledGap(lifecycle: AlmanacStatusReport["lifecycle"]): string {
@@ -4692,6 +4820,15 @@ async function buildStartReport(
       status: "planning",
       summary: "Drafted a setup plan from the natural-language goal.",
       provider,
+      firstUse: buildStartFirstUseReport({
+        status: "in-progress",
+        summary: "setup planned; next references needed",
+        stage: "planning",
+        nextStage: "source-checklist",
+        evidence: ["natural-language goal was converted into a setup draft"],
+        gaps: ["trusted references have not been reviewed yet"],
+        nextAction: startActionToFirstUseAction(inspectSetupAction),
+      }),
       goalDraft: draft,
       almanacs,
       nextBestAction: inspectSetupAction,
@@ -4725,6 +4862,15 @@ async function buildStartReport(
       status: "empty",
       summary: "No almanacs found. Start with the offline demo.",
       provider,
+      firstUse: buildStartFirstUseReport({
+        status: "not-started",
+        summary: "empty root; next setup planned",
+        stage: "empty-root",
+        nextStage: "planning",
+        evidence: [],
+        gaps: ["no local almanac is visible in this root"],
+        nextAction: startActionToFirstUseAction(demoAction),
+      }),
       goalDraft: null,
       almanacs: [],
       nextBestAction: demoAction,
@@ -4758,6 +4904,7 @@ async function buildStartReport(
     status,
     summary,
     provider,
+    firstUse: focus.firstUse,
     goalDraft: null,
     almanacs,
     nextBestAction: focus.nextAction,
@@ -5107,6 +5254,7 @@ function startAlmanacSummary(
   root: string,
 ): StartAlmanacSummary {
   const usability = lifecycleUsability(item);
+  const nextAction = startActionForItem(item, root);
   return {
     id: item.almanacId,
     name: item.displayName,
@@ -5122,8 +5270,115 @@ function startAlmanacSummary(
       answer: item.lifecycle.answer.status,
       refresh: item.lifecycle.refresh.status,
     },
+    firstUse: buildStartItemFirstUseReport(item, nextAction),
     issues: item.lifecycle.issues,
-    nextAction: startActionForItem(item, root),
+    nextAction,
+  };
+}
+
+function buildStartItemFirstUseReport(
+  item: LifecycleInventoryItem,
+  nextAction: StartAction,
+): FirstUseReport {
+  const lifecycle = item.lifecycle;
+  if (lifecycle.status === "broken" || lifecycle.status === "failed") {
+    return buildStartFirstUseReport({
+      status: "blocked",
+      summary: "First-use path is blocked; inspect or repair this almanac.",
+      stage: "blocked",
+      nextStage: null,
+      evidence: ["almanac is visible in this root"],
+      gaps: lifecycle.issues.length > 0 ? lifecycle.issues : ["almanac is not usable"],
+      nextAction: startActionToFirstUseAction(nextAction),
+    });
+  }
+  const compiled =
+    lifecycle.compile.status === "ok" &&
+    lifecycle.knowledge.status === "present" &&
+    (lifecycle.knowledge.facts ?? 0) > 0 &&
+    (lifecycle.knowledge.tools ?? 0) > 0;
+  const validated = compiled && lifecycle.benchmark.status === "passed";
+  const answerReady = validated && lifecycle.answer.status === "ready";
+  const evidence = ["almanac is visible in this root"];
+  const gaps: string[] = [];
+  if (compiled) {
+    evidence.push(
+      `compiled with ${lifecycle.knowledge.facts ?? 0} extracted knowledge item(s)`,
+    );
+  } else {
+    gaps.push(compiledGap(lifecycle));
+  }
+  if (validated) {
+    evidence.push(
+      lifecycle.benchmark.total === null
+        ? "checks passed"
+        : `checks passed ${lifecycle.benchmark.passed ?? 0}/${lifecycle.benchmark.total}`,
+    );
+  } else if (compiled) {
+    gaps.push(`checks are ${lifecycle.benchmark.status}`);
+  }
+  if (answerReady) {
+    evidence.push("answer readiness is ready");
+  } else if (validated) {
+    gaps.push(`answer readiness is ${lifecycle.answer.status}`);
+  }
+  const stage: FirstUseStage = answerReady
+    ? "answer-ready"
+    : validated
+      ? "validated"
+      : compiled
+        ? "compiled"
+        : "compile-handoff";
+  const nextStage: FirstUseStage | null = answerReady
+    ? "first-answer"
+    : validated
+      ? "answer-ready"
+      : compiled
+        ? "validated"
+        : "compiled";
+  const status: FirstUseStatus = answerReady ? "useful" : "in-progress";
+  return buildStartFirstUseReport({
+    status,
+    summary:
+      nextStage === null
+        ? `${FIRST_USE_STAGE_LABELS[stage]}; first useful almanac path is complete`
+        : `${FIRST_USE_STAGE_LABELS[stage]}; next ${FIRST_USE_STAGE_LABELS[nextStage]}`,
+    stage,
+    nextStage,
+    evidence,
+    gaps,
+    nextAction: startActionToFirstUseAction(nextAction),
+  });
+}
+
+function buildStartFirstUseReport(args: {
+  status: FirstUseStatus;
+  summary: string;
+  stage: FirstUseStage;
+  nextStage: FirstUseStage | null;
+  evidence: string[];
+  gaps: string[];
+  nextAction: ActivationNextAction | null;
+}): FirstUseReport {
+  return {
+    status: args.status,
+    stage: args.stage,
+    stageLabel: FIRST_USE_STAGE_LABELS[args.stage],
+    nextStage: args.nextStage,
+    nextStageLabel:
+      args.nextStage === null ? null : FIRST_USE_STAGE_LABELS[args.nextStage],
+    summary: args.summary,
+    evidence: uniqueStrings(args.evidence),
+    gaps: uniqueStrings(args.gaps),
+    nextAction: args.nextAction,
+  };
+}
+
+function startActionToFirstUseAction(action: StartAction): ActivationNextAction {
+  return {
+    command: action.command,
+    reason: action.reason,
+    providerRequired: action.providerRequired,
   };
 }
 
@@ -5389,6 +5644,15 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
   process.stdout.write(
     `  vocabulary    ${guidedVocabularyLine()}\n`,
   );
+  process.stdout.write(`  first use     ${report.firstUse.summary}\n`);
+  if (report.firstUse.nextAction !== null) {
+    const provider = report.firstUse.nextAction.providerRequired
+      ? " (provider required)"
+      : "";
+    process.stdout.write(
+      `  first-use next ${formatGuidedAction(report.firstUse.nextAction.command)}${provider}\n`,
+    );
+  }
 
   if (report.goalDraft !== null) {
     const draft = report.goalDraft;
@@ -5425,7 +5689,7 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
           `references=${item.references.extractedKnowledge ?? "-"}, ` +
           `tools=${item.references.tools ?? "-"}, ` +
           `checks=${item.checks.validation}, answer=${item.checks.answer}, ` +
-          `refresh=${item.checks.refresh}\n`,
+          `refresh=${item.checks.refresh}, first-use=${item.firstUse.stageLabel}\n`,
       );
       if (item.issues.length > 0) {
         process.stdout.write(`    issue: ${item.issues[0]}\n`);
@@ -5527,6 +5791,15 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
   process.stdout.write(
     `  activation    ${formatActivationReport(report.activation)}\n`,
   );
+  process.stdout.write(`  first use     ${report.firstUse.summary}\n`);
+  if (report.firstUse.nextAction !== null) {
+    const provider = report.firstUse.nextAction.providerRequired
+      ? " (provider required)"
+      : "";
+    process.stdout.write(
+      `  first-use next ${formatGuidedAction(report.firstUse.nextAction.command)}${provider}\n`,
+    );
+  }
   if (report.activation.nextAction !== null) {
     const provider = report.activation.nextAction.providerRequired
       ? " (provider required)"
@@ -6197,6 +6470,13 @@ async function studioCardFromItem(
     activation,
     firstAnswer,
   );
+  const firstUse = buildAlmanacFirstUseReport({
+    activation,
+    firstAnswer,
+    preferredAction: activationAction,
+    lifecycle: item.lifecycle,
+    runs,
+  });
   const operations = uniqueGuidedOperations([
     ...buildGuidedOperations({
       activation,
@@ -6260,6 +6540,20 @@ async function studioCardFromItem(
         activationAction === null
           ? null
           : studioCommandFromActivationAction(activationAction),
+    },
+    firstUse: {
+      status: firstUse.status,
+      stage: firstUse.stage,
+      stageLabel: firstUse.stageLabel,
+      nextStage: firstUse.nextStage,
+      nextStageLabel: firstUse.nextStageLabel,
+      summary: firstUse.summary,
+      evidence: firstUse.evidence,
+      gaps: firstUse.gaps,
+      nextAction:
+        firstUse.nextAction === null
+          ? null
+          : studioCommandFromActivationAction(firstUse.nextAction),
     },
     suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
@@ -9395,6 +9689,7 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
     },
     refresh: refreshRunVisibility,
     answer: answerReadiness,
+    firstUse: statusReportForOperations.firstUse,
     firstAnswer,
     operations: statusReportForOperations.operations,
     recommendedOperation: statusReportForOperations.recommendedOperation,
@@ -9488,6 +9783,9 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   );
   process.stdout.write(
     `  first answer   ${formatFirstAnswerGuidanceSummary(firstAnswer)}\n`,
+  );
+  process.stdout.write(
+    `  first use      ${profile.firstUse.summary}\n`,
   );
   if (profile.recommendedOperation !== null) {
     process.stdout.write(

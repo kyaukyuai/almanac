@@ -57,6 +57,18 @@ export interface StudioActivationSummary {
   nextAction: StudioCommand | null;
 }
 
+export interface StudioFirstUseSummary {
+  status: string;
+  stage: string;
+  stageLabel: string;
+  nextStage: string | null;
+  nextStageLabel: string | null;
+  summary: string;
+  evidence: string[];
+  gaps: string[];
+  nextAction: StudioCommand | null;
+}
+
 export interface StudioAlmanacCard {
   almanacId: string;
   displayName: string;
@@ -85,6 +97,7 @@ export interface StudioAlmanacCard {
   };
   latestHistory: StudioHistorySummary;
   activation: StudioActivationSummary;
+  firstUse: StudioFirstUseSummary;
   suggestedQuestions: StudioSuggestedQuestion[];
   issues: string[];
   recommendedOperation: StudioGuidedOperation | null;
@@ -313,6 +326,7 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
           .map(renderSuggestedQuestion)
           .join("\n");
   const activation = renderActivation(card.activation);
+  const firstUse = renderFirstUse(card.firstUse);
   return `<article class="card" data-health="${escapeHtml(card.health)}">
   <div class="card-header">
     <div>
@@ -330,11 +344,16 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     <div><dt>Refresh</dt><dd>${escapeHtml(card.checks.refresh)}</dd></div>
     <div><dt>Registration</dt><dd>${escapeHtml(card.checks.registration)}</dd></div>
     <div><dt>Activation</dt><dd>${escapeHtml(card.activation.summary)}</dd></div>
+    <div><dt>First Use</dt><dd>${escapeHtml(card.firstUse.summary)}</dd></div>
     <div><dt>Latest</dt><dd>${escapeHtml(card.latestHistory.latest)}</dd></div>
   </dl>
   <section>
     <h3>Activation</h3>
     ${activation}
+  </section>
+  <section>
+    <h3>First Use</h3>
+    ${firstUse}
   </section>
   <section>
     <h3>Next Action</h3>
@@ -391,6 +410,34 @@ function renderActivation(activation: StudioActivationSummary): string {
   </div>
   <p>${escapeHtml(activation.summary)}</p>
   <ol class="milestones">${milestones}</ol>
+  <ul>${detailList}</ul>
+  ${next}
+</div>`;
+}
+
+function renderFirstUse(firstUse: StudioFirstUseSummary): string {
+  const details = [
+    ...firstUse.gaps.slice(0, 2).map((gap) => `Gap: ${gap}`),
+    ...firstUse.evidence.slice(0, 1).map((item) => `Evidence: ${item}`),
+  ];
+  const detailList =
+    details.length === 0
+      ? `<li class="muted">No first-use details</li>`
+      : details.map((item) => `<li>${escapeHtml(item)}</li>`).join("");
+  const next =
+    firstUse.nextAction === null
+      ? `<p class="muted">No first-use command needed</p>`
+      : renderCommand(firstUse.nextAction);
+  const nextStage =
+    firstUse.nextStageLabel === null
+      ? "Complete"
+      : `Next: ${firstUse.nextStageLabel}`;
+  return `<div class="activation">
+  <div class="activation-head">
+    <strong>${escapeHtml(firstUse.stageLabel)}</strong>
+    <span>${escapeHtml(firstUse.status)}</span>
+  </div>
+  <p>${escapeHtml(firstUse.summary)} (${escapeHtml(nextStage)})</p>
   <ul>${detailList}</ul>
   ${next}
 </div>`;
