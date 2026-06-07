@@ -417,6 +417,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.16 RC smoke](./docs/v0.16-rc-smoke.md): release-candidate validation for
   guided operation listing, provider-free operation runner, Studio action
   API/UI, evidence save, maintenance dry-run, and Enterprise AI provider smoke
+- [v0.17 plan](./docs/v0.17-plan.md): Guided First Useful Almanac, first-use
+  reports, natural-language setup guidance, abstention recovery, and first
+  answer promotion
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
