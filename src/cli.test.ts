@@ -791,9 +791,23 @@ describe("almanac CLI legacy artifact counts", () => {
         displayName: string;
         slug: string;
         scope: string;
+        reviewedReferences: string[];
         referenceChecklist: Array<{ kind: string; label: string }>;
+        firstUseChecklist: Array<{
+          id: string;
+          status: string;
+          command: string | null;
+          providerRequired: boolean;
+          mutates: boolean;
+        }>;
         firstQuestions: string[];
+        applyCommand: string;
         suggestedCommand: string;
+        studioHandoff: {
+          command: string;
+          providerRequired: boolean;
+          mutates: boolean;
+        };
         confirmationRequired: boolean;
         providerRequiredForCompile: boolean;
         notes: string[];
@@ -814,7 +828,7 @@ describe("almanac CLI legacy artifact counts", () => {
         stage: "planning",
         nextStage: "source-checklist",
         nextAction: expect.objectContaining({
-          command: expect.stringContaining("almanac new 'production AI governance checks'"),
+          command: expect.stringContaining("almanac start 'Build an almanac for production AI governance checks'"),
           providerRequired: true,
         }),
       }),
@@ -827,6 +841,7 @@ describe("almanac CLI legacy artifact counts", () => {
       confirmationRequired: true,
       providerRequiredForCompile: true,
     });
+    expect(parsed.goalDraft.reviewedReferences).toEqual([]);
     expect(parsed.goalDraft.scope).toContain("Production AI Governance Checks");
     expect(parsed.goalDraft.referenceChecklist.map((item) => item.kind)).toEqual([
       "docs",
@@ -834,27 +849,137 @@ describe("almanac CLI legacy artifact counts", () => {
       "repo",
       "internal-doc",
     ]);
+    expect(parsed.goalDraft.firstUseChecklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "choose-reference",
+          status: "todo",
+          command: "export REFERENCE_URL=<reviewed-url-or-file>",
+          providerRequired: false,
+          mutates: false,
+        }),
+        expect.objectContaining({
+          id: "confirm-provider",
+          status: "todo",
+          command: "export ANTHROPIC_API_KEY=<your-key>",
+          providerRequired: true,
+        }),
+        expect.objectContaining({
+          id: "create-almanac",
+          status: "blocked",
+          command: expect.stringContaining("--apply"),
+          providerRequired: true,
+          mutates: true,
+        }),
+        expect.objectContaining({
+          id: "open-studio",
+          status: "later",
+          command: `almanac studio --root ${root}`,
+          providerRequired: false,
+          mutates: false,
+        }),
+      ]),
+    );
     expect(parsed.goalDraft.firstQuestions[0]).toContain(
       "Production AI Governance Checks",
     );
+    expect(parsed.goalDraft.applyCommand).toContain(
+      "almanac start 'Build an almanac for production AI governance checks'",
+    );
+    expect(parsed.goalDraft.applyCommand).toContain("--apply");
     expect(parsed.goalDraft.suggestedCommand).toContain(
       "almanac new 'production AI governance checks'",
     );
     expect(parsed.goalDraft.suggestedCommand).toContain('--source "$REFERENCE_URL"');
     expect(parsed.goalDraft.notes).toContain(
-      "Set REFERENCE_URL to the first reviewed reference URL before running the suggested command.",
+      "Add at least one reviewed reference with --source before using --apply.",
     );
     expect(parsed.goalDraft.notes).toContain(
-      "Set ANTHROPIC_API_KEY before running provider-backed compile.",
+      "Creation needs ANTHROPIC_API_KEY because Almanac will read references and compile grounded tools.",
+    );
+    expect(parsed.goalDraft.studioHandoff).toMatchObject({
+      command: `almanac studio --root ${root}`,
+      providerRequired: false,
+      mutates: false,
+    });
+    expect(parsed.nextActions.some((action) =>
+      action.command === `almanac studio --root ${root}` &&
+      action.providerRequired === false,
+    )).toBe(true);
+    expect(parsed.nextActions.some((action) =>
+      action.command.includes("--apply") && action.providerRequired === true,
+    )).toBe(true);
+  });
+
+  test("start with reviewed references returns an apply-ready first-use handoff", () => {
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for production AI governance checks",
+        "--source",
+        "https://example.com/reference",
+        "--json",
+        "--root",
+        root,
+      ],
+      {
+        ANTHROPIC_API_KEY: "dummy",
+        BRAVE_SEARCH_API_KEY: undefined,
+      },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      firstUse: {
+        summary: string;
+        nextStage: string | null;
+      };
+      goalDraft: {
+        reviewedReferences: string[];
+        firstUseChecklist: Array<{
+          id: string;
+          status: string;
+          command: string | null;
+        }>;
+        applyCommand: string;
+        suggestedCommand: string;
+      };
+      nextBestAction: { command: string; providerRequired: boolean; mutates: boolean };
+    };
+    expect(parsed.firstUse).toEqual(
+      expect.objectContaining({
+        summary: "setup planned; next compile handoff",
+        nextStage: "compile-handoff",
+      }),
+    );
+    expect(parsed.goalDraft.reviewedReferences).toEqual([
+      "https://example.com/reference",
+    ]);
+    expect(parsed.goalDraft.firstUseChecklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "choose-reference", status: "ready" }),
+        expect.objectContaining({ id: "confirm-provider", status: "ready" }),
+        expect.objectContaining({
+          id: "create-almanac",
+          status: "ready",
+          command: expect.stringContaining(
+            "--source https://example.com/reference --apply",
+          ),
+        }),
+      ]),
+    );
+    expect(parsed.goalDraft.applyCommand).toContain(
+      "--source https://example.com/reference --apply",
+    );
+    expect(parsed.goalDraft.suggestedCommand).toContain(
+      "--source https://example.com/reference",
     );
     expect(parsed.nextBestAction).toMatchObject({
+      command: expect.stringContaining("--apply"),
       providerRequired: true,
       mutates: true,
     });
-    expect(parsed.nextActions.some((action) =>
-      action.command === `almanac demo --root ${root}` &&
-      action.providerRequired === false,
-    )).toBe(true);
   });
 
   test("start with a natural-language goal is readable in human output", () => {
@@ -877,10 +1002,16 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("first use     setup planned; next references needed");
     expect(result.stdout).toContain("setup draft:");
     expect(result.stdout).toContain("domain        production AI governance checks");
+    expect(result.stdout).toContain("first-use checklist:");
+    expect(result.stdout).toContain("[todo] Choose at least one trusted reference");
+    expect(result.stdout).toContain("command: export REFERENCE_URL=<reviewed-url-or-file>");
+    expect(result.stdout).toContain("[todo] Confirm provider credentials");
     expect(result.stdout).toContain("references to gather:");
     expect(result.stdout).toContain("first questions:");
     expect(result.stdout).toContain("credential boundary:");
-    expect(result.stdout).toContain("Set ANTHROPIC_API_KEY");
+    expect(result.stdout).toContain("Creation needs ANTHROPIC_API_KEY");
+    expect(result.stdout).toContain("studio handoff:");
+    expect(result.stdout).toContain(`almanac studio --root ${root}`);
     expect(result.stdout).toContain('--source "$REFERENCE_URL"');
   });
 
@@ -907,7 +1038,12 @@ describe("almanac CLI legacy artifact counts", () => {
       blockers: string[];
       plannedCommand: string;
       delegatedCommand: string;
-      goalDraft: { referenceChecklist: Array<{ label: string }> };
+      goalDraft: {
+        referenceChecklist: Array<{ label: string }>;
+        firstUseChecklist: Array<{ id: string; status: string; command: string | null }>;
+        applyCommand: string;
+        studioHandoff: { command: string };
+      };
       result: unknown;
     };
     expect(parsed.status).toBe("blocked");
@@ -918,6 +1054,21 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(parsed.delegatedCommand).toContain('--source "$REFERENCE_URL"');
     expect(parsed.goalDraft.referenceChecklist.map((item) => item.label)).toContain(
       "Official documentation",
+    );
+    expect(parsed.goalDraft.firstUseChecklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "choose-reference", status: "todo" }),
+        expect.objectContaining({ id: "confirm-provider", status: "ready" }),
+        expect.objectContaining({
+          id: "create-almanac",
+          status: "blocked",
+          command: expect.stringContaining("--source \"$REFERENCE_URL\" --apply"),
+        }),
+      ]),
+    );
+    expect(parsed.goalDraft.applyCommand).toContain("--source \"$REFERENCE_URL\" --apply");
+    expect(parsed.goalDraft.studioHandoff.command).toBe(
+      `almanac studio --root ${root}`,
     );
     expect(parsed.result).toBeNull();
     expect(await readdir(root)).toEqual([]);
@@ -948,6 +1099,10 @@ describe("almanac CLI legacy artifact counts", () => {
       status: string;
       providerRequirement: { available: boolean; satisfiedBy: string | null };
       blockers: string[];
+      goalDraft: {
+        reviewedReferences: string[];
+        firstUseChecklist: Array<{ id: string; status: string }>;
+      };
       nextActions: Array<{ command: string }>;
       result: unknown;
     };
@@ -958,6 +1113,16 @@ describe("almanac CLI legacy artifact counts", () => {
     });
     expect(parsed.blockers).toContain(
       "start --apply requires ANTHROPIC_API_KEY before provider-backed compile starts.",
+    );
+    expect(parsed.goalDraft.reviewedReferences).toEqual([
+      "https://example.com/reference",
+    ]);
+    expect(parsed.goalDraft.firstUseChecklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "choose-reference", status: "ready" }),
+        expect.objectContaining({ id: "confirm-provider", status: "todo" }),
+        expect.objectContaining({ id: "create-almanac", status: "blocked" }),
+      ]),
     );
     expect(parsed.nextActions.map((action) => action.command)).toContain(
       "export ANTHROPIC_API_KEY=<your-key>",
@@ -996,6 +1161,12 @@ describe("almanac CLI legacy artifact counts", () => {
       providerRequirement: { available: boolean; satisfiedBy: string | null };
       delegatedCommand: string;
       sources: string[];
+      goalDraft: {
+        reviewedReferences: string[];
+        firstUseChecklist: Array<{ id: string; status: string; command: string | null }>;
+        applyCommand: string;
+        studioHandoff: { command: string };
+      };
       result: {
         almanacId: string;
         almanacDir: string;
@@ -1011,6 +1182,22 @@ describe("almanac CLI legacy artifact counts", () => {
       satisfiedBy: "mock",
     });
     expect(parsed.sources).toEqual([sourceUrl]);
+    expect(parsed.goalDraft.reviewedReferences).toEqual([sourceUrl]);
+    expect(parsed.goalDraft.firstUseChecklist).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "choose-reference", status: "ready" }),
+        expect.objectContaining({ id: "confirm-provider", status: "ready" }),
+        expect.objectContaining({
+          id: "create-almanac",
+          status: "ready",
+          command: expect.stringContaining(`--source ${sourceUrl} --apply`),
+        }),
+      ]),
+    );
+    expect(parsed.goalDraft.applyCommand).toContain(`--source ${sourceUrl} --apply`);
+    expect(parsed.goalDraft.studioHandoff.command).toBe(
+      `almanac studio --root ${root}`,
+    );
     expect(parsed.delegatedCommand).toContain("almanac new 'Tiny Guided Domain'");
     expect(parsed.result.almanacId).toBe("tiny-guided-domain");
     expect(parsed.result.stdoutLineCount).toBeGreaterThan(0);

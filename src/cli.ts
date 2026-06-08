@@ -2471,6 +2471,18 @@ interface StartReferenceChecklistItem {
   example: string;
 }
 
+type StartFirstUseChecklistStatus = "todo" | "ready" | "blocked" | "later";
+
+interface StartFirstUseChecklistItem {
+  id: string;
+  label: string;
+  status: StartFirstUseChecklistStatus;
+  reason: string;
+  command: string | null;
+  providerRequired: boolean;
+  mutates: boolean;
+}
+
 interface StartGoalDraft {
   goal: string;
   domain: string;
@@ -2479,9 +2491,13 @@ interface StartGoalDraft {
   profile: "mixed";
   depth: "standard";
   scope: string;
+  reviewedReferences: string[];
   referenceChecklist: StartReferenceChecklistItem[];
+  firstUseChecklist: StartFirstUseChecklistItem[];
   firstQuestions: string[];
+  applyCommand: string;
   suggestedCommand: string;
+  studioHandoff: StartAction;
   confirmationRequired: true;
   providerRequiredForCompile: true;
   notes: string[];
@@ -4802,14 +4818,20 @@ async function buildStartReport(
   const items = await readLifecycleInventory(opts.root);
   const provider = startProviderStatus();
   const goal = normalizeStartGoal(goalParts);
+  const sources = normalizeStartSources(opts.source);
   if (goal !== null) {
     const almanacs = items.map((item) => startAlmanacSummary(item, opts.root));
-    const draft = buildStartGoalDraft(goal, opts.root, provider);
-    const inspectSetupAction: StartAction = {
-      label: "Review the setup plan",
-      command: draft.suggestedCommand,
+    const draft = buildStartGoalDraft(goal, opts.root, provider, sources);
+    const createAction: StartAction = {
+      label:
+        sources.length === 0
+          ? "Add a reviewed reference and create"
+          : "Create the almanac from reviewed references",
+      command: draft.applyCommand,
       reason:
-        "This is a planning-only draft. Review references before running provider-backed compile.",
+        sources.length === 0
+          ? "Choose at least one trusted reference, then run the explicit create handoff."
+          : "Run the explicit create handoff when provider credentials are ready.",
       providerRequired: true,
       mutates: true,
     };
@@ -4822,18 +4844,25 @@ async function buildStartReport(
       provider,
       firstUse: buildStartFirstUseReport({
         status: "in-progress",
-        summary: "setup planned; next references needed",
+        summary:
+          sources.length === 0
+            ? "setup planned; next references needed"
+            : "setup planned; next compile handoff",
         stage: "planning",
-        nextStage: "source-checklist",
+        nextStage: sources.length === 0 ? "source-checklist" : "compile-handoff",
         evidence: ["natural-language goal was converted into a setup draft"],
-        gaps: ["trusted references have not been reviewed yet"],
-        nextAction: startActionToFirstUseAction(inspectSetupAction),
+        gaps:
+          sources.length === 0
+            ? ["trusted references have not been reviewed yet"]
+            : ["provider-backed create has not been run yet"],
+        nextAction: startActionToFirstUseAction(createAction),
       }),
       goalDraft: draft,
       almanacs,
-      nextBestAction: inspectSetupAction,
+      nextBestAction: createAction,
       nextActions: uniqueStartActions([
-        inspectSetupAction,
+        createAction,
+        draft.studioHandoff,
         {
           label: "Try the offline demo first",
           command: `almanac demo${rootArg(opts.root)}`,
@@ -5023,6 +5052,7 @@ function buildStartGoalDraft(
   goal: string,
   root: string,
   provider: StartProviderStatus,
+  sources: readonly string[] = [],
 ): StartGoalDraft {
   const subject = deriveStartGoalSubject(goal);
   const domain = startDomainName(subject);
@@ -5032,17 +5062,35 @@ function buildStartGoalDraft(
     `${displayName}: collect citable references, extracted knowledge, ` +
     "validation checks, freshness signals, and answer-ready workflows for " +
     "practical decisions in this domain.";
-  const command =
-    `almanac new ${shellArg(domain)} --slug ${shellArg(slug)} ` +
-    `--profile mixed --depth standard --scope ${shellArg(scope)} ` +
-    `--source "$REFERENCE_URL"${rootArg(root)}`;
+  const applyCommand = startApplyCommand(goal, sources, root);
+  const command = startNewCommandForDraft({
+    domain,
+    displayName,
+    slug,
+    profile: "mixed",
+    depth: "standard",
+    scope,
+    sources,
+    root,
+  });
+  const studioHandoff: StartAction = {
+    label: "Open Studio after create",
+    command: `almanac studio${rootArg(root)}`,
+    reason:
+      "Studio gives a local read-only view of first-use progress after the almanac exists.",
+    providerRequired: false,
+    mutates: false,
+  };
+  const providerReady =
+    provider.anthropic === "set" || process.env["ALMANAC_LLM"] === "mock";
   const notes = [
-    "This is a planning-only draft; no files were written and no provider was called.",
-    "Review the reference checklist before running compile.",
-    "Set REFERENCE_URL to the first reviewed reference URL before running the suggested command.",
+    "Planning only: no files were written and no AI provider was called.",
+    sources.length === 0
+      ? "Add at least one reviewed reference with --source before using --apply."
+      : `${sources.length} reviewed reference(s) are already included in the handoff command.`,
     provider.anthropic === "missing"
-      ? "Set ANTHROPIC_API_KEY before running provider-backed compile."
-      : "ANTHROPIC_API_KEY is set; compile is still explicit and must be run by the user.",
+      ? "Creation needs ANTHROPIC_API_KEY because Almanac will read references and compile grounded tools."
+      : "ANTHROPIC_API_KEY is set; creation is still explicit and only starts when you run the handoff command.",
     provider.braveSearch === "missing"
       ? "BRAVE_SEARCH_API_KEY is optional, but improves web source discovery."
       : "BRAVE_SEARCH_API_KEY is set for optional web source discovery.",
@@ -5056,6 +5104,7 @@ function buildStartGoalDraft(
     profile: "mixed",
     depth: "standard",
     scope,
+    reviewedReferences: [...sources],
     referenceChecklist: [
       {
         kind: "docs",
@@ -5083,17 +5132,87 @@ function buildStartGoalDraft(
         example: "/path/to/internal-runbook.md",
       },
     ],
+    firstUseChecklist: [
+      {
+        id: "choose-reference",
+        label: "Choose at least one trusted reference",
+        status: sources.length === 0 ? "todo" : "ready",
+        reason:
+          sources.length === 0
+            ? "A useful almanac starts from citable material you trust."
+            : "Reviewed references were provided with --source.",
+        command:
+          sources.length === 0
+            ? `export REFERENCE_URL=<reviewed-url-or-file>`
+            : null,
+        providerRequired: false,
+        mutates: false,
+      },
+      {
+        id: "confirm-provider",
+        label: "Confirm provider credentials",
+        status: providerReady ? "ready" : "todo",
+        reason:
+          "Creation uses a provider to analyze references, extract knowledge, and generate checks.",
+        command: providerReady ? null : "export ANTHROPIC_API_KEY=<your-key>",
+        providerRequired: true,
+        mutates: false,
+      },
+      {
+        id: "create-almanac",
+        label: "Create the first almanac",
+        status: sources.length > 0 && providerReady ? "ready" : "blocked",
+        reason:
+          "Run this only after the reference and provider checklist items are ready.",
+        command: applyCommand,
+        providerRequired: true,
+        mutates: true,
+      },
+      {
+        id: "open-studio",
+        label: "Open local Studio after create",
+        status: "later",
+        reason:
+          "Use Studio to see first-use progress without learning internal file names.",
+        command: studioHandoff.command,
+        providerRequired: false,
+        mutates: false,
+      },
+    ],
     firstQuestions: [
       `What decisions should ${displayName} help answer?`,
       "Which references are canonical enough to cite?",
       "Which claims should require abstention when evidence is missing?",
       "What checks would prove the compiled tools and answers still work?",
     ],
+    applyCommand,
     suggestedCommand: command,
+    studioHandoff,
     confirmationRequired: true,
     providerRequiredForCompile: true,
     notes,
   };
+}
+
+function startNewCommandForDraft(args: {
+  domain: string;
+  displayName: string;
+  slug: string;
+  profile: "mixed";
+  depth: "standard";
+  scope: string;
+  sources: readonly string[];
+  root: string;
+}): string {
+  const sourceArg =
+    args.sources.length === 0
+      ? ' --source "$REFERENCE_URL"'
+      : ` --source ${args.sources.map((source) => shellArg(source)).join(" ")}`;
+  return (
+    `almanac new ${shellArg(args.domain)} --display-name ${shellArg(args.displayName)} ` +
+    `--slug ${shellArg(args.slug)} --profile ${args.profile} --depth ${args.depth} ` +
+    `--scope ${shellArg(args.scope)}${sourceArg}${rootArg(args.root)}`
+  );
 }
 
 function normalizeStartSources(sources: string[] | undefined): string[] {
@@ -5112,7 +5231,7 @@ function startApplyCommand(
   const goalArg = goal === null ? "\"<goal>\"" : shellArg(goal);
   const sourceArg =
     sources.length === 0
-      ? " --source <url>"
+      ? ' --source "$REFERENCE_URL"'
       : ` --source ${sources.map((source) => shellArg(source)).join(" ")}`;
   return `almanac start ${goalArg}${sourceArg} --apply${rootArg(root)}`;
 }
@@ -5122,15 +5241,16 @@ function startNewCommand(
   sources: readonly string[],
   root: string,
 ): string {
-  const sourceArg =
-    sources.length === 0
-      ? ' --source "$REFERENCE_URL"'
-      : ` --source ${sources.map((source) => shellArg(source)).join(" ")}`;
-  return (
-    `almanac new ${shellArg(draft.domain)} --display-name ${shellArg(draft.displayName)} ` +
-    `--slug ${shellArg(draft.slug)} --profile ${draft.profile} --depth ${draft.depth} ` +
-    `--scope ${shellArg(draft.scope)}${sourceArg}${rootArg(root)}`
-  );
+  return startNewCommandForDraft({
+    domain: draft.domain,
+    displayName: draft.displayName,
+    slug: draft.slug,
+    profile: draft.profile,
+    depth: draft.depth,
+    scope: draft.scope,
+    sources,
+    root,
+  });
 }
 
 function startProviderRequirement(
@@ -5480,7 +5600,7 @@ async function cmdStartApply(
   const goal = normalizeStartGoal(goalParts);
   const sources = normalizeStartSources(opts.source);
   const goalDraft =
-    goal === null ? null : buildStartGoalDraft(goal, opts.root, provider);
+    goal === null ? null : buildStartGoalDraft(goal, opts.root, provider, sources);
   const plannedCommand = startApplyCommand(goal, sources, opts.root);
   const delegatedCommand =
     goalDraft === null ? null : startNewCommand(goalDraft, sources, opts.root);
@@ -5664,6 +5784,21 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
     process.stdout.write(`  profile       ${draft.profile}\n`);
     process.stdout.write(`  depth         ${draft.depth}\n`);
     process.stdout.write(`  scope         ${draft.scope}\n`);
+    if (draft.reviewedReferences.length > 0) {
+      process.stdout.write("\nreviewed references:\n");
+      for (const reference of draft.reviewedReferences) {
+        process.stdout.write(`  - ${reference}\n`);
+      }
+    }
+    process.stdout.write("\nfirst-use checklist:\n");
+    for (const item of draft.firstUseChecklist) {
+      process.stdout.write(
+        `  - [${item.status}] ${item.label}: ${item.reason}\n`,
+      );
+      if (item.command !== null) {
+        process.stdout.write(`    command: ${item.command}\n`);
+      }
+    }
     process.stdout.write("\nreferences to gather:\n");
     for (const item of draft.referenceChecklist) {
       process.stdout.write(
@@ -5678,6 +5813,9 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
     for (const note of draft.notes) {
       process.stdout.write(`  - ${note}\n`);
     }
+    process.stdout.write("\nstudio handoff:\n");
+    process.stdout.write(`  ${draft.studioHandoff.command}\n`);
+    process.stdout.write(`  reason: ${draft.studioHandoff.reason}\n`);
   }
 
   if (report.almanacs.length > 0) {
