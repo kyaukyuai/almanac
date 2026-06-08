@@ -22,6 +22,20 @@ domain, slug, scope, reference checklist, first questions, and a provider-backed
 `almanac new ...` command to review. It does not call an LLM provider, compile,
 or write files by itself.
 
+The guided source checklist is intentionally user-facing. It groups reviewed
+references into official docs, implementation repositories, secondary
+articles/research, community references, internal docs, and uncategorized
+references. Official docs, repositories, and internal runbooks are treated as
+primary references; secondary and community references should support rather
+than replace them. Rejected or unusable references stay visible in `status`,
+`profile`, and Studio with a next command such as `almanac sources <id> --rejected`
+or `almanac feed <id> <url> --apply`.
+
+Provider-backed compile remains an explicit handoff. `start "<goal>" --source
+<url>` can say which reference requirements are ready or thin, but it only
+compiles after the user runs the reviewed `--apply` command and provider
+credentials are available.
+
 For the full guided first-run release-candidate path, including no-key demo,
 answer readiness bootstrap, local studio, and the separated provider-backed
 Enterprise AI smoke, see [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For

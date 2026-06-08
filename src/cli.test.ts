@@ -792,6 +792,16 @@ describe("almanac CLI legacy artifact counts", () => {
         slug: string;
         scope: string;
         reviewedReferences: string[];
+        sourceChecklist: {
+          status: string;
+          summary: string;
+          items: Array<{
+            id: string;
+            status: string;
+            acceptedCount: number;
+            rejectedCount: number;
+          }>;
+        };
         referenceChecklist: Array<{ kind: string; label: string }>;
         firstUseChecklist: Array<{
           id: string;
@@ -842,6 +852,34 @@ describe("almanac CLI legacy artifact counts", () => {
       providerRequiredForCompile: true,
     });
     expect(parsed.goalDraft.reviewedReferences).toEqual([]);
+    expect(parsed.goalDraft.sourceChecklist).toMatchObject({
+      status: "missing",
+      summary: "no reviewed references yet",
+    });
+    expect(parsed.goalDraft.sourceChecklist.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "official-docs",
+          status: "missing",
+          acceptedCount: 0,
+          rejectedCount: 0,
+        }),
+        expect.objectContaining({
+          id: "repository",
+          status: "missing",
+          acceptedCount: 0,
+          rejectedCount: 0,
+        }),
+        expect.objectContaining({
+          id: "secondary-article",
+          status: "optional",
+        }),
+        expect.objectContaining({
+          id: "community",
+          status: "optional",
+        }),
+      ]),
+    );
     expect(parsed.goalDraft.scope).toContain("Production AI Governance Checks");
     expect(parsed.goalDraft.referenceChecklist.map((item) => item.kind)).toEqual([
       "docs",
@@ -917,7 +955,7 @@ describe("almanac CLI legacy artifact counts", () => {
         "start",
         "Build an almanac for production AI governance checks",
         "--source",
-        "https://example.com/reference",
+        "https://docs.example.com/reference",
         "--json",
         "--root",
         root,
@@ -937,6 +975,11 @@ describe("almanac CLI legacy artifact counts", () => {
       };
       goalDraft: {
         reviewedReferences: string[];
+        sourceChecklist: {
+          status: string;
+          acceptedCount: number;
+          items: Array<{ id: string; status: string; acceptedCount: number }>;
+        };
         firstUseChecklist: Array<{
           id: string;
           status: string;
@@ -954,8 +997,21 @@ describe("almanac CLI legacy artifact counts", () => {
       }),
     );
     expect(parsed.goalDraft.reviewedReferences).toEqual([
-      "https://example.com/reference",
+      "https://docs.example.com/reference",
     ]);
+    expect(parsed.goalDraft.sourceChecklist).toMatchObject({
+      status: "ready",
+      acceptedCount: 1,
+    });
+    expect(parsed.goalDraft.sourceChecklist.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          id: "official-docs",
+          status: "ready",
+          acceptedCount: 1,
+        }),
+      ]),
+    );
     expect(parsed.goalDraft.firstUseChecklist).toEqual(
       expect.arrayContaining([
         expect.objectContaining({ id: "choose-reference", status: "ready" }),
@@ -964,16 +1020,16 @@ describe("almanac CLI legacy artifact counts", () => {
           id: "create-almanac",
           status: "ready",
           command: expect.stringContaining(
-            "--source https://example.com/reference --apply",
+            "--source https://docs.example.com/reference --apply",
           ),
         }),
       ]),
     );
     expect(parsed.goalDraft.applyCommand).toContain(
-      "--source https://example.com/reference --apply",
+      "--source https://docs.example.com/reference --apply",
     );
     expect(parsed.goalDraft.suggestedCommand).toContain(
-      "--source https://example.com/reference",
+      "--source https://docs.example.com/reference",
     );
     expect(parsed.nextBestAction).toMatchObject({
       command: expect.stringContaining("--apply"),
@@ -1002,6 +1058,9 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(result.stdout).toContain("first use     setup planned; next references needed");
     expect(result.stdout).toContain("setup draft:");
     expect(result.stdout).toContain("domain        production AI governance checks");
+    expect(result.stdout).toContain("trusted reference checklist:");
+    expect(result.stdout).toContain("[missing] Official docs");
+    expect(result.stdout).toContain("[missing] Implementation repositories");
     expect(result.stdout).toContain("first-use checklist:");
     expect(result.stdout).toContain("[todo] Choose at least one trusted reference");
     expect(result.stdout).toContain("command: export REFERENCE_URL=<reviewed-url-or-file>");
@@ -1434,7 +1493,9 @@ describe("almanac CLI legacy artifact counts", () => {
         nextStage: string | null;
         nextAction: { command: string; providerRequired: boolean } | null;
         gaps: string[];
+        sourceChecklist: { status: string; acceptedCount: number; rejectedCount: number };
       };
+      sourceChecklist: { status: string; acceptedCount: number; rejectedCount: number };
       operations: Array<{
         id: string;
         label: string;
@@ -1506,6 +1567,16 @@ describe("almanac CLI legacy artifact counts", () => {
       }),
     );
     expect(status.firstUse.gaps).toContain("checks are missing");
+    expect(status.sourceChecklist).toMatchObject({
+      status: "missing",
+      acceptedCount: 0,
+      rejectedCount: 0,
+    });
+    expect(status.firstUse.sourceChecklist).toMatchObject({
+      status: "missing",
+      acceptedCount: 0,
+      rejectedCount: 0,
+    });
     expect(status.recommendedOperation).toEqual(
       expect.objectContaining({
         label: "Run validation",
@@ -4698,6 +4769,7 @@ describe("almanac CLI product onboarding", () => {
         stage: string;
         nextStage: string | null;
         nextAction: { command: string; providerRequired: boolean } | null;
+        sourceChecklist: { status: string; acceptedCount: number; rejectedCount: number };
       };
       recommendedOperation: {
         label: string;
@@ -4728,6 +4800,11 @@ describe("almanac CLI product onboarding", () => {
         }),
       }),
     );
+    expect(statusReport.firstUse.sourceChecklist).toMatchObject({
+      status: "ready",
+      acceptedCount: 3,
+      rejectedCount: 0,
+    });
     expect(statusReport.recommendedOperation).toEqual(
       expect.objectContaining({
         label: "Manage answer checks",
