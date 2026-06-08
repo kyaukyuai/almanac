@@ -248,7 +248,8 @@ serving binary stays generic.
 
 ## Status
 
-`v0.16.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.16.0` is shipped. `v0.17` is in RC validation for Guided First Useful
+Almanac. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -280,11 +281,19 @@ Current shipped lines include:
   first-answer guidance, replay prompts, and Studio activation state
 - `v0.16`: guided operation metadata, provider-free operation execution,
   answer-readiness evidence save, and Studio Run buttons for bounded actions
+- `v0.17`: first-use reports, natural-language setup/source checklist
+  guidance, first-answer promotion, abstention recovery, and Studio first-use
+  visibility
 
 `v0.16.0` turns guided activation into guided operations: users can list the
 safe local work available for an almanac, run provider-free bounded operations
 from the CLI or Studio, save answer-readiness evidence, and keep
 provider-backed work as explicit CLI handoff.
+
+`v0.17` turns guided operations toward the first useful personal almanac:
+empty-root start, natural-language setup planning, source checklist handoff,
+first answer promotion, and abstention recovery are surfaced through CLI status
+and Studio before users need to learn the artifact model.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -420,6 +429,10 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.17 plan](./docs/v0.17-plan.md): Guided First Useful Almanac, first-use
   reports, natural-language setup guidance, abstention recovery, and first
   answer promotion
+- [v0.17 RC smoke](./docs/v0.17-rc-smoke.md): release-candidate validation for
+  empty-root first-use guidance, source checklist handoff, first-answer
+  promotion, abstention recovery, Studio first-use/recovery visibility, and
+  Enterprise AI provider smoke
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
