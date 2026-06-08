@@ -41,7 +41,10 @@ answer readiness bootstrap, local studio, and the separated provider-backed
 Enterprise AI smoke, see [`docs/v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For
 the Guided Activation path through milestones, guided create apply, first
 answer, replay, and Studio activation state, see
-[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md).
+[`docs/v0.15-rc-smoke.md`](./v0.15-rc-smoke.md). For the Guided First Useful
+Almanac path through source checklist, first-answer promotion, abstention
+recovery, and Studio first-use/recovery visibility, see
+[`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md).
 
 ## Offline demo
 
@@ -151,6 +154,9 @@ questions, and `/api/status/:almanacId` in
 guided operation listing, the provider-free operation runner, Studio POST
 actions, inline action results, evidence save, and provider handoff in
 [`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
+The v0.17 RC smoke validates first-use state, source checklist guidance,
+first-answer promotion, abstention recovery, and Studio recovery visibility in
+[`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md).
 
 ## Registration visibility
 
@@ -598,7 +604,9 @@ smoke sequence, see [`v0.14-rc-smoke.md`](./v0.14-rc-smoke.md). For the v0.15
 guided activation, first-answer, replay, and Studio activation smoke sequence,
 see [`v0.15-rc-smoke.md`](./v0.15-rc-smoke.md). For the v0.16 guided
 operations and Studio action smoke sequence, see
-[`v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
+[`v0.16-rc-smoke.md`](./v0.16-rc-smoke.md). For the v0.17 first-use,
+source-checklist, first-answer promotion, and abstention recovery smoke
+sequence, see [`v0.17-rc-smoke.md`](./v0.17-rc-smoke.md).
 
 Minimal answer-mode smoke:
 
