@@ -4998,11 +4998,56 @@ describe("almanac CLI product onboarding", () => {
     expect(savedHuman.stdout).toContain("first answer:");
     expect(savedHuman.stdout).toContain("trust: saved abstention");
     expect(savedHuman.stdout).toContain("abstention:");
+    expect(savedHuman.stdout).toContain("recovery:");
+    expect(savedHuman.stdout).toContain(
+      "Do not fabricate or force an unsupported answer.",
+    );
     expect(savedHuman.stdout).toContain(
       "replay the saved abstention without provider calls",
     );
     expect(savedHuman.stdout).toContain(
       "promote this expected abstention into answer checks",
+    );
+
+    const answerId = savedHuman.stdout.match(/\.runs\/(answer-[^\s/]+)\.json/)?.[1];
+    expect(answerId).toBeDefined();
+    const runDetail = runCli([
+      "runs",
+      "sqlite-demo",
+      answerId!,
+      "--root",
+      root,
+    ]);
+    expect(runDetail.status).toBe(0);
+    expect(runDetail.stdout).toContain("recovery:");
+    expect(runDetail.stdout).toContain("recovery next:");
+
+    const statusJson = runCli(["status", "sqlite-demo", "--json", "--root", root]);
+    expect(statusJson.status).toBe(0);
+    const statusReport = JSON.parse(statusJson.stdout) as {
+      firstAnswer: {
+        recovery: {
+          summary: string;
+          nextSteps: string[];
+          nextActions: Array<{ command: string; providerRequired: boolean }>;
+        } | null;
+      };
+    };
+    expect(statusReport.firstAnswer.recovery).toEqual(
+      expect.objectContaining({
+        summary: expect.any(String),
+        nextSteps: expect.arrayContaining([
+          "Do not fabricate or force an unsupported answer.",
+        ]),
+      }),
+    );
+    expect(statusReport.firstAnswer.recovery?.nextActions).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          command: expect.stringContaining("almanac runs sqlite-demo"),
+          providerRequired: false,
+        }),
+      ]),
     );
   }, { timeout: 15_000 });
 

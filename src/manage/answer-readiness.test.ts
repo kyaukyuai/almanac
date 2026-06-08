@@ -101,6 +101,37 @@ describe("answer readiness", () => {
     expect(readiness.qualityGate.status).toBe("pass");
   });
 
+  test("reports stale and unsupported latest answers as validation work", async () => {
+    const almanacDir = await buildAnswerReadinessFixture("answer-weak");
+    writeAskFixture(almanacDir);
+    await saveWeakAnswer(almanacDir);
+    writeAskSuiteRefresh(almanacDir, {
+      refreshId: "refresh-2026-01-03T00-00-00-000Z-00000005",
+      status: "passed",
+      exitCode: 0,
+      passed: 1,
+      failed: 0,
+    });
+
+    const readiness = await getAnswerReadiness({ almanacDir });
+
+    expect(readiness.status).toBe("needs-validation");
+    expect(readiness.latestAnswer?.quality).toEqual(
+      expect.objectContaining({
+        status: "fail",
+        unsupportedClaimCount: 1,
+        staleCitationCount: 1,
+      }),
+    );
+    expect(readiness.issues.validation).toContain(
+      "latest answer has 1 stale citation(s)",
+    );
+    expect(readiness.issues.validation).toContain(
+      "latest answer quality gate failed",
+    );
+    expect(formatAnswerReadinessDoctor(readiness)).toContain("quality fail");
+  });
+
   test("uses a passing saved ask suite as provider-free quality evidence", async () => {
     const almanacDir = await buildAnswerReadinessFixture("answer-suite-ready");
     writeAskFixture(almanacDir);
@@ -157,6 +188,48 @@ async function savePassingAnswer(almanacDir: string): Promise<void> {
     ],
     citations: [fixtureCitation()],
     trace: fixtureTrace(),
+  });
+}
+
+async function saveWeakAnswer(almanacDir: string): Promise<void> {
+  const trace = fixtureTrace();
+  trace.citations.staleCount = 1;
+  trace.citations.observed = trace.citations.observed.map((citation) => ({
+    ...citation,
+    stale: true,
+  }));
+  trace.quality = {
+    status: "fail",
+    citationRate: 1,
+    unsupportedClaimCount: 1,
+    staleCitationCount: 1,
+    abstention: {
+      expected: false,
+      actual: false,
+      matches: true,
+    },
+    reasons: ["answer has 1 unsupported claim", "answer has 1 stale citation"],
+  };
+  await saveAnswerArtifact({
+    almanacDir,
+    answerId: "answer-2026-01-02T00-00-00-000Z-00000002",
+    question: "Are foreign keys supported?",
+    status: "ok",
+    exitCode: 0,
+    startedAt: "2026-01-02T00:00:00.000Z",
+    finishedAt: "2026-01-02T00:00:01.000Z",
+    answer: "SQLite supports foreign key constraints and an unsupported detail.",
+    toolCalls: [
+      {
+        toolName: "query_facts",
+        input: { q: "foreign keys" },
+        status: "ok",
+        durationMs: 10,
+        citationsCount: 1,
+      },
+    ],
+    citations: [fixtureCitation()],
+    trace,
   });
 }
 

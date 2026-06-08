@@ -186,6 +186,7 @@ import {
   STAGE_IDS,
   ToolDesignResultSchema,
   type AnswerArtifact,
+  type AnswerTraceAbstainRecovery,
   type AlmanacManifest,
   type BenchmarkReport,
   type BenchmarkSet,
@@ -256,6 +257,7 @@ import {
   runAnswerSession,
   type AnswerSession,
 } from "./manage/answer-session.ts";
+import { buildAbstentionRecovery } from "./manage/answer-recovery.ts";
 import {
   AskReplaySetupError,
   exitCodeForAskReplay,
@@ -2125,6 +2127,7 @@ interface FirstAnswerHistorySummary {
   status: RunArtifactStatus;
   label?: string;
   abstentionReason?: string;
+  abstentionRecovery?: AnswerTraceAbstainRecovery;
   citationsCount?: number;
   qualityStatus?: string;
   unsupportedClaimCount?: number;
@@ -2132,9 +2135,17 @@ interface FirstAnswerHistorySummary {
   toolCallsCount?: number;
 }
 
+interface FirstAnswerRecoveryGuidance {
+  summary: string;
+  nextSteps: string[];
+  actionHints: AnswerTraceAbstainRecovery["actionHints"];
+  nextActions: ActivationNextAction[];
+}
+
 interface FirstAnswerGuidance {
   status: FirstAnswerGuidanceStatus;
   summary: string;
+  recovery: FirstAnswerRecoveryGuidance | null;
   latestAnswer: FirstAnswerHistorySummary | null;
   suggestedQuestions: SuggestedQuestion[];
   nextActions: ActivationNextAction[];
@@ -4896,9 +4907,24 @@ function firstAnswerHistoryFromRunSummary(
     ...(run.abstentionReason === undefined
       ? {}
       : { abstentionReason: run.abstentionReason }),
+    ...(run.abstentionRecovery === undefined
+      ? {}
+      : { abstentionRecovery: run.abstentionRecovery }),
     ...(run.citationsCount === undefined
       ? {}
       : { citationsCount: run.citationsCount }),
+    ...(run.qualityStatus === undefined
+      ? {}
+      : { qualityStatus: run.qualityStatus }),
+    ...(run.unsupportedClaimCount === undefined
+      ? {}
+      : { unsupportedClaimCount: run.unsupportedClaimCount }),
+    ...(run.staleCitationCount === undefined
+      ? {}
+      : { staleCitationCount: run.staleCitationCount }),
+    ...(run.toolCallsCount === undefined
+      ? {}
+      : { toolCallsCount: run.toolCallsCount }),
   };
 }
 
@@ -4912,6 +4938,9 @@ function firstAnswerHistoryFromArtifact(
     ...(artifact.abstentionReason === undefined
       ? {}
       : { abstentionReason: artifact.abstentionReason }),
+    ...(artifact.trace?.abstain?.recovery === undefined
+      ? {}
+      : { abstentionRecovery: artifact.trace.abstain.recovery }),
     citationsCount: artifact.citations.length,
     ...(artifact.trace?.quality?.status === undefined
       ? {}
@@ -4951,6 +4980,7 @@ function buildFirstAnswerGuidance(args: {
         status: "not-started",
         summary:
           "answer readiness is not ready yet; suggested questions are available for later",
+        recovery: null,
         latestAnswer: null,
         suggestedQuestions,
         nextActions: [],
@@ -4962,6 +4992,7 @@ function buildFirstAnswerGuidance(args: {
         suggestedQuestions.length === 0
           ? "no saved answer yet; ask a real question with --save"
           : "no saved answer yet; save one suggested question first",
+      recovery: null,
       latestAnswer: null,
       suggestedQuestions,
       nextActions: [
@@ -4975,36 +5006,59 @@ function buildFirstAnswerGuidance(args: {
   }
 
   if (latest.status === "ok") {
+    const recovery = firstAnswerRecoveryGuidance({
+      almanacId: args.almanacId,
+      rootSuffix: args.rootSuffix,
+      latest,
+      suggestedSaveCommand,
+    });
+    const savedActions = savedAnswerNextActions({
+      almanacId: args.almanacId,
+      rootSuffix: args.rootSuffix,
+      latest,
+    });
     return {
       status: "saved-ok",
       summary: `saved cited answer ${latest.answerId}${firstAnswerQualitySuffix(latest)}`,
+      recovery,
       latestAnswer: latest,
       suggestedQuestions,
-      nextActions: savedAnswerNextActions({
-        almanacId: args.almanacId,
-        rootSuffix: args.rootSuffix,
-        latest,
-      }),
+      nextActions: uniqueActivationNextActions([
+        ...savedActions,
+        ...(recovery?.nextActions ?? []),
+      ]),
     };
   }
 
   if (latest.status === "abstained") {
+    const recovery = firstAnswerRecoveryGuidance({
+      almanacId: args.almanacId,
+      rootSuffix: args.rootSuffix,
+      latest,
+      suggestedSaveCommand,
+    });
+    const savedActions = savedAnswerNextActions({
+      almanacId: args.almanacId,
+      rootSuffix: args.rootSuffix,
+      latest,
+    });
     return {
       status: "saved-abstention",
       summary: `saved abstention ${latest.answerId}${firstAnswerAbstentionSuffix(latest)}`,
+      recovery,
       latestAnswer: latest,
       suggestedQuestions,
-      nextActions: savedAnswerNextActions({
-        almanacId: args.almanacId,
-        rootSuffix: args.rootSuffix,
-        latest,
-      }),
+      nextActions: uniqueActivationNextActions([
+        ...savedActions,
+        ...(recovery?.nextActions ?? []),
+      ]),
     };
   }
 
   return {
     status: "needs-review",
     summary: `latest saved answer ${latest.answerId} is ${latest.status}; inspect before promotion`,
+    recovery: null,
     latestAnswer: latest,
     suggestedQuestions,
     nextActions: [
@@ -5027,10 +5081,7 @@ function savedAnswerNextActions(args: {
   rootSuffix: string;
   latest: FirstAnswerHistorySummary;
 }): ActivationNextAction[] {
-  const labelSuffix =
-    args.latest.label === undefined
-      ? ""
-      : ` --label ${shellArg(args.latest.label)}`;
+  const labelSuffix = firstAnswerLabelSuffix(args.latest);
   const replayReason =
     args.latest.status === "abstained"
       ? "replay the saved abstention without provider calls"
@@ -5062,6 +5113,165 @@ function savedAnswerNextActions(args: {
     });
   }
   return actions;
+}
+
+function firstAnswerRecoveryGuidance(args: {
+  almanacId: string;
+  rootSuffix: string;
+  latest: FirstAnswerHistorySummary;
+  suggestedSaveCommand: string;
+}): FirstAnswerRecoveryGuidance | null {
+  const latest = args.latest;
+  if (latest.status === "abstained") {
+    const recovery =
+      latest.abstentionRecovery ??
+      buildAbstentionRecovery({
+        reason: latest.abstentionReason,
+        toolCallsCount: latest.toolCallsCount,
+      });
+    return {
+      summary: recovery.summary,
+      nextSteps: recovery.nextSteps,
+      actionHints: recovery.actionHints,
+      nextActions: recoveryActionsFromHints({
+        almanacId: args.almanacId,
+        rootSuffix: args.rootSuffix,
+        latest,
+        recovery,
+        suggestedSaveCommand: args.suggestedSaveCommand,
+      }),
+    };
+  }
+
+  const weakReasons = firstAnswerWeakReasons(latest);
+  if (latest.status !== "ok" || weakReasons.length === 0) return null;
+  const recovery: AnswerTraceAbstainRecovery = {
+    summary: `Saved answer needs review: ${weakReasons.join("; ")}.`,
+    nextSteps: [
+      "Inspect the saved answer trace before promoting it.",
+      ...(latest.unsupportedClaimCount !== undefined &&
+      latest.unsupportedClaimCount > 0
+        ? ["Add cited evidence or narrow the answer to remove unsupported claims."]
+        : []),
+      ...(latest.staleCitationCount !== undefined && latest.staleCitationCount > 0
+        ? ["Refresh stale sources before relying on the answer."]
+        : []),
+      "Do not accept unsupported claims as a workaround.",
+    ],
+    actionHints: [
+      "inspect-answer-run",
+      "replay-saved-run",
+      "run-answer-checks",
+      ...(latest.staleCitationCount !== undefined && latest.staleCitationCount > 0
+        ? (["add-trusted-source"] as const)
+        : []),
+      "ask-new-question",
+    ],
+  };
+  return {
+    summary: recovery.summary,
+    nextSteps: recovery.nextSteps,
+    actionHints: recovery.actionHints,
+    nextActions: recoveryActionsFromHints({
+      almanacId: args.almanacId,
+      rootSuffix: args.rootSuffix,
+      latest,
+      recovery,
+      suggestedSaveCommand: args.suggestedSaveCommand,
+    }),
+  };
+}
+
+function firstAnswerWeakReasons(latest: FirstAnswerHistorySummary): string[] {
+  return [
+    latest.qualityStatus === "fail" ? "quality gate failed" : null,
+    latest.unsupportedClaimCount !== undefined &&
+    latest.unsupportedClaimCount > 0
+      ? `${latest.unsupportedClaimCount} unsupported claim${latest.unsupportedClaimCount === 1 ? "" : "s"}`
+      : null,
+    latest.staleCitationCount !== undefined && latest.staleCitationCount > 0
+      ? `${latest.staleCitationCount} stale citation${latest.staleCitationCount === 1 ? "" : "s"}`
+      : null,
+  ].filter((reason): reason is string => reason !== null);
+}
+
+function recoveryActionsFromHints(args: {
+  almanacId: string;
+  rootSuffix: string;
+  latest: FirstAnswerHistorySummary;
+  recovery: AnswerTraceAbstainRecovery;
+  suggestedSaveCommand: string;
+}): ActivationNextAction[] {
+  const actions: ActivationNextAction[] = [];
+  const labelSuffix = firstAnswerLabelSuffix(args.latest);
+  for (const hint of args.recovery.actionHints) {
+    if (hint === "inspect-answer-run") {
+      actions.push({
+        command: `almanac runs ${args.almanacId} ${args.latest.answerId}${args.rootSuffix}`,
+        reason: "inspect the saved answer trace and recovery context",
+        providerRequired: false,
+      });
+    } else if (hint === "replay-saved-run") {
+      actions.push({
+        command: `almanac ask-replay ${args.almanacId} --from-runs${labelSuffix}${args.rootSuffix}`,
+        reason: "replay the saved answer without provider calls",
+        providerRequired: false,
+      });
+    } else if (hint === "promote-abstention-check") {
+      if (
+        args.latest.status === "abstained" &&
+        (args.latest.toolCallsCount ?? 1) > 0
+      ) {
+        actions.push({
+          command: `almanac ask-fixtures add-from-run ${args.almanacId} ${args.latest.answerId}${args.rootSuffix}`,
+          reason: "promote this expected abstention into answer checks",
+          providerRequired: false,
+        });
+      }
+    } else if (hint === "run-answer-checks") {
+      actions.push({
+        command: `almanac ask-suite ${args.almanacId}${args.rootSuffix}`,
+        reason: "run answer checks without provider calls",
+        providerRequired: false,
+      });
+    } else if (hint === "add-trusted-source") {
+      actions.push({
+        command:
+          `almanac feed ${args.almanacId} <url>${args.rootSuffix}` +
+          ` --rationale ${shellArg("add evidence for the abstained question")}`,
+        reason: "add trusted evidence before asking again",
+        providerRequired: true,
+      });
+    } else if (hint === "ask-new-question") {
+      actions.push({
+        command: args.suggestedSaveCommand,
+        reason: "save a new cited answer only after evidence is available",
+        providerRequired: true,
+      });
+    } else if (hint === "run-doctor") {
+      actions.push({
+        command: `almanac doctor ${args.almanacId}${args.rootSuffix}`,
+        reason: "check local runtime state before retrying",
+        providerRequired: false,
+      });
+    }
+  }
+  return uniqueActivationNextActions(actions);
+}
+
+function firstAnswerLabelSuffix(latest: FirstAnswerHistorySummary): string {
+  return latest.label === undefined ? "" : ` --label ${shellArg(latest.label)}`;
+}
+
+function uniqueActivationNextActions(
+  actions: ActivationNextAction[],
+): ActivationNextAction[] {
+  const seen = new Set<string>();
+  return actions.filter((action) => {
+    if (seen.has(action.command)) return false;
+    seen.add(action.command);
+    return true;
+  });
 }
 
 function firstAnswerQualitySuffix(latest: FirstAnswerHistorySummary): string {
@@ -6435,6 +6645,14 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
   process.stdout.write(
     `  first answer  ${formatFirstAnswerGuidanceSummary(report.firstAnswer)}\n`,
   );
+  if (report.firstAnswer.recovery !== null) {
+    process.stdout.write(
+      `  answer recovery ${report.firstAnswer.recovery.summary}\n`,
+    );
+    for (const step of report.firstAnswer.recovery.nextSteps.slice(0, 3)) {
+      process.stdout.write(`    - ${step}\n`);
+    }
+  }
   if (report.firstAnswer.suggestedQuestions.length > 0) {
     process.stdout.write(`  suggested questions\n`);
     for (const question of report.firstAnswer.suggestedQuestions) {
@@ -7191,6 +7409,16 @@ async function studioCardFromItem(
             : studioCommandFromActivationAction(firstUse.sourceChecklist.nextAction),
       },
     },
+    firstAnswerRecovery:
+      firstAnswer.recovery === null
+        ? null
+        : {
+            summary: firstAnswer.recovery.summary,
+            nextSteps: firstAnswer.recovery.nextSteps,
+            nextActions: firstAnswer.recovery.nextActions.map(
+              studioCommandFromActivationAction,
+            ),
+          },
     suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
     recommendedOperation: operations[0] ?? null,
@@ -10420,6 +10648,11 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   process.stdout.write(
     `  first answer   ${formatFirstAnswerGuidanceSummary(firstAnswer)}\n`,
   );
+  if (firstAnswer.recovery !== null) {
+    process.stdout.write(
+      `  answer recovery ${firstAnswer.recovery.summary}\n`,
+    );
+  }
   process.stdout.write(
     `  first use      ${profile.firstUse.summary}\n`,
   );
@@ -11077,6 +11310,15 @@ function formatSavedAnswerFirstAnswerGuidance(
   ];
   if (artifact.status === "abstained") {
     lines.push(`  abstention: ${artifact.abstentionReason ?? "(none)"}`);
+  }
+  if (guidance.recovery !== null) {
+    lines.push(`  recovery: ${guidance.recovery.summary}`);
+    if (guidance.recovery.nextSteps.length > 0) {
+      lines.push("  recovery next:");
+      for (const step of guidance.recovery.nextSteps) {
+        lines.push(`    - ${step}`);
+      }
+    }
   }
   if (guidance.nextActions.length > 0) {
     lines.push("  next:");

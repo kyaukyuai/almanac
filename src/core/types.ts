@@ -3839,6 +3839,28 @@ export const AnswerTraceQualitySchema = z.object({
 });
 export type AnswerTraceQuality = z.infer<typeof AnswerTraceQualitySchema>;
 
+export const AnswerTraceAbstainRecoveryActionHintSchema = z.enum([
+  "inspect-answer-run",
+  "replay-saved-run",
+  "promote-abstention-check",
+  "run-answer-checks",
+  "add-trusted-source",
+  "ask-new-question",
+  "run-doctor",
+]);
+export type AnswerTraceAbstainRecoveryActionHint = z.infer<
+  typeof AnswerTraceAbstainRecoveryActionHintSchema
+>;
+
+export const AnswerTraceAbstainRecoverySchema = z.object({
+  summary: z.string().min(1).max(500),
+  nextSteps: z.array(z.string().min(1).max(300)).max(8),
+  actionHints: z.array(AnswerTraceAbstainRecoveryActionHintSchema).max(8),
+});
+export type AnswerTraceAbstainRecovery = z.infer<
+  typeof AnswerTraceAbstainRecoverySchema
+>;
+
 export const AnswerTraceSchema = z.object({
   schemaVersion: z.literal("0.1.0"),
   planner: z.object({
@@ -3870,6 +3892,7 @@ export const AnswerTraceSchema = z.object({
       status: AnswerArtifactStatusSchema,
       reason: z.string().min(1).max(2000),
       stage: z.enum(["planner", "tool", "evidence", "synthesis", "citation-gate"]),
+      recovery: AnswerTraceAbstainRecoverySchema.optional(),
     })
     .optional(),
   quality: AnswerTraceQualitySchema.optional(),

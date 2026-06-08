@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { readManifest } from "../compile/storage.ts";
 import type {
   AnswerArtifact,
+  AnswerTraceAbstainRecovery,
   AnswerTraceQuality,
   RefreshArtifact,
 } from "../core/types.ts";
@@ -28,6 +29,7 @@ export interface AnswerReadinessLatestAnswer {
   artifactRelPath: string;
   label?: string;
   abstentionReason?: string;
+  abstentionRecovery?: AnswerTraceAbstainRecovery;
   quality: AnswerTraceQuality | null;
   staleCitationCount: number;
   hasTrace: boolean;
@@ -176,6 +178,9 @@ export function formatAnswerReadinessDoctor(readiness: AnswerReadiness): string 
     parts.push(
       `latest answer ${readiness.latestAnswer.status} ${readiness.latestAnswer.answerId}`,
     );
+    if (readiness.latestAnswer.abstentionRecovery !== undefined) {
+      parts.push(`recovery ${readiness.latestAnswer.abstentionRecovery.summary}`);
+    }
   }
   const issues = [
     ...readiness.issues.blocking,
@@ -424,6 +429,9 @@ function summarizeAnswer(artifact: AnswerArtifact): AnswerReadinessLatestAnswer 
     ...(artifact.abstentionReason === undefined
       ? {}
       : { abstentionReason: artifact.abstentionReason }),
+    ...(artifact.trace?.abstain?.recovery === undefined
+      ? {}
+      : { abstentionRecovery: artifact.trace.abstain.recovery }),
     quality: artifact.trace?.quality ?? null,
     staleCitationCount: artifact.trace?.citations.staleCount ?? 0,
     hasTrace: artifact.trace !== undefined,
