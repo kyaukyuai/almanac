@@ -2062,6 +2062,38 @@ type FirstUseStatus =
   | "useful"
   | "complete";
 
+type SourceChecklistStatus = "missing" | "partial" | "ready" | "attention";
+type SourceChecklistItemStatus = "missing" | "optional" | "ready" | "attention";
+type SourceChecklistKind =
+  | "official-docs"
+  | "repository"
+  | "secondary-article"
+  | "community"
+  | "internal-doc"
+  | "other";
+
+interface SourceChecklistItem {
+  id: SourceChecklistKind;
+  label: string;
+  status: SourceChecklistItemStatus;
+  reason: string;
+  acceptedCount: number;
+  rejectedCount: number;
+  examples: string[];
+  nextAction: string | null;
+}
+
+interface SourceChecklistReport {
+  status: SourceChecklistStatus;
+  summary: string;
+  acceptedCount: number;
+  rejectedCount: number;
+  items: SourceChecklistItem[];
+  evidence: string[];
+  gaps: string[];
+  nextAction: ActivationNextAction | null;
+}
+
 interface FirstUseReport {
   status: FirstUseStatus;
   stage: FirstUseStage;
@@ -2072,6 +2104,7 @@ interface FirstUseReport {
   evidence: string[];
   gaps: string[];
   nextAction: ActivationNextAction | null;
+  sourceChecklist: SourceChecklistReport;
 }
 
 type FirstAnswerGuidanceStatus =
@@ -2189,6 +2222,7 @@ interface AlmanacStatusReport {
   manifest: AlmanacManifest | null;
   status: LifecycleOverallStatus;
   usability: LifecycleUsability;
+  sourceChecklist: SourceChecklistReport;
   activation: ActivationReport;
   firstUse: FirstUseReport;
   firstAnswer: FirstAnswerGuidance;
@@ -2492,6 +2526,7 @@ interface StartGoalDraft {
   depth: "standard";
   scope: string;
   reviewedReferences: string[];
+  sourceChecklist: SourceChecklistReport;
   referenceChecklist: StartReferenceChecklistItem[];
   firstUseChecklist: StartFirstUseChecklistItem[];
   firstQuestions: string[];
@@ -2591,6 +2626,11 @@ async function readAlmanacStatusReport(
   const item = await readLifecycleInventoryItem(opts.root, id);
   const runs = await readLifecycleLatestRuns(dir);
   const domainSpec = await readDomainSpecForGuidance(dir);
+  const sourceChecklist = await readAlmanacSourceChecklist({
+    almanacDir: item.almanacDir,
+    almanacId: item.almanacId,
+    root: opts.root,
+  });
   const runReadError =
     runs.readError === null ? [] : [`saved runs unreadable: ${runs.readError}`];
   const registrationRepairActions = item.lifecycle.registration.clients
@@ -2632,6 +2672,7 @@ async function readAlmanacStatusReport(
     preferredAction,
     lifecycle,
     runs,
+    sourceChecklist,
   });
   const operations = buildGuidedOperations({
     activation,
@@ -2647,6 +2688,7 @@ async function readAlmanacStatusReport(
     manifest: item.manifest,
     status: item.lifecycle.status,
     usability: lifecycleUsability(item),
+    sourceChecklist,
     activation,
     firstUse,
     firstAnswer,
@@ -3625,6 +3667,378 @@ const FIRST_USE_STAGE_LABELS: Record<FirstUseStage, string> = {
   blocked: "blocked",
 };
 
+const SOURCE_CHECKLIST_KIND_LABELS: Record<SourceChecklistKind, string> = {
+  "official-docs": "Official docs",
+  repository: "Implementation repositories",
+  "secondary-article": "Secondary articles or research",
+  community: "Community references",
+  "internal-doc": "Internal docs",
+  other: "Other reviewed references",
+};
+
+const SOURCE_CHECKLIST_REQUIRED: Record<SourceChecklistKind, boolean> = {
+  "official-docs": true,
+  repository: true,
+  "secondary-article": false,
+  community: false,
+  "internal-doc": false,
+  other: false,
+};
+
+function emptySourceChecklistReport(nextAction: ActivationNextAction | null = null): SourceChecklistReport {
+  const items = sourceChecklistBaseItems();
+  return {
+    status: "missing",
+    summary: "no reviewed references yet",
+    acceptedCount: 0,
+    rejectedCount: 0,
+    items,
+    evidence: [],
+    gaps: ["trusted references have not been reviewed yet"],
+    nextAction,
+  };
+}
+
+function sourceChecklistBaseItems(): SourceChecklistItem[] {
+  return (Object.keys(SOURCE_CHECKLIST_KIND_LABELS) as SourceChecklistKind[]).map(
+    (kind) => ({
+      id: kind,
+      label: SOURCE_CHECKLIST_KIND_LABELS[kind],
+      status: SOURCE_CHECKLIST_REQUIRED[kind] ? "missing" : "optional",
+      reason: sourceChecklistReason(kind, 0, 0),
+      acceptedCount: 0,
+      rejectedCount: 0,
+      examples: [],
+      nextAction: null,
+    }),
+  );
+}
+
+function sourceChecklistReason(
+  kind: SourceChecklistKind,
+  acceptedCount: number,
+  rejectedCount: number,
+): string {
+  if (acceptedCount > 0) {
+    return `${acceptedCount} reviewed reference(s) available`;
+  }
+  if (rejectedCount > 0) {
+    return `${rejectedCount} rejected or unusable reference(s) need review`;
+  }
+  switch (kind) {
+    case "official-docs":
+      return "Add canonical documentation, standards, or vendor/government docs when available.";
+    case "repository":
+      return "Add an implementation repository when concrete behavior, commands, or examples matter.";
+    case "secondary-article":
+      return "Use articles, talks, or papers as supporting context after primary references.";
+    case "community":
+      return "Use community references only as weak supporting signals.";
+    case "internal-doc":
+      return "Use local runbooks or notes when the almanac should support personal/team practice.";
+    case "other":
+      return "Keep uncategorized references visible until they can be reviewed or replaced.";
+  }
+}
+
+function buildStartSourceChecklist(
+  sources: readonly string[],
+  root: string,
+): SourceChecklistReport {
+  if (sources.length === 0) {
+    return emptySourceChecklistReport({
+      command: "export REFERENCE_URL=<reviewed-url-or-file>",
+      reason: "choose at least one trusted reference before provider-backed create",
+      providerRequired: false,
+    });
+  }
+
+  const grouped = new Map<SourceChecklistKind, string[]>();
+  for (const source of sources) {
+    const kind = sourceChecklistKindFromReviewedReference(source);
+    grouped.set(kind, [...(grouped.get(kind) ?? []), source]);
+  }
+  const items = sourceChecklistBaseItems().map((item) => {
+    const examples = grouped.get(item.id) ?? [];
+    const acceptedCount = examples.length;
+    return {
+      ...item,
+      status: acceptedCount > 0 ? "ready" : item.status,
+      reason: sourceChecklistReason(item.id, acceptedCount, 0),
+      acceptedCount,
+      examples: examples.slice(0, 3),
+    };
+  });
+  const hasPrimary = items.some(
+    (item) =>
+      item.acceptedCount > 0 &&
+      (item.id === "official-docs" ||
+        item.id === "repository" ||
+        item.id === "internal-doc"),
+  );
+  const status: SourceChecklistStatus = hasPrimary ? "ready" : "partial";
+  const gaps =
+    status === "ready"
+      ? []
+      : ["consider adding official docs, a repository, or an internal runbook before compile"];
+  return {
+    status,
+    summary:
+      status === "ready"
+        ? `${sources.length} reviewed reference(s) ready for compile handoff`
+        : `${sources.length} reviewed reference(s), but no primary docs/repo/internal reference yet`,
+    acceptedCount: sources.length,
+    rejectedCount: 0,
+    items,
+    evidence: [`${sources.length} reviewed reference(s) provided with --source`],
+    gaps,
+    nextAction:
+      status === "ready"
+        ? null
+        : {
+            command: `almanac start "<goal>" --source "$REFERENCE_URL"${rootArg(root)}`,
+            reason: "add a primary reference before the provider-backed compile handoff",
+            providerRequired: false,
+          },
+  };
+}
+
+async function readAlmanacSourceChecklist(args: {
+  almanacDir: string;
+  almanacId: string;
+  root: string;
+}): Promise<SourceChecklistReport> {
+  const sources = await readSourcesFileIfPresent(args.almanacDir);
+  if (sources === null) {
+    const canFeed = existsSync(manifestPath(args.almanacDir));
+    return emptySourceChecklistReport({
+      command: canFeed
+        ? `almanac feed ${args.almanacId} <url> --apply${rootArg(args.root)}`
+        : `almanac start "<goal>"${rootArg(args.root)}`,
+      reason: canFeed
+        ? "add at least one trusted reference or rerun source approval"
+        : "restart guided setup because the almanac manifest is missing",
+      providerRequired: canFeed,
+    });
+  }
+  return buildSourceChecklistFromSourcesFile(sources, args.almanacId, args.root);
+}
+
+function buildSourceChecklistFromSourcesFile(
+  sources: SourcesFile,
+  almanacId: string,
+  root: string,
+): SourceChecklistReport {
+  const acceptedByKind = new Map<SourceChecklistKind, SourcesFile["sources"]>();
+  const rejectedByKind = new Map<SourceChecklistKind, SourcesFile["rejected"]>();
+  for (const source of sources.sources) {
+    const kind = sourceChecklistKindFromSourceKind(source.kind);
+    acceptedByKind.set(kind, [...(acceptedByKind.get(kind) ?? []), source]);
+  }
+  for (const source of sources.rejected) {
+    const kind = sourceChecklistKindFromRejectedUrl(source.url);
+    rejectedByKind.set(kind, [...(rejectedByKind.get(kind) ?? []), source]);
+  }
+
+  const items = sourceChecklistBaseItems().map((item) => {
+    const accepted = acceptedByKind.get(item.id) ?? [];
+    const rejected = rejectedByKind.get(item.id) ?? [];
+    const acceptedCount = accepted.length;
+    const rejectedCount = rejected.length;
+    const status: SourceChecklistItemStatus =
+      acceptedCount > 0
+        ? rejectedCount > 0
+          ? "attention"
+          : "ready"
+        : rejectedCount > 0
+          ? "attention"
+          : item.status;
+    return {
+      ...item,
+      status,
+      reason: sourceChecklistReason(item.id, acceptedCount, rejectedCount),
+      acceptedCount,
+      rejectedCount,
+      examples: accepted.map((source) => source.url).slice(0, 3),
+      nextAction:
+        rejectedCount > 0
+          ? `almanac sources ${almanacId} --rejected${rootArg(root)}`
+          : acceptedCount === 0 && SOURCE_CHECKLIST_REQUIRED[item.id]
+            ? `almanac feed ${almanacId} <url> --apply${rootArg(root)}`
+            : null,
+    };
+  });
+  const acceptedCount = sources.sources.length;
+  const rejectedCount = sources.rejected.length;
+  const hasPrimary = items.some(
+    (item) =>
+      item.acceptedCount > 0 &&
+      (item.id === "official-docs" ||
+        item.id === "repository" ||
+        item.id === "internal-doc"),
+  );
+  const status: SourceChecklistStatus =
+    acceptedCount === 0
+      ? "missing"
+      : rejectedCount > 0
+        ? "attention"
+        : hasPrimary
+          ? "ready"
+          : "partial";
+  const evidence =
+    acceptedCount === 0
+      ? []
+      : [`${acceptedCount} accepted reference(s) approved`];
+  const gaps: string[] = [];
+  if (acceptedCount === 0) {
+    gaps.push("no accepted trusted references");
+  } else if (!hasPrimary) {
+    gaps.push("no official docs, repository, or internal reference accepted");
+  }
+  if (rejectedCount > 0) {
+    gaps.push(`${rejectedCount} rejected or unusable reference(s) need review`);
+  }
+  const nextAction =
+    status === "ready"
+      ? null
+      : rejectedCount > 0
+        ? {
+            command: `almanac sources ${almanacId} --rejected${rootArg(root)}`,
+            reason: "review rejected or unusable references",
+            providerRequired: false,
+          }
+        : {
+            command: `almanac feed ${almanacId} <url> --apply${rootArg(root)}`,
+            reason: "add a trusted primary reference",
+            providerRequired: true,
+          };
+  return {
+    status,
+    summary: sourceChecklistSummary(status, acceptedCount, rejectedCount),
+    acceptedCount,
+    rejectedCount,
+    items,
+    evidence,
+    gaps,
+    nextAction,
+  };
+}
+
+function sourceChecklistSummary(
+  status: SourceChecklistStatus,
+  acceptedCount: number,
+  rejectedCount: number,
+): string {
+  if (status === "missing") return "no accepted trusted references";
+  if (status === "attention") {
+    return `${acceptedCount} accepted / ${rejectedCount} rejected reference(s), review needed`;
+  }
+  if (status === "partial") {
+    return `${acceptedCount} accepted reference(s), primary coverage is thin`;
+  }
+  return `${acceptedCount} accepted trusted reference(s)`;
+}
+
+function formatSourceChecklistMix(checklist: SourceChecklistReport): string {
+  const labels: Array<[SourceChecklistKind, string]> = [
+    ["official-docs", "official"],
+    ["repository", "repos"],
+    ["secondary-article", "secondary"],
+    ["community", "community"],
+    ["internal-doc", "internal"],
+  ];
+  return labels
+    .map(([kind, label]) => {
+      const item = checklist.items.find((entry) => entry.id === kind);
+      if (item === undefined) return `${label}=0`;
+      const rejected =
+        item.rejectedCount > 0 ? `/${item.rejectedCount} rejected` : "";
+      return `${label}=${item.acceptedCount}${rejected}`;
+    })
+    .join(", ");
+}
+
+function sourceChecklistKindFromSourceKind(kind: SourceKind): SourceChecklistKind {
+  switch (kind) {
+    case "docs":
+    case "data":
+      return "official-docs";
+    case "repo":
+      return "repository";
+    case "community":
+      return "community";
+    case "file":
+      return "internal-doc";
+    case "academic":
+    case "news":
+    case "essay":
+    case "book":
+    case "talk":
+      return "secondary-article";
+  }
+}
+
+function sourceChecklistKindFromRejectedUrl(url: string): SourceChecklistKind {
+  return sourceChecklistKindFromReviewedReference(url);
+}
+
+function sourceChecklistKindFromReviewedReference(reference: string): SourceChecklistKind {
+  if (
+    reference.startsWith("/") ||
+    reference.startsWith("./") ||
+    reference.startsWith("../") ||
+    reference.startsWith("file:")
+  ) {
+    return "internal-doc";
+  }
+  try {
+    const parsed = new URL(reference);
+    const host = parsed.hostname.toLowerCase();
+    const path = parsed.pathname.toLowerCase();
+    if (
+      host === "github.com" ||
+      host === "gitlab.com" ||
+      host.endsWith(".github.io") ||
+      host.endsWith(".gitlab.io")
+    ) {
+      return "repository";
+    }
+    if (
+      host.includes("reddit.com") ||
+      host.includes("news.ycombinator.com") ||
+      host.includes("stackoverflow.com") ||
+      host.includes("community.")
+    ) {
+      return "community";
+    }
+    if (
+      host.includes("arxiv.org") ||
+      host.includes("medium.com") ||
+      host.includes("substack.com") ||
+      host.includes("blog.") ||
+      path.includes("/blog/") ||
+      path.includes("/news/") ||
+      path.includes("/article/")
+    ) {
+      return "secondary-article";
+    }
+    if (
+      host.endsWith(".gov") ||
+      host.endsWith(".edu") ||
+      host.includes("docs.") ||
+      path.includes("/docs") ||
+      path.includes("/documentation") ||
+      path.includes("/standard") ||
+      path.includes("/policy")
+    ) {
+      return "official-docs";
+    }
+  } catch {
+    return "other";
+  }
+  return "other";
+}
+
 function buildActivationReport(args: {
   almanacId: string;
   manifest: AlmanacManifest | null;
@@ -3771,6 +4185,7 @@ function buildAlmanacFirstUseReport(args: {
   preferredAction: ActivationNextAction | null;
   lifecycle: AlmanacStatusReport["lifecycle"];
   runs: LifecycleLatestRuns;
+  sourceChecklist: SourceChecklistReport;
 }): FirstUseReport {
   const blocked =
     args.activation.status === "blocked" ||
@@ -3796,6 +4211,12 @@ function buildAlmanacFirstUseReport(args: {
     nextStage === null ? null : FIRST_USE_STAGE_LABELS[nextStage];
   const evidence = [...args.activation.evidence];
   const gaps = [...args.activation.gaps];
+  if (args.sourceChecklist.evidence.length > 0) {
+    evidence.push(...args.sourceChecklist.evidence);
+  }
+  if (args.sourceChecklist.status !== "ready") {
+    gaps.push(...args.sourceChecklist.gaps);
+  }
   if (args.firstAnswer.status !== "not-started") {
     evidence.push(`first answer is ${args.firstAnswer.status}`);
   } else if (stage === "answer-ready") {
@@ -3822,6 +4243,7 @@ function buildAlmanacFirstUseReport(args: {
     evidence: uniqueStrings(evidence),
     gaps: uniqueStrings(gaps),
     nextAction: args.preferredAction ?? args.activation.nextAction,
+    sourceChecklist: args.sourceChecklist,
   };
 }
 
@@ -4820,7 +5242,9 @@ async function buildStartReport(
   const goal = normalizeStartGoal(goalParts);
   const sources = normalizeStartSources(opts.source);
   if (goal !== null) {
-    const almanacs = items.map((item) => startAlmanacSummary(item, opts.root));
+    const almanacs = await Promise.all(
+      items.map((item) => startAlmanacSummary(item, opts.root)),
+    );
     const draft = buildStartGoalDraft(goal, opts.root, provider, sources);
     const createAction: StartAction = {
       label:
@@ -4856,6 +5280,7 @@ async function buildStartReport(
             ? ["trusted references have not been reviewed yet"]
             : ["provider-backed create has not been run yet"],
         nextAction: startActionToFirstUseAction(createAction),
+        sourceChecklist: draft.sourceChecklist,
       }),
       goalDraft: draft,
       almanacs,
@@ -4917,7 +5342,9 @@ async function buildStartReport(
     };
   }
 
-  const almanacs = items.map((item) => startAlmanacSummary(item, opts.root));
+  const almanacs = await Promise.all(
+    items.map((item) => startAlmanacSummary(item, opts.root)),
+  );
   const focus = chooseStartFocus(almanacs);
   const status = almanacs.every((item) => item.health === "ok") ? "ready" : "attention";
   const attentionCount = almanacs.filter((item) => item.health !== "ok").length;
@@ -5063,6 +5490,7 @@ function buildStartGoalDraft(
     "validation checks, freshness signals, and answer-ready workflows for " +
     "practical decisions in this domain.";
   const applyCommand = startApplyCommand(goal, sources, root);
+  const sourceChecklist = buildStartSourceChecklist(sources, root);
   const command = startNewCommandForDraft({
     domain,
     displayName,
@@ -5105,6 +5533,7 @@ function buildStartGoalDraft(
     depth: "standard",
     scope,
     reviewedReferences: [...sources],
+    sourceChecklist,
     referenceChecklist: [
       {
         kind: "docs",
@@ -5369,12 +5798,17 @@ function startDemoAction(root: string): StartAction {
   };
 }
 
-function startAlmanacSummary(
+async function startAlmanacSummary(
   item: LifecycleInventoryItem,
   root: string,
-): StartAlmanacSummary {
+): Promise<StartAlmanacSummary> {
   const usability = lifecycleUsability(item);
   const nextAction = startActionForItem(item, root);
+  const sourceChecklist = await readAlmanacSourceChecklist({
+    almanacDir: item.almanacDir,
+    almanacId: item.almanacId,
+    root,
+  });
   return {
     id: item.almanacId,
     name: item.displayName,
@@ -5390,7 +5824,7 @@ function startAlmanacSummary(
       answer: item.lifecycle.answer.status,
       refresh: item.lifecycle.refresh.status,
     },
-    firstUse: buildStartItemFirstUseReport(item, nextAction),
+    firstUse: buildStartItemFirstUseReport(item, nextAction, sourceChecklist),
     issues: item.lifecycle.issues,
     nextAction,
   };
@@ -5399,6 +5833,7 @@ function startAlmanacSummary(
 function buildStartItemFirstUseReport(
   item: LifecycleInventoryItem,
   nextAction: StartAction,
+  sourceChecklist: SourceChecklistReport,
 ): FirstUseReport {
   const lifecycle = item.lifecycle;
   if (lifecycle.status === "broken" || lifecycle.status === "failed") {
@@ -5410,6 +5845,7 @@ function buildStartItemFirstUseReport(
       evidence: ["almanac is visible in this root"],
       gaps: lifecycle.issues.length > 0 ? lifecycle.issues : ["almanac is not usable"],
       nextAction: startActionToFirstUseAction(nextAction),
+      sourceChecklist,
     });
   }
   const compiled =
@@ -5425,8 +5861,12 @@ function buildStartItemFirstUseReport(
     evidence.push(
       `compiled with ${lifecycle.knowledge.facts ?? 0} extracted knowledge item(s)`,
     );
+    evidence.push(...sourceChecklist.evidence);
   } else {
     gaps.push(compiledGap(lifecycle));
+  }
+  if (sourceChecklist.status !== "ready") {
+    gaps.push(...sourceChecklist.gaps);
   }
   if (validated) {
     evidence.push(
@@ -5468,6 +5908,7 @@ function buildStartItemFirstUseReport(
     evidence,
     gaps,
     nextAction: startActionToFirstUseAction(nextAction),
+    sourceChecklist,
   });
 }
 
@@ -5479,6 +5920,7 @@ function buildStartFirstUseReport(args: {
   evidence: string[];
   gaps: string[];
   nextAction: ActivationNextAction | null;
+  sourceChecklist?: SourceChecklistReport;
 }): FirstUseReport {
   return {
     status: args.status,
@@ -5491,6 +5933,7 @@ function buildStartFirstUseReport(args: {
     evidence: uniqueStrings(args.evidence),
     gaps: uniqueStrings(args.gaps),
     nextAction: args.nextAction,
+    sourceChecklist: args.sourceChecklist ?? emptySourceChecklistReport(),
   };
 }
 
@@ -5790,6 +6233,25 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
         process.stdout.write(`  - ${reference}\n`);
       }
     }
+    process.stdout.write("\ntrusted reference checklist:\n");
+    process.stdout.write(
+      `  status        ${draft.sourceChecklist.status} - ${draft.sourceChecklist.summary}\n`,
+    );
+    for (const item of draft.sourceChecklist.items) {
+      const counts =
+        item.acceptedCount > 0 || item.rejectedCount > 0
+          ? ` (${item.acceptedCount} accepted / ${item.rejectedCount} rejected)`
+          : "";
+      process.stdout.write(
+        `  - [${item.status}] ${item.label}${counts}: ${item.reason}\n`,
+      );
+      for (const example of item.examples) {
+        process.stdout.write(`    reference: ${example}\n`);
+      }
+      if (item.nextAction !== null) {
+        process.stdout.write(`    next: ${item.nextAction}\n`);
+      }
+    }
     process.stdout.write("\nfirst-use checklist:\n");
     for (const item of draft.firstUseChecklist) {
       process.stdout.write(
@@ -5831,6 +6293,11 @@ async function cmdStart(goalParts: string[], opts: StartOptions): Promise<void> 
       );
       if (item.issues.length > 0) {
         process.stdout.write(`    issue: ${item.issues[0]}\n`);
+      }
+      if (item.firstUse.sourceChecklist.status !== "ready") {
+        process.stdout.write(
+          `    references: ${item.firstUse.sourceChecklist.summary}\n`,
+        );
       }
     }
   }
@@ -5930,6 +6397,20 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
     `  activation    ${formatActivationReport(report.activation)}\n`,
   );
   process.stdout.write(`  first use     ${report.firstUse.summary}\n`);
+  process.stdout.write(
+    `  references    ${report.sourceChecklist.status} - ${report.sourceChecklist.summary}\n`,
+  );
+  process.stdout.write(
+    `  reference mix ${formatSourceChecklistMix(report.sourceChecklist)}\n`,
+  );
+  if (report.sourceChecklist.nextAction !== null) {
+    const provider = report.sourceChecklist.nextAction.providerRequired
+      ? " (provider required)"
+      : "";
+    process.stdout.write(
+      `  reference next ${formatGuidedAction(report.sourceChecklist.nextAction.command)}${provider}\n`,
+    );
+  }
   if (report.firstUse.nextAction !== null) {
     const provider = report.firstUse.nextAction.providerRequired
       ? " (provider required)"
@@ -6589,6 +7070,11 @@ async function studioCardFromItem(
 ): Promise<StudioAlmanacCard> {
   const rootSuffix = rootArg(root);
   const domainSpec = await readDomainSpecForGuidance(item.almanacDir);
+  const sourceChecklist = await readAlmanacSourceChecklist({
+    almanacDir: item.almanacDir,
+    almanacId: item.almanacId,
+    root,
+  });
   const firstAnswer = buildFirstAnswerGuidance({
     almanacId: item.almanacId,
     domainSpec,
@@ -6614,6 +7100,7 @@ async function studioCardFromItem(
     preferredAction: activationAction,
     lifecycle: item.lifecycle,
     runs,
+    sourceChecklist,
   });
   const operations = uniqueGuidedOperations([
     ...buildGuidedOperations({
@@ -6692,6 +7179,17 @@ async function studioCardFromItem(
         firstUse.nextAction === null
           ? null
           : studioCommandFromActivationAction(firstUse.nextAction),
+      sourceChecklist: {
+        status: firstUse.sourceChecklist.status,
+        summary: firstUse.sourceChecklist.summary,
+        acceptedCount: firstUse.sourceChecklist.acceptedCount,
+        rejectedCount: firstUse.sourceChecklist.rejectedCount,
+        gaps: firstUse.sourceChecklist.gaps,
+        nextAction:
+          firstUse.sourceChecklist.nextAction === null
+            ? null
+            : studioCommandFromActivationAction(firstUse.sourceChecklist.nextAction),
+      },
     },
     suggestedQuestions: firstAnswer.suggestedQuestions,
     issues: item.lifecycle.issues.map(formatGuidedIssue),
@@ -9924,6 +10422,12 @@ async function cmdProfile(id: string, opts: ProfileOptions): Promise<void> {
   );
   process.stdout.write(
     `  first use      ${profile.firstUse.summary}\n`,
+  );
+  process.stdout.write(
+    `  references     ${profile.firstUse.sourceChecklist.status} - ${profile.firstUse.sourceChecklist.summary}\n`,
+  );
+  process.stdout.write(
+    `  reference mix  ${formatSourceChecklistMix(profile.firstUse.sourceChecklist)}\n`,
   );
   if (profile.recommendedOperation !== null) {
     process.stdout.write(

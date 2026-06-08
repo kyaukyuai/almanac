@@ -328,6 +328,14 @@ function fixtureCard(): StudioAlmanacCard {
         providerRequired: true,
         mutates: true,
       },
+      sourceChecklist: {
+        status: "ready",
+        summary: "3 accepted trusted reference(s)",
+        acceptedCount: 3,
+        rejectedCount: 0,
+        gaps: [],
+        nextAction: null,
+      },
     },
     suggestedQuestions: [
       {

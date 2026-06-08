@@ -57,6 +57,15 @@ export interface StudioActivationSummary {
   nextAction: StudioCommand | null;
 }
 
+export interface StudioSourceChecklistSummary {
+  status: string;
+  summary: string;
+  acceptedCount: number;
+  rejectedCount: number;
+  gaps: string[];
+  nextAction: StudioCommand | null;
+}
+
 export interface StudioFirstUseSummary {
   status: string;
   stage: string;
@@ -67,6 +76,7 @@ export interface StudioFirstUseSummary {
   evidence: string[];
   gaps: string[];
   nextAction: StudioCommand | null;
+  sourceChecklist: StudioSourceChecklistSummary;
 }
 
 export interface StudioAlmanacCard {
@@ -417,6 +427,7 @@ function renderActivation(activation: StudioActivationSummary): string {
 
 function renderFirstUse(firstUse: StudioFirstUseSummary): string {
   const details = [
+    `References: ${firstUse.sourceChecklist.summary}`,
     ...firstUse.gaps.slice(0, 2).map((gap) => `Gap: ${gap}`),
     ...firstUse.evidence.slice(0, 1).map((item) => `Evidence: ${item}`),
   ];
@@ -428,6 +439,10 @@ function renderFirstUse(firstUse: StudioFirstUseSummary): string {
     firstUse.nextAction === null
       ? `<p class="muted">No first-use command needed</p>`
       : renderCommand(firstUse.nextAction);
+  const referenceNext =
+    firstUse.sourceChecklist.nextAction === null
+      ? ""
+      : `<div class="secondary-action">${renderCommand(firstUse.sourceChecklist.nextAction)}</div>`;
   const nextStage =
     firstUse.nextStageLabel === null
       ? "Complete"
@@ -439,6 +454,7 @@ function renderFirstUse(firstUse: StudioFirstUseSummary): string {
   </div>
   <p>${escapeHtml(firstUse.summary)} (${escapeHtml(nextStage)})</p>
   <ul>${detailList}</ul>
+  ${referenceNext}
   ${next}
 </div>`;
 }
