@@ -27,6 +27,7 @@ import {
   RunToolArtifactSchema,
   ToolResultSchema,
   type AnswerArtifact,
+  type AnswerTraceAbstainRecovery,
   type MaintenanceArtifact,
   type RefreshArtifact,
   type RunArtifactEnvelope,
@@ -161,6 +162,11 @@ export interface RunToolArtifactSummary {
   question?: string;
   answer?: string;
   abstentionReason?: string;
+  abstentionRecovery?: AnswerTraceAbstainRecovery;
+  qualityStatus?: "pass" | "fail";
+  unsupportedClaimCount?: number;
+  staleCitationCount?: number;
+  toolCallsCount?: number;
 }
 
 export interface RunToolArtifactList {
@@ -740,6 +746,15 @@ function formatAnswerArtifactHuman(artifact: AnswerArtifact): string {
       lines.push(
         `abstain trace: ${artifact.trace.abstain.stage}: ${artifact.trace.abstain.reason}`,
       );
+      if (artifact.trace.abstain.recovery !== undefined) {
+        lines.push(`recovery: ${artifact.trace.abstain.recovery.summary}`);
+        if (artifact.trace.abstain.recovery.nextSteps.length > 0) {
+          lines.push("recovery next:");
+          for (const step of artifact.trace.abstain.recovery.nextSteps) {
+            lines.push(`  - ${step}`);
+          }
+        }
+      }
     }
   }
 
@@ -1070,6 +1085,22 @@ function summarizeRunToolArtifact(
       ...(artifact.abstentionReason === undefined
         ? {}
         : { abstentionReason: artifact.abstentionReason }),
+      ...(artifact.trace?.abstain?.recovery === undefined
+        ? {}
+        : { abstentionRecovery: artifact.trace.abstain.recovery }),
+      ...(artifact.trace?.quality?.status === undefined
+        ? {}
+        : { qualityStatus: artifact.trace.quality.status }),
+      ...(artifact.trace?.quality?.unsupportedClaimCount === undefined
+        ? {}
+        : {
+            unsupportedClaimCount:
+              artifact.trace.quality.unsupportedClaimCount,
+          }),
+      ...(artifact.trace?.quality?.staleCitationCount === undefined
+        ? {}
+        : { staleCitationCount: artifact.trace.quality.staleCitationCount }),
+      toolCallsCount: artifact.toolCalls.length,
     };
   }
   if (artifact.kind === "maintenance") {

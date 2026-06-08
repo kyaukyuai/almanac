@@ -42,6 +42,7 @@ import {
   type LlmUsage,
 } from "../llm/provider.ts";
 import { evaluateAnswerQualityGate } from "./answer-quality.ts";
+import { buildAbstentionRecovery } from "./answer-recovery.ts";
 
 export const ANSWER_PLANNER_PROMPT_STAGE_ID = "answer-planner";
 export const ANSWER_PLANNER_PROMPT_VERSION = "planner-v1";
@@ -950,7 +951,10 @@ function buildAnswerTrace(input: {
       calls: input.synthesisCalls,
       status: input.status,
     },
-    ...traceAbstain(input),
+    ...traceAbstain({
+      ...input,
+      observedCitationsCount: observedCitations.length,
+    }),
     quality: evaluateAnswerQualityGate({
       expectedStatus: input.status,
       observedStatus: input.status,
@@ -1048,20 +1052,32 @@ function traceAbstain(input: {
   synthesisCalls: number;
   abstentionReason?: string;
   error?: ToolError;
+  observedCitationsCount?: number;
 }): Pick<AnswerTrace, "abstain"> | Record<string, never> {
   if (input.status === "ok") return {};
   const reason =
     input.abstentionReason ?? input.error?.code ?? input.planning.stopReason;
+  const stage = traceAbstainStage({
+    status: input.status,
+    reason,
+    synthesisCalls: input.synthesisCalls,
+    planningStatus: input.planning.status,
+  });
   return {
     abstain: {
       status: input.status,
       reason,
-      stage: traceAbstainStage({
-        status: input.status,
-        reason,
-        synthesisCalls: input.synthesisCalls,
-        planningStatus: input.planning.status,
-      }),
+      stage,
+      ...(input.status === "abstained"
+        ? {
+            recovery: buildAbstentionRecovery({
+              reason,
+              stage,
+              toolCallsCount: input.planning.toolCalls.length,
+              observedCitationsCount: input.observedCitationsCount ?? 0,
+            }),
+          }
+        : {}),
     },
   };
 }

@@ -447,11 +447,20 @@ describe("runAnswerSession synthesis gate", () => {
     expect(session.abstentionReason).toBe("no-citations");
     expect(session.answer).toBeUndefined();
     expect(session.citations).toEqual([]);
-    expect(session.trace.abstain).toEqual({
-      status: "abstained",
-      reason: "no-citations",
-      stage: "citation-gate",
-    });
+    expect(session.trace.abstain).toEqual(
+      expect.objectContaining({
+        status: "abstained",
+        reason: "no-citations",
+        stage: "citation-gate",
+        recovery: expect.objectContaining({
+          summary: expect.stringContaining("Tool evidence existed"),
+          actionHints: expect.arrayContaining(["inspect-answer-run"]),
+          nextSteps: expect.arrayContaining([
+            "Do not fabricate or force an unsupported answer.",
+          ]),
+        }),
+      }),
+    );
   });
 
   test("abstains when synthesis cites unobserved sources", async () => {

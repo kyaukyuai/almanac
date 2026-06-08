@@ -63,6 +63,36 @@ describe("studio server", () => {
     expect(html).not.toContain("SQLite <Demo>");
   });
 
+  test("renders answer recovery details", () => {
+    const html = renderStudioHtml({
+      ...fixtureSnapshot(),
+      almanacs: [
+        {
+          ...fixtureCard(),
+          firstAnswerRecovery: {
+            summary: "No cited evidence was available.",
+            nextSteps: ["Do not fabricate or force an unsupported answer."],
+            nextActions: [
+              {
+                label: "Inspect saved answer",
+                command:
+                  "almanac runs sqlite-demo answer-2026-01-01T00-00-00-000Z-00000001 --root /tmp/almanac-root",
+                reason: "inspect the saved answer trace",
+                providerRequired: false,
+                mutates: false,
+              },
+            ],
+          },
+        },
+      ],
+    });
+
+    expect(html).toContain("Answer Recovery");
+    expect(html).toContain("No cited evidence was available.");
+    expect(html).toContain("Do not fabricate or force an unsupported answer.");
+    expect(html).toContain("Inspect saved answer");
+  });
+
   test("renders run controls only for runnable guided operations", () => {
     const html = renderStudioHtml({
       ...fixtureSnapshot(),
@@ -337,6 +367,7 @@ function fixtureCard(): StudioAlmanacCard {
         nextAction: null,
       },
     },
+    firstAnswerRecovery: null,
     suggestedQuestions: [
       {
         intent: "lookup",

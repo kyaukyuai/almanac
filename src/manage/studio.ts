@@ -79,6 +79,12 @@ export interface StudioFirstUseSummary {
   sourceChecklist: StudioSourceChecklistSummary;
 }
 
+export interface StudioFirstAnswerRecoverySummary {
+  summary: string;
+  nextSteps: string[];
+  nextActions: StudioCommand[];
+}
+
 export interface StudioAlmanacCard {
   almanacId: string;
   displayName: string;
@@ -108,6 +114,7 @@ export interface StudioAlmanacCard {
   latestHistory: StudioHistorySummary;
   activation: StudioActivationSummary;
   firstUse: StudioFirstUseSummary;
+  firstAnswerRecovery: StudioFirstAnswerRecoverySummary | null;
   suggestedQuestions: StudioSuggestedQuestion[];
   issues: string[];
   recommendedOperation: StudioGuidedOperation | null;
@@ -337,6 +344,9 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
           .join("\n");
   const activation = renderActivation(card.activation);
   const firstUse = renderFirstUse(card.firstUse);
+  const firstAnswerRecovery = renderFirstAnswerRecovery(
+    card.firstAnswerRecovery,
+  );
   return `<article class="card" data-health="${escapeHtml(card.health)}">
   <div class="card-header">
     <div>
@@ -364,6 +374,10 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
   <section>
     <h3>First Use</h3>
     ${firstUse}
+  </section>
+  <section>
+    <h3>Answer Recovery</h3>
+    ${firstAnswerRecovery}
   </section>
   <section>
     <h3>Next Action</h3>
@@ -422,6 +436,33 @@ function renderActivation(activation: StudioActivationSummary): string {
   <ol class="milestones">${milestones}</ol>
   <ul>${detailList}</ul>
   ${next}
+</div>`;
+}
+
+function renderFirstAnswerRecovery(
+  recovery: StudioFirstAnswerRecoverySummary | null,
+): string {
+  if (recovery === null) {
+    return `<p class="muted">No answer recovery needed</p>`;
+  }
+  const steps =
+    recovery.nextSteps.length === 0
+      ? `<li class="muted">No recovery steps</li>`
+      : recovery.nextSteps
+          .slice(0, 4)
+          .map((step) => `<li>${escapeHtml(step)}</li>`)
+          .join("");
+  const commands =
+    recovery.nextActions.length === 0
+      ? ""
+      : recovery.nextActions
+          .slice(0, 2)
+          .map((command) => `<div class="secondary-action">${renderCommand(command)}</div>`)
+          .join("");
+  return `<div class="activation">
+  <p>${escapeHtml(recovery.summary)}</p>
+  <ul>${steps}</ul>
+  ${commands}
 </div>`;
 }
 
