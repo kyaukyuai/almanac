@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.16.0 shipped; v0.17 RC** · last updated 2026-06-08.
+Status: **v0.17.0 shipped** · last updated 2026-06-10.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1244,9 +1244,9 @@ dry-run, Enterprise AI fresh compile benchmark at 374 facts and 15/15 passed
 fixtures, valid real-provider Enterprise AI abstention with quality pass, and
 saved-run replay pass.
 
-### v0.17.0 RC — Guided First Useful Almanac
+### v0.17.0 — Guided First Useful Almanac
 
-v0.17 is validating the Guided First Useful Almanac release:
+v0.17.0 shipped the Guided First Useful Almanac release:
 
 - First-use reports derive empty-root, planning, source-checklist, compiled,
   answer-ready, first-answer, replayable, and maintainable states from
@@ -1269,7 +1269,7 @@ See [`docs/v0.17-plan.md`](./v0.17-plan.md) for scope and non-goals. See
 [`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md) for the provider-free and
 Enterprise AI release-candidate smoke sequence.
 
-### v0.17+ (long-tail)
+### v0.18+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter

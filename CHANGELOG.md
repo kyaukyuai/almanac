@@ -11,6 +11,49 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.17.0] — 2026-06-10
+
+### Added
+
+- **Guided first-use reports.** `start`, `status`, `profile`, operations, and
+  Studio now derive first-use state from existing local artifacts, including
+  empty-root, planning, source-checklist, validated, first-answer, replayable,
+  and maintainable states.
+- **Natural-language first almanac guidance.** `almanac start "<goal>"` now
+  produces a planning-only setup handoff with domain, slug, scope, reviewed
+  references, source checklist, suggested questions, provider boundary, and
+  explicit apply command.
+- **Source checklist handoff.** First-use guidance now groups official docs,
+  implementation repositories, secondary references, community references,
+  internal docs, and rejected references in user-facing terms.
+- **Abstention recovery guidance.** Saved abstentions now carry recovery
+  metadata, no-fabrication guidance, replay commands, answer-check promotion
+  commands, and suggested next questions.
+- **v0.17 RC smoke runbook.** `docs/v0.17-rc-smoke.md` covers provider-free
+  first-use validation, sqlite-demo first-answer promotion, Studio
+  first-use/recovery visibility, and credentialed Enterprise AI compile,
+  benchmark, real-provider ask, and saved-run replay.
+
+### Changed
+
+- **From guided operations to first useful almanac.** The documented happy path
+  now helps users move from an empty root and a natural-language goal to a
+  cited or intentionally abstained first answer without learning the internal
+  source/facts/fixtures/artifact model first.
+- **Studio first-use visibility.** Studio now surfaces first-use, source
+  checklist, suggested questions, guided operations, and answer recovery while
+  preserving localhost-only, read-oriented page load behavior and explicit CLI
+  handoff for provider-backed or almanac-writing work.
+
+### Fixed
+
+- **Correct abstention UX.** Valid abstentions are now treated as actionable
+  first-class outcomes with inspect, replay, promote, and retry guidance
+  instead of dead-end failures.
+- **First-answer promotion path.** Saved cited answers or expected abstentions
+  can be replayed and promoted into answer checks using the existing
+  ask-fixture, ask-suite, and refresh evidence contracts.
+
 ## [0.16.0] — 2026-06-07
 
 ### Added
@@ -1103,7 +1146,8 @@ the new invariants for that source mix.
 - GitHub Actions CI (typecheck + bun test on ubuntu-latest).
 - MIT license.
 
-[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.16.0...HEAD
+[Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.17.0...HEAD
+[0.17.0]: https://github.com/kyaukyuai/almanac/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/kyaukyuai/almanac/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...v0.15.0
 [0.14.0]: https://github.com/kyaukyuai/almanac/compare/v0.13.0...v0.14.0

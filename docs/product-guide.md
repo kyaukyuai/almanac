@@ -154,7 +154,7 @@ questions, and `/api/status/:almanacId` in
 guided operation listing, the provider-free operation runner, Studio POST
 actions, inline action results, evidence save, and provider handoff in
 [`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
-The v0.17 RC smoke validates first-use state, source checklist guidance,
+The v0.17 RC smoke validated first-use state, source checklist guidance,
 first-answer promotion, abstention recovery, and Studio recovery visibility in
 [`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md).
 
