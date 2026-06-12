@@ -248,7 +248,8 @@ serving binary stays generic.
 
 ## Status
 
-`v0.17.0` is shipped. The 12-stage compile pipeline runs end-to-end against
+`v0.17.0` is shipped. `v0.18` is in RC validation for Provider-Backed Studio.
+The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -283,11 +284,20 @@ Current shipped lines include:
 - `v0.17`: first-use reports, natural-language setup/source checklist
   guidance, first-answer promotion, abstention recovery, and Studio first-use
   visibility
+- `v0.18`: provider readiness reporting, Studio reference/goal intake,
+  confirmation-gated compile and first answer from Studio, and the
+  end-to-end first-use loop without leaving the browser
 
 `v0.17.0` turns guided operations toward the first useful personal almanac:
 empty-root start, natural-language setup planning, source checklist handoff,
 first answer promotion, and abstention recovery are surfaced through CLI status
 and Studio before users need to learn the artifact model.
+
+`v0.18` makes Studio provider-backed behind an explicit credential and
+confirmation boundary: presence-only provider readiness everywhere, reference
+and goal staging in the browser, compile and first answer through the same
+code paths and artifacts as the CLI, and CLI handoff preserved exactly when
+no provider is detected.
 
 See [CHANGELOG.md](./CHANGELOG.md) for the concise release history.
 
@@ -438,6 +448,10 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
 - [v0.18 plan](./docs/v0.18-plan.md): Provider-Backed Studio, provider
   readiness reporting, confirmation-gated compile and first answer, and Studio
   reference intake
+- [v0.18 RC smoke](./docs/v0.18-rc-smoke.md): release-candidate validation for
+  provider readiness reporting, Studio reference/goal intake,
+  confirmation-gated mock compile and first answer, the end-to-end first-use
+  loop, no-key handoff parity, and Enterprise AI provider smoke
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
