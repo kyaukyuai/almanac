@@ -285,7 +285,9 @@ import {
   type StudioAlmanacCard,
   type StudioCommand,
   type StudioHistorySummary,
+  type StudioSetupIntake,
   type StudioSnapshot,
+  type StudioSourceChecklistSummary,
 } from "./manage/studio.ts";
 import {
   formatAnswerReadinessDoctor,
@@ -310,6 +312,10 @@ import {
   operationGateBlockReason,
   type OperationRunRequest,
 } from "./manage/operation-gate.ts";
+import {
+  addSetupReference,
+  readSetupReferences,
+} from "./manage/setup-references.ts";
 import {
   RefreshStatusError,
   formatRefreshDueHuman,
@@ -3815,7 +3821,9 @@ function buildStartSourceChecklist(
     acceptedCount: sources.length,
     rejectedCount: 0,
     items,
-    evidence: [`${sources.length} reviewed reference(s) provided with --source`],
+    evidence: [
+      `${sources.length} reviewed reference(s) provided with --source or Studio intake`,
+    ],
     gaps,
     nextAction:
       status === "ready"
@@ -5464,7 +5472,11 @@ async function buildStartReport(
   const items = await readLifecycleInventory(opts.root);
   const provider = startProviderStatus();
   const goal = normalizeStartGoal(goalParts);
-  const sources = normalizeStartSources(opts.source);
+  const staged = await readSetupReferences(opts.root);
+  const sources = uniqueStrings([
+    ...normalizeStartSources(opts.source),
+    ...staged.references.map((reference) => reference.url),
+  ]);
   if (goal !== null) {
     const almanacs = await Promise.all(
       items.map((item) => startAlmanacSummary(item, opts.root)),
@@ -7249,6 +7261,15 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
           { root: opts.root },
           { source: "studio", confirmed: request.confirmed },
         ),
+      addSetupReference: async (url) => {
+        const result = await addSetupReference({
+          root: opts.root,
+          url,
+          via: "studio",
+        });
+        const intake = await buildStudioSetupIntake(opts.root);
+        return { ...result, setupIntake: intake };
+      },
     });
     const started = {
       schemaVersion: "0.1.0" as const,
@@ -7313,6 +7334,7 @@ async function buildStudioSnapshot(root: string): Promise<StudioSnapshot> {
     root,
     generatedAt: new Date().toISOString(),
     providerReadiness: deriveProviderReadiness(),
+    setupIntake: await buildStudioSetupIntake(root),
     counts: {
       total: almanacs.length,
       ok,
@@ -7320,6 +7342,34 @@ async function buildStudioSnapshot(root: string): Promise<StudioSnapshot> {
       attention: almanacs.length - ok - broken,
     },
     almanacs,
+  };
+}
+
+async function buildStudioSetupIntake(root: string): Promise<StudioSetupIntake> {
+  const staged = await readSetupReferences(root);
+  const checklist = buildStartSourceChecklist(
+    staged.references.map((reference) => reference.url),
+    root,
+  );
+  return {
+    references: staged.references,
+    checklist: studioSourceChecklistSummary(checklist),
+  };
+}
+
+function studioSourceChecklistSummary(
+  checklist: SourceChecklistReport,
+): StudioSourceChecklistSummary {
+  return {
+    status: checklist.status,
+    summary: checklist.summary,
+    acceptedCount: checklist.acceptedCount,
+    rejectedCount: checklist.rejectedCount,
+    gaps: checklist.gaps,
+    nextAction:
+      checklist.nextAction === null
+        ? null
+        : studioCommandFromActivationAction(checklist.nextAction),
   };
 }
 

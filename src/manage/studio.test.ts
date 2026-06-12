@@ -81,6 +81,91 @@ describe("studio server", () => {
     expect(lockedHtml).toContain('data-capability-status="locked"');
   });
 
+  test("renders setup intake with staged references and escapes them", () => {
+    const html = renderStudioHtml({
+      ...fixtureSnapshot(),
+      setupIntake: {
+        references: [
+          {
+            url: "https://docs.example.com/<guide>",
+            addedAt: "2026-06-12T00:00:00.000Z",
+            via: "studio",
+          },
+        ],
+        checklist: {
+          status: "ready",
+          summary: "1 reviewed reference(s) ready for compile handoff",
+          acceptedCount: 1,
+          rejectedCount: 0,
+          gaps: [],
+          nextAction: null,
+        },
+      },
+    });
+
+    expect(html).toContain("Plan a new almanac");
+    expect(html).toContain("data-setup-reference-form");
+    expect(html).toContain("https://docs.example.com/&lt;guide&gt;");
+    expect(html).not.toContain("https://docs.example.com/<guide>");
+    expect(html).toContain("ready for compile handoff");
+    expect(html).toContain("/api/setup/references");
+
+    const emptyHtml = renderStudioHtml(fixtureSnapshot());
+    expect(emptyHtml).toContain("No references staged yet");
+  });
+
+  test("setup reference POST validates the body and forwards to the handler", async () => {
+    const submitted: string[] = [];
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async () => null,
+      addSetupReference: async (url) => {
+        submitted.push(url);
+        return { status: "accepted", reference: { url } };
+      },
+    });
+
+    const accepted = await fetch(`${server.url}/api/setup/references`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url: "https://docs.example.com" }),
+    }).then(async (response) => ({
+      status: response.status,
+      body: (await response.json()) as { status: string },
+    }));
+    expect(accepted.status).toBe(200);
+    expect(accepted.body.status).toBe("accepted");
+    expect(submitted).toEqual(["https://docs.example.com"]);
+
+    for (const body of [undefined, "not-json", JSON.stringify({ url: 7 }), "{}"]) {
+      const invalid = await fetch(`${server.url}/api/setup/references`, {
+        method: "POST",
+        ...(body === undefined ? {} : { body }),
+      });
+      expect(invalid.status).toBe(400);
+      expect(((await invalid.json()) as { error: string }).error).toBe(
+        "invalid-reference-request",
+      );
+    }
+    expect(submitted).toHaveLength(1);
+  });
+
+  test("setup reference POST without a handler reports unavailable", async () => {
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async () => null,
+    });
+    const response = await fetch(`${server.url}/api/setup/references`, {
+      method: "POST",
+      body: JSON.stringify({ url: "https://docs.example.com" }),
+    });
+    expect(response.status).toBe(501);
+  });
+
   test("renders answer recovery details", () => {
     const html = renderStudioHtml({
       ...fixtureSnapshot(),
@@ -334,6 +419,17 @@ function fixtureSnapshot(): StudioSnapshot {
     root: "/tmp/almanac-root",
     generatedAt: "2026-01-01T00:00:00.000Z",
     providerReadiness: deriveProviderReadiness({}),
+    setupIntake: {
+      references: [],
+      checklist: {
+        status: "missing",
+        summary: "no reviewed references yet",
+        acceptedCount: 0,
+        rejectedCount: 0,
+        gaps: ["trusted references have not been reviewed yet"],
+        nextAction: null,
+      },
+    },
     counts: { total: 1, ok: 1, attention: 0, broken: 0 },
     almanacs: [fixtureCard()],
   };
