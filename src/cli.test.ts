@@ -5205,6 +5205,93 @@ describe("almanac CLI product onboarding", () => {
       expect(compile.body.status).toBe("blocked");
       expect(String(compile.body.summary)).toContain("set ANTHROPIC_API_KEY");
       expect(existsSync(join(root, "tiny-guided-domain"))).toBe(false);
+
+      const ask = await postJson(`${studio.url}/api/almanacs/sqlite-demo/ask`, {
+        question: "Are SQLite transactions atomic?",
+        confirm: true,
+      });
+      expect(ask.body.status).toBe("blocked");
+      expect(String(ask.body.summary)).toContain("set ANTHROPIC_API_KEY");
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 30_000 });
+
+  test("studio runs a confirmed mock-provider first answer and saves the artifact", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    const studio = await startStudioForTest(mockAskProviderEnv());
+
+    try {
+      const unconfirmed = await postJson(
+        `${studio.url}/api/almanacs/sqlite-demo/ask`,
+        { question: "Are SQLite transactions atomic?" },
+      );
+      expect(unconfirmed.body.status).toBe("blocked");
+      expect(String(unconfirmed.body.summary)).toContain("confirmation");
+
+      const asked = await postJson(
+        `${studio.url}/api/almanacs/sqlite-demo/ask`,
+        { question: "Are SQLite transactions atomic?", confirm: true },
+      );
+      expect(asked.status).toBe(200);
+      expect(asked.body).toMatchObject({
+        status: "ok",
+        almanacId: "sqlite-demo",
+        answer: "SQLite transactions are atomic.",
+      });
+      const citations = asked.body.citations as Array<{ url: string }>;
+      expect(citations).toHaveLength(1);
+      const artifactRelPath = asked.body.artifactRelPath as string;
+      expect(artifactRelPath).toMatch(/^\.runs\/answer-/);
+      expect(existsSync(join(root, "sqlite-demo", artifactRelPath))).toBe(true);
+      expect(asked.body.quality).toContain("1 citation");
+
+      const status = await fetch(
+        `${studio.url}/api/status/sqlite-demo`,
+      ).then(async (response) => (await response.json()) as {
+        firstUse: { stage: string };
+        operations: Array<{ command: string; studioRunnable: boolean }>;
+      });
+      expect(status.firstUse.stage).toBe("first-answer");
+      expect(status.operations).toContainEqual(
+        expect.objectContaining({
+          command: expect.stringContaining("almanac ask-replay sqlite-demo --from-runs"),
+          studioRunnable: true,
+        }),
+      );
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 30_000 });
+
+  test("studio renders abstention recovery for a saved mock abstention", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    const studio = await startStudioForTest(mockAbstainAskProviderEnv());
+
+    try {
+      const asked = await postJson(
+        `${studio.url}/api/almanacs/sqlite-demo/ask`,
+        {
+          question: "Should I rely on a fact that is not in the almanac?",
+          confirm: true,
+        },
+      );
+      expect(asked.body).toMatchObject({
+        status: "abstained",
+        almanacId: "sqlite-demo",
+        answer: null,
+      });
+      expect(String(asked.body.abstentionReason).length).toBeGreaterThan(0);
+      const guidance = asked.body.guidance as {
+        recovery: { nextSteps: string[] } | null;
+      };
+      expect(guidance.recovery).not.toBeNull();
+      expect(guidance.recovery?.nextSteps).toContain(
+        "Do not fabricate or force an unsupported answer.",
+      );
+      expect(asked.body.artifactRelPath).toMatch(/^\.runs\/answer-/);
     } finally {
       studio.stop();
     }

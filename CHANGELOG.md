@@ -45,6 +45,15 @@ examples for each version. This file is the concise index.
   detected provider the compile action renders CLI handoff exactly as
   v0.17, and `almanac start` with no arguments now reads the staged goal.
   Fourth step of the v0.18 plan.
+- **Provider-backed first answer from Studio.** Suggested questions now carry
+  an Ask button when a provider is detected: `POST /api/almanacs/<id>/ask`
+  runs the same answer session entrypoint as `almanac ask --save` behind an
+  explicit confirmation and the single-flight lock, always saves the answer
+  artifact, and returns the cited answer with freshness or a valid
+  abstention with the v0.17 recovery guidance. The saved artifact feeds the
+  existing provider-free promotion operations (replay, answer checks,
+  readiness evidence). Without a detected provider, suggested questions stay
+  copyable CLI handoff. Fifth step of the v0.18 plan.
 
 ## [0.17.0] — 2026-06-10
 
