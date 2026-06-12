@@ -26,6 +26,14 @@ examples for each version. This file is the concise index.
   provider is detected, and only one guided operation can run per almanac at
   a time. CLI invocations count as confirmed by construction; provider-free
   operation behavior is unchanged. Second step of the v0.18 plan.
+- **Studio reference intake.** Studio now stages trusted references for the
+  next almanac through a localhost POST endpoint and a "Plan a new almanac"
+  form. Accepted, rejected, and duplicate submissions report user-facing
+  reasons; staged references persist in `setup-references.json` at the root
+  and surface in the same source checklist that `almanac start "<goal>"`
+  planning reads, including the suggested apply command. Intake only stages
+  URLs/paths — nothing is fetched or snapshotted until a provider-backed
+  compile runs. Third step of the v0.18 plan.
 
 ## [0.17.0] — 2026-06-10
 

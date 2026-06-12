@@ -139,6 +139,22 @@ const STUDIO_ACTIVATION_MILESTONES = [
   { id: "maintainable", label: "Maintainable" },
 ] as const;
 
+export interface StudioSetupReference {
+  url: string;
+  addedAt: string;
+  via: string;
+}
+
+/**
+ * Staged references for the next almanac in this root, plus the source
+ * checklist they currently satisfy. Mirrors the state `almanac start`
+ * planning reads.
+ */
+export interface StudioSetupIntake {
+  references: StudioSetupReference[];
+  checklist: StudioSourceChecklistSummary;
+}
+
 export interface StudioSnapshot {
   schemaVersion: "0.1.0";
   root: string;
@@ -148,6 +164,7 @@ export interface StudioSnapshot {
    * Carries env var names only — never credential values.
    */
   providerReadiness: ProviderReadinessReport;
+  setupIntake: StudioSetupIntake;
   counts: {
     total: number;
     ok: number;
@@ -172,6 +189,8 @@ export interface StartStudioServerOptions {
     operationId: string,
     request: StudioOperationRequest,
   ) => Promise<unknown>;
+  /** Stage a reference for the next almanac. Staging only — never fetches. */
+  addSetupReference?: (url: string) => Promise<unknown>;
 }
 
 export interface StudioServerHandle {
@@ -270,6 +289,7 @@ export function renderStudioHtml(snapshot: StudioSnapshot): string {
       <div><span>${snapshot.counts.broken}</span><label>Broken</label></div>
     </section>
     ${renderProviderReadiness(snapshot.providerReadiness)}
+    ${renderSetupIntake(snapshot.setupIntake)}
     <section class="grid" aria-label="Installed almanacs">
       ${cards}
     </section>
@@ -285,6 +305,32 @@ async function handleStudioRequest(
 ): Promise<Response> {
   const url = new URL(request.url);
   if (request.method === "POST") {
+    if (url.pathname === "/api/setup/references") {
+      if (options.addSetupReference === undefined) {
+        return jsonResponse({ error: "setup-intake-unavailable" }, 501);
+      }
+      const referenceUrl = await readStudioReferenceSubmission(request);
+      if (referenceUrl === null) {
+        return jsonResponse(
+          {
+            error: "invalid-reference-request",
+            message: 'request body must be JSON like {"url": "https://..."}',
+          },
+          400,
+        );
+      }
+      try {
+        return jsonResponse(await options.addSetupReference(referenceUrl));
+      } catch (cause) {
+        return jsonResponse(
+          {
+            error: "reference-intake-failed",
+            message: (cause as Error).message,
+          },
+          500,
+        );
+      }
+    }
     const operationMatch = url.pathname.match(
       /^\/api\/operations\/([^/]+)\/([^/]+)\/run$/,
     );
@@ -347,6 +393,19 @@ async function readStudioOperationRequest(
     return { confirmed: body !== null && body.confirm === true };
   } catch {
     return { confirmed: false };
+  }
+}
+
+/** Parse a reference submission body; null when it is not a usable request. */
+async function readStudioReferenceSubmission(
+  request: Request,
+): Promise<string | null> {
+  try {
+    const body = (await request.json()) as { url?: unknown } | null;
+    if (body === null || typeof body.url !== "string") return null;
+    return body.url;
+  } catch {
+    return null;
   }
 }
 
@@ -451,6 +510,39 @@ function renderProviderReadiness(readiness: ProviderReadinessReport): string {
   </div>
   <ul class="capabilities">${chips}</ul>
   <p class="muted">Detected from the Studio server environment. Keys are never shown or stored; locked operations stay copyable CLI handoff.</p>
+</section>`;
+}
+
+function renderSetupIntake(intake: StudioSetupIntake): string {
+  const references =
+    intake.references.length === 0
+      ? `<li class="muted">No references staged yet</li>`
+      : intake.references
+          .map(
+            (reference) =>
+              `<li><code>${escapeHtml(reference.url)}</code> <span class="muted">(${escapeHtml(reference.via)})</span></li>`,
+          )
+          .join("");
+  const gaps =
+    intake.checklist.gaps.length === 0
+      ? ""
+      : `<ul>${intake.checklist.gaps
+          .slice(0, 3)
+          .map((gap) => `<li>${escapeHtml(gap)}</li>`)
+          .join("")}</ul>`;
+  return `<section class="providers setup-intake" aria-label="Reference intake">
+  <div class="providers-head">
+    <strong>Plan a new almanac</strong>
+    <span data-setup-checklist-status="${escapeAttribute(intake.checklist.status)}">${escapeHtml(intake.checklist.summary)}</span>
+  </div>
+  <form data-setup-reference-form>
+    <input type="url" name="url" placeholder="https://docs.example.com/... or /path/to/notes.md" aria-label="Reference URL or file path" required>
+    <button type="submit">Add reference</button>
+  </form>
+  <div class="setup-intake-result" data-setup-reference-result role="status" aria-live="polite"></div>
+  <ul class="setup-references">${references}</ul>
+  ${gaps}
+  <p class="muted">Staged references feed the source checklist that <code>almanac start</code> reads. Nothing is fetched until a provider-backed compile runs.</p>
 </section>`;
 }
 
@@ -687,6 +779,14 @@ main{padding:24px 32px}
 .capabilities li{border:1px solid #b8c1c4;border-radius:999px;padding:3px 9px;font-size:12px;color:#526064}
 .capabilities [data-capability-status="unlocked"]{border-color:#5e8f63;color:#27632d;background:#edf7ee}
 .capabilities [data-capability-status="mock-only"]{border-color:#9d8358;color:#704d18;background:#fff7e8}
+.setup-intake form{display:flex;gap:8px;margin-top:10px}
+.setup-intake input{flex:1;border:1px solid #9aa7aa;border-radius:6px;padding:5px 8px;font-size:13px;background:#ffffff;color:inherit}
+.setup-references{list-style:none;margin:10px 0 0;padding:0;font-size:13px}
+.setup-references li{margin-bottom:4px;word-break:break-all}
+.setup-intake-result:empty{display:none}
+.setup-intake-result{border:1px solid #d9dedf;border-radius:6px;margin-top:8px;padding:8px;font-size:12px}
+.setup-intake-result[data-status="rejected"],.setup-intake-result[data-status="error"]{border-color:#b66a67;background:#fff0ef}
+.setup-intake-result[data-status="duplicate"]{border-color:#9d8358;background:#fff7e8}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
 .card{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px;display:flex;flex-direction:column;gap:16px}
 .card-header{display:flex;justify-content:space-between;gap:12px}
@@ -732,6 +832,39 @@ button[disabled]{cursor:not-allowed;opacity:.65}
 
 function studioJs(): string {
   return `
+document.addEventListener("submit", async (event) => {
+  const form = event.target.closest("form[data-setup-reference-form]");
+  if (!form) return;
+  event.preventDefault();
+  const input = form.querySelector("input[name=url]");
+  const result = document.querySelector("[data-setup-reference-result]");
+  const url = input && input.value ? input.value.trim() : "";
+  if (!url) return;
+  try {
+    const response = await fetch("/api/setup/references", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ url })
+    });
+    const body = await response.json();
+    if (body.status === "accepted") {
+      window.location.reload();
+      return;
+    }
+    setSetupResult(result, body.status || "error",
+      body.reason || body.message || "Reference was not staged.");
+  } catch (error) {
+    setSetupResult(result, "error",
+      error && error.message ? error.message : "Reference intake failed.");
+  }
+});
+
+function setSetupResult(container, status, message) {
+  if (!container) return;
+  container.setAttribute("data-status", status);
+  container.textContent = status + ": " + message;
+}
+
 document.addEventListener("click", async (event) => {
   const runButton = event.target.closest("button[data-run-operation]");
   if (runButton) {

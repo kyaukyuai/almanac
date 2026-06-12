@@ -1038,6 +1038,67 @@ describe("almanac CLI legacy artifact counts", () => {
     });
   });
 
+  test("start planning includes Studio-staged references in the source checklist", async () => {
+    await writeFile(
+      join(root, "setup-references.json"),
+      JSON.stringify({
+        schemaVersion: "0.1.0",
+        references: [
+          {
+            url: "https://docs.example.com/staged-guide",
+            addedAt: "2026-06-12T00:00:00.000Z",
+            via: "studio",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const result = runCli(
+      [
+        "start",
+        "Build an almanac for production AI governance checks",
+        "--source",
+        "https://github.com/example/governance-repo",
+        "--json",
+        "--root",
+        root,
+      ],
+      { ANTHROPIC_API_KEY: "dummy", BRAVE_SEARCH_API_KEY: undefined },
+    );
+
+    expect(result.status).toBe(0);
+    expect(result.stderr).toBe("");
+    const parsed = JSON.parse(result.stdout) as {
+      goalDraft: {
+        reviewedReferences: string[];
+        sourceChecklist: {
+          status: string;
+          acceptedCount: number;
+          items: Array<{ id: string; acceptedCount: number }>;
+        };
+        applyCommand: string;
+      };
+    };
+    expect(parsed.goalDraft.reviewedReferences).toEqual([
+      "https://github.com/example/governance-repo",
+      "https://docs.example.com/staged-guide",
+    ]);
+    expect(parsed.goalDraft.sourceChecklist).toMatchObject({
+      status: "ready",
+      acceptedCount: 2,
+    });
+    expect(parsed.goalDraft.sourceChecklist.items).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ id: "official-docs", acceptedCount: 1 }),
+        expect.objectContaining({ id: "repository", acceptedCount: 1 }),
+      ]),
+    );
+    expect(parsed.goalDraft.applyCommand).toContain(
+      "--source https://github.com/example/governance-repo https://docs.example.com/staged-guide",
+    );
+  });
+
   test("start with a natural-language goal is readable in human output", () => {
     const result = runCli(
       [
