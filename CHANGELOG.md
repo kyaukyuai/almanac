@@ -11,6 +11,15 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+### Added
+
+- **Provider readiness reporting.** `doctor`, `status`, and the Studio
+  inventory now share a derived provider readiness report: which provider
+  credentials are detected in the process environment (env var names only,
+  never values) and which operations they unlock — compile, answer, judge,
+  web discovery, and vector retrieval. Readiness is derived per request and
+  never persisted. First step of the v0.18 Provider-Backed Studio plan.
+
 ## [0.17.0] — 2026-06-10
 
 ### Added
