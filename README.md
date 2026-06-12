@@ -435,6 +435,9 @@ lives in [src/core/runtime.ts](./src/core/runtime.ts), the MCP adapter in
   empty-root first-use guidance, source checklist handoff, first-answer
   promotion, abstention recovery, Studio first-use/recovery visibility, and
   Enterprise AI provider smoke
+- [v0.18 plan](./docs/v0.18-plan.md): Provider-Backed Studio, provider
+  readiness reporting, confirmation-gated compile and first answer, and Studio
+  reference intake
 - [Refresh scheduler](./docs/refresh-scheduler.md): cron, CI, launchd, locks,
   exit codes, and retention
 - [Changelog](./CHANGELOG.md): version history
