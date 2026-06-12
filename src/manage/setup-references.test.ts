@@ -6,6 +6,7 @@ import { join } from "node:path";
 import {
   addSetupReference,
   readSetupReferences,
+  setSetupGoal,
   setupReferenceRejectionReason,
   setupReferencesPath,
 } from "./setup-references.ts";
@@ -96,6 +97,7 @@ describe("setup references", () => {
   test("missing root and malformed files read as empty state", async () => {
     expect(await readSetupReferences(join(root, "missing"))).toEqual({
       schemaVersion: "0.1.0",
+      goal: null,
       references: [],
     });
     await writeFile(setupReferencesPath(root), "{not json", "utf8");
@@ -108,6 +110,36 @@ describe("setup references", () => {
     expect((await readSetupReferences(root)).references).toEqual([
       { url: "https://ok.example.com", addedAt: "x", via: "studio" },
     ]);
+  });
+
+  test("goal staging validates, normalizes, and persists alongside references", async () => {
+    expect(await setSetupGoal({ root, goal: "   " })).toEqual({
+      status: "rejected",
+      reason: "goal is empty",
+    });
+    expect(await setSetupGoal({ root, goal: "x".repeat(301) })).toEqual({
+      status: "rejected",
+      reason: expect.stringContaining("longer than 300"),
+    });
+
+    await addSetupReference({ root, url: "https://docs.example.com", via: "studio" });
+    const saved = await setSetupGoal({
+      root,
+      goal: "  Build an almanac\n  for AI governance  ",
+    });
+    expect(saved).toEqual({
+      status: "saved",
+      goal: "Build an almanac for AI governance",
+    });
+
+    const file = await readSetupReferences(root);
+    expect(file.goal).toBe("Build an almanac for AI governance");
+    expect(file.references).toHaveLength(1);
+
+    await addSetupReference({ root, url: "https://github.com/x/y", via: "studio" });
+    expect((await readSetupReferences(root)).goal).toBe(
+      "Build an almanac for AI governance",
+    );
   });
 
   test("adding into a missing root creates it", async () => {

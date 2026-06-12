@@ -85,6 +85,8 @@ describe("studio server", () => {
     const html = renderStudioHtml({
       ...fixtureSnapshot(),
       setupIntake: {
+        goal: "Build an almanac for example docs",
+        slug: "example-docs",
         references: [
           {
             url: "https://docs.example.com/<guide>",
@@ -99,6 +101,14 @@ describe("studio server", () => {
           rejectedCount: 0,
           gaps: [],
           nextAction: null,
+        },
+        compile: {
+          state: "runnable",
+          label: "Compile new almanac",
+          reason:
+            "runs the provider-backed compile pipeline over the staged references after explicit confirmation",
+          command:
+            "almanac start 'Build an almanac for example docs' --source https://docs.example.com/guide --apply --root /tmp/almanac-root",
         },
       },
     });
@@ -159,11 +169,102 @@ describe("studio server", () => {
       loadSnapshot: async () => fixtureSnapshot(),
       loadStatus: async () => null,
     });
-    const response = await fetch(`${server.url}/api/setup/references`, {
-      method: "POST",
-      body: JSON.stringify({ url: "https://docs.example.com" }),
+    for (const [path, init] of [
+      ["/api/setup/references", { method: "POST", body: '{"url":"https://x.example"}' }],
+      ["/api/setup/goal", { method: "POST", body: '{"goal":"Build"}' }],
+      ["/api/setup/compile", { method: "POST", body: '{"confirm":true}' }],
+      ["/api/setup/compile/status", { method: "GET" }],
+    ] as const) {
+      const response = await fetch(`${server.url}${path}`, init);
+      expect(response.status).toBe(501);
+    }
+  });
+
+  test("setup goal, compile, and progress endpoints forward to handlers", async () => {
+    const goals: string[] = [];
+    const compiles: boolean[] = [];
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async () => null,
+      setSetupGoal: async (goal) => {
+        goals.push(goal);
+        return { status: "saved", goal };
+      },
+      runSetupCompile: async (request) => {
+        compiles.push(request.confirmed);
+        return request.confirmed
+          ? { status: "ok", almanacId: "example-docs" }
+          : { status: "blocked", summary: "needs confirmation" };
+      },
+      loadSetupCompileStatus: async () => ({
+        exists: true,
+        almanacId: "example-docs",
+        counts: { completed: 5, total: 13 },
+        currentStage: "05-fact-extraction",
+      }),
     });
-    expect(response.status).toBe(501);
+
+    const goal = await fetch(`${server.url}/api/setup/goal`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ goal: "Build an almanac for example docs" }),
+    });
+    expect(goal.status).toBe(200);
+    expect(((await goal.json()) as { status: string }).status).toBe("saved");
+    expect(goals).toEqual(["Build an almanac for example docs"]);
+
+    const invalidGoal = await fetch(`${server.url}/api/setup/goal`, {
+      method: "POST",
+      body: JSON.stringify({ goal: 7 }),
+    });
+    expect(invalidGoal.status).toBe(400);
+
+    const unconfirmed = await fetch(`${server.url}/api/setup/compile`, {
+      method: "POST",
+    });
+    expect(((await unconfirmed.json()) as { status: string }).status).toBe(
+      "blocked",
+    );
+    const confirmed = await fetch(`${server.url}/api/setup/compile`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true }),
+    });
+    expect(((await confirmed.json()) as { status: string }).status).toBe("ok");
+    expect(compiles).toEqual([false, true]);
+
+    const progress = await fetch(`${server.url}/api/setup/compile/status`);
+    expect(progress.status).toBe(200);
+    expect(
+      ((await progress.json()) as { currentStage: string }).currentStage,
+    ).toBe("05-fact-extraction");
+  });
+
+  test("renders the compile action with a run button only when runnable", () => {
+    const runnableHtml = renderStudioHtml({
+      ...fixtureSnapshot(),
+      setupIntake: {
+        goal: "Build an almanac for example docs",
+        slug: "example-docs",
+        references: [],
+        checklist: fixtureSnapshot().setupIntake.checklist,
+        compile: {
+          state: "runnable",
+          label: "Compile new almanac",
+          reason: "runs the provider-backed compile pipeline",
+          command: "almanac start 'Build' --apply --root /tmp/almanac-root",
+        },
+      },
+    });
+    expect(runnableHtml).toContain("data-setup-compile");
+    expect(runnableHtml).toContain("/api/setup/compile");
+    expect(runnableHtml).toContain("data-setup-goal-form");
+
+    const handoffHtml = renderStudioHtml(fixtureSnapshot());
+    expect(handoffHtml).not.toContain("data-setup-compile ");
+    expect(handoffHtml).toContain("set the almanac goal before compiling");
   });
 
   test("renders answer recovery details", () => {
@@ -420,6 +521,8 @@ function fixtureSnapshot(): StudioSnapshot {
     generatedAt: "2026-01-01T00:00:00.000Z",
     providerReadiness: deriveProviderReadiness({}),
     setupIntake: {
+      goal: null,
+      slug: null,
       references: [],
       checklist: {
         status: "missing",
@@ -428,6 +531,12 @@ function fixtureSnapshot(): StudioSnapshot {
         rejectedCount: 0,
         gaps: ["trusted references have not been reviewed yet"],
         nextAction: null,
+      },
+      compile: {
+        state: "blocked",
+        label: "Compile new almanac",
+        reason: "set the almanac goal before compiling",
+        command: 'almanac start "<goal>" --root /tmp/almanac-root',
       },
     },
     counts: { total: 1, ok: 1, attention: 0, broken: 0 },

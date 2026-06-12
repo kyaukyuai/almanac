@@ -34,6 +34,17 @@ examples for each version. This file is the concise index.
   planning reads, including the suggested apply command. Intake only stages
   URLs/paths — nothing is fetched or snapshotted until a provider-backed
   compile runs. Third step of the v0.18 plan.
+- **Provider-backed compile from Studio.** Studio can now stage a
+  natural-language goal alongside references and run the compile pipeline
+  behind an explicit confirmation: `POST /api/setup/compile` composes the
+  same library entrypoints as `almanac new` (create) and
+  `almanac update --from-stage --no-bump` (resume) in-process, saves the
+  same artifacts, and never exits the server. Stage progress is pollable at
+  `GET /api/setup/compile/status`, a failed stage returns the existing
+  resume guidance, and resuming requires a fresh confirmation. Without a
+  detected provider the compile action renders CLI handoff exactly as
+  v0.17, and `almanac start` with no arguments now reads the staged goal.
+  Fourth step of the v0.18 plan.
 
 ## [0.17.0] — 2026-06-10
 
