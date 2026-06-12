@@ -11,6 +11,8 @@ examples for each version. This file is the concise index.
 
 ## [Unreleased]
 
+## [0.18.0] — 2026-06-12
+
 ### Added
 
 - **Provider readiness reporting.** `doctor`, `status`, and the Studio
@@ -61,6 +63,24 @@ examples for each version. This file is the concise index.
   `ask-fixtures add-from-run` promotion became a studio-runnable bounded
   operation, and almanac cards now lead with First Use and Answer Recovery
   before lower-level activation detail. Sixth step of the v0.18 plan.
+- **v0.18 RC smoke runbook.** `docs/v0.18-rc-smoke.md` covers provider
+  readiness reporting, Studio reference/goal intake, confirmation-gated mock
+  compile and first answer, the end-to-end first-use loop, no-key handoff
+  parity, and an Enterprise AI provider section that builds and answers
+  through Studio.
+
+### Changed
+
+- **From CLI handoff to confirmed Studio execution.** Provider-backed compile
+  and first answer are now runnable from Studio when the server environment
+  carries credentials, behind an explicit confirmation per call and a
+  single-flight lock per almanac. The CLI remains canonical: Studio calls the
+  same library entrypoints and saves the same artifacts, and every step
+  renders the v0.17 CLI handoff when no provider is detected.
+- **Studio operation POST contract.** Operation POSTs now parse a JSON body;
+  confirmation-required operations are rejected unless the request carries
+  `{"confirm": true}`. The browser UI sends it after the confirmation dialog;
+  scripted callers must include it explicitly.
 
 ## [0.17.0] — 2026-06-10
 
@@ -1198,6 +1218,7 @@ the new invariants for that source mix.
 - MIT license.
 
 [Unreleased]: https://github.com/kyaukyuai/almanac/compare/v0.17.0...HEAD
+[0.18.0]: https://github.com/kyaukyuai/almanac/compare/v0.17.0...v0.18.0
 [0.17.0]: https://github.com/kyaukyuai/almanac/compare/v0.16.0...v0.17.0
 [0.16.0]: https://github.com/kyaukyuai/almanac/compare/v0.15.0...v0.16.0
 [0.15.0]: https://github.com/kyaukyuai/almanac/compare/v0.14.0...v0.15.0
