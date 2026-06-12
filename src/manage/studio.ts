@@ -212,6 +212,15 @@ export interface StartStudioServerOptions {
   runSetupCompile?: (request: StudioOperationRequest) => Promise<unknown>;
   /** Read derived per-stage compile progress for the staged setup. */
   loadSetupCompileStatus?: () => Promise<unknown>;
+  /**
+   * Run a provider-backed first answer for an almanac and save the answer
+   * artifact. The handler must enforce confirmation, provider readiness,
+   * and single-flight; Studio only transports the request.
+   */
+  runFirstAnswer?: (
+    almanacId: string,
+    request: { question: string; confirmed: boolean },
+  ) => Promise<unknown>;
 }
 
 export interface StudioServerHandle {
@@ -280,12 +289,15 @@ export function startStudioServer(
 }
 
 export function renderStudioHtml(snapshot: StudioSnapshot): string {
+  const askRunnable = snapshot.providerReadiness.llm.presence !== "absent";
   const cards =
     snapshot.almanacs.length === 0
       ? `<section class="empty"><h2>No almanacs found</h2><pre>${escapeHtml(
           `almanac demo --root ${snapshot.root}`,
         )}</pre></section>`
-      : snapshot.almanacs.map(renderAlmanacCard).join("\n");
+      : snapshot.almanacs
+          .map((card) => renderAlmanacCard(card, askRunnable))
+          .join("\n");
   return `<!doctype html>
 <html lang="en">
 <head>
@@ -392,6 +404,32 @@ async function handleStudioRequest(
         );
       }
     }
+    const askMatch = url.pathname.match(/^\/api\/almanacs\/([^/]+)\/ask$/);
+    if (askMatch !== null) {
+      if (options.runFirstAnswer === undefined) {
+        return jsonResponse({ error: "ask-unavailable" }, 501);
+      }
+      const almanacId = decodeURIComponent(askMatch[1] ?? "");
+      const askRequest = await readStudioAskRequest(request);
+      if (askRequest === null) {
+        return jsonResponse(
+          {
+            error: "invalid-ask-request",
+            message:
+              'request body must be JSON like {"question": "...", "confirm": true}',
+          },
+          400,
+        );
+      }
+      try {
+        return jsonResponse(await options.runFirstAnswer(almanacId, askRequest));
+      } catch (cause) {
+        return jsonResponse(
+          { error: "ask-failed", message: (cause as Error).message },
+          500,
+        );
+      }
+    }
     const operationMatch = url.pathname.match(
       /^\/api\/operations\/([^/]+)\/([^/]+)\/run$/,
     );
@@ -463,6 +501,22 @@ async function readStudioOperationRequest(
   }
 }
 
+/** Parse an ask submission body; null when it is not a usable request. */
+async function readStudioAskRequest(
+  request: Request,
+): Promise<{ question: string; confirmed: boolean } | null> {
+  try {
+    const body = (await request.json()) as {
+      question?: unknown;
+      confirm?: unknown;
+    } | null;
+    if (body === null || typeof body.question !== "string") return null;
+    return { question: body.question, confirmed: body.confirm === true };
+  } catch {
+    return null;
+  }
+}
+
 /** Parse a string field from a JSON body; null when it is not usable. */
 async function readStudioStringField(
   request: Request,
@@ -478,7 +532,10 @@ async function readStudioStringField(
   }
 }
 
-function renderAlmanacCard(card: StudioAlmanacCard): string {
+function renderAlmanacCard(
+  card: StudioAlmanacCard,
+  askRunnable = false,
+): string {
   const issueList =
     card.issues.length === 0
       ? `<li class="muted">No issues</li>`
@@ -503,7 +560,9 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
       ? `<p class="muted">No suggested questions available</p>`
       : card.suggestedQuestions
           .slice(0, 3)
-          .map(renderSuggestedQuestion)
+          .map((question) =>
+            renderSuggestedQuestion(card.almanacId, question, askRunnable),
+          )
           .join("\n");
   const activation = renderActivation(card.activation);
   const firstUse = renderFirstUse(card.firstUse);
@@ -767,17 +826,27 @@ function renderGuidedOperation(
 </div>`;
 }
 
-function renderSuggestedQuestion(question: StudioSuggestedQuestion): string {
+function renderSuggestedQuestion(
+  almanacId: string,
+  question: StudioSuggestedQuestion,
+  askRunnable: boolean,
+): string {
+  const askButton = askRunnable
+    ? `<button type="button" data-ask-question="${escapeAttribute(question.question)}" data-almanac-id="${escapeAttribute(almanacId)}">Ask</button>`
+    : "";
   return `<div class="question">
   <div class="command-meta">
     <strong>${escapeHtml(question.intent)}</strong>
     <span>provider key</span>
+    <span>${askRunnable ? "studio runnable" : "CLI handoff"}</span>
   </div>
   <p>${escapeHtml(question.question)}</p>
   <pre><code>${escapeHtml(question.saveCommand)}</code></pre>
   <div class="command-actions">
+    ${askButton}
     <button type="button" data-copy="${escapeAttribute(question.saveCommand)}">Copy</button>
   </div>
+  <div class="operation-result" data-ask-result role="status" aria-live="polite"></div>
 </div>`;
 }
 
@@ -1020,6 +1089,11 @@ document.addEventListener("click", async (event) => {
     await runSetupCompile(compileButton);
     return;
   }
+  const askButton = event.target.closest("button[data-ask-question]");
+  if (askButton) {
+    await askQuestion(askButton);
+    return;
+  }
   const runButton = event.target.closest("button[data-run-operation]");
   if (runButton) {
     await runOperation(runButton);
@@ -1036,6 +1110,81 @@ document.addEventListener("click", async (event) => {
     button.textContent = "Select";
   }
 });
+
+async function askQuestion(button) {
+  const question = button.getAttribute("data-ask-question") || "";
+  const almanacId = button.getAttribute("data-almanac-id") || "";
+  if (!question || !almanacId) return;
+  const confirmed = window.confirm(
+    "Ask \\"" + question + "\\"?\\n\\nThis calls your configured AI provider " +
+    "(it may incur cost) and saves the answer artifact for replay and checks."
+  );
+  if (!confirmed) return;
+  const panel = button.closest(".question");
+  const result = panel ? panel.querySelector("[data-ask-result]") : null;
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "Asking";
+  try {
+    const response = await fetch(
+      "/api/almanacs/" + encodeURIComponent(almanacId) + "/ask",
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ question, confirm: true })
+      }
+    );
+    const body = await response.json();
+    renderAskResult(result, body);
+  } catch (error) {
+    renderAskResult(result, {
+      status: "failed",
+      summary: error && error.message ? error.message : "Ask request failed."
+    });
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
+function renderAskResult(container, body) {
+  if (!container) return;
+  const status = body.status || "unknown";
+  container.setAttribute("data-status",
+    status === "ok" ? "ok" : status === "abstained" ? "attention" : "failed");
+  const parts = ['<strong>Status: ' + escapeHtml(status) + '</strong>'];
+  if (body.answer) {
+    parts.push('<p>' + escapeHtml(body.answer) + '</p>');
+  }
+  if (body.abstentionReason) {
+    parts.push('<p>Abstained: ' + escapeHtml(body.abstentionReason) + '</p>');
+  }
+  if (body.summary && !body.answer && !body.abstentionReason) {
+    parts.push('<p>' + escapeHtml(body.summary) + '</p>');
+  }
+  if (Array.isArray(body.citations) && body.citations.length > 0) {
+    parts.push('<ul>' + body.citations.map((citation) =>
+      '<li>' + escapeHtml(citation.sourceId + ': ' + citation.url) + '</li>'
+    ).join("") + '</ul>');
+  }
+  if (body.freshness) {
+    parts.push('<p class="muted">Freshness: ' +
+      escapeHtml(body.freshness.class + '/' + body.freshness.staleness) + '</p>');
+  }
+  if (body.guidance && body.guidance.recovery) {
+    parts.push('<p>' + escapeHtml(body.guidance.recovery.summary) + '</p>');
+    const steps = body.guidance.recovery.nextSteps || [];
+    if (steps.length > 0) {
+      parts.push('<ul>' + steps.map((step) =>
+        '<li>' + escapeHtml(step) + '</li>').join("") + '</ul>');
+    }
+  }
+  if (body.artifactRelPath) {
+    parts.push('<p class="muted">Saved: ' + escapeHtml(body.artifactRelPath) +
+      ' — refresh the page to see promotion operations.</p>');
+  }
+  container.innerHTML = parts.join("");
+}
 
 async function runOperation(button) {
   const operationId = button.getAttribute("data-run-operation");

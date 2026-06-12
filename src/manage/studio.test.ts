@@ -242,6 +242,80 @@ describe("studio server", () => {
     ).toBe("05-fact-extraction");
   });
 
+  test("ask POST validates the body and forwards question and confirmation", async () => {
+    const asks: Array<{ almanacId: string; question: string; confirmed: boolean }> = [];
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async () => null,
+      runFirstAnswer: async (almanacId, request) => {
+        asks.push({ almanacId, ...request });
+        return { status: "ok", almanacId, question: request.question };
+      },
+    });
+
+    const ok = await fetch(`${server.url}/api/almanacs/sqlite-demo/ask`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        question: "Are SQLite transactions atomic?",
+        confirm: true,
+      }),
+    });
+    expect(ok.status).toBe(200);
+    expect(asks).toEqual([
+      {
+        almanacId: "sqlite-demo",
+        question: "Are SQLite transactions atomic?",
+        confirmed: true,
+      },
+    ]);
+
+    const unconfirmed = await fetch(`${server.url}/api/almanacs/sqlite-demo/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question: "Q?" }),
+    });
+    expect(unconfirmed.status).toBe(200);
+    expect(asks[1]?.confirmed).toBe(false);
+
+    for (const body of [undefined, "not-json", JSON.stringify({ question: 7 })]) {
+      const invalid = await fetch(`${server.url}/api/almanacs/sqlite-demo/ask`, {
+        method: "POST",
+        ...(body === undefined ? {} : { body }),
+      });
+      expect(invalid.status).toBe(400);
+    }
+
+    server.stop();
+    server = startStudioServer({
+      host: "127.0.0.1",
+      port: 0,
+      loadSnapshot: async () => fixtureSnapshot(),
+      loadStatus: async () => null,
+    });
+    const unavailable = await fetch(`${server.url}/api/almanacs/sqlite-demo/ask`, {
+      method: "POST",
+      body: JSON.stringify({ question: "Q?", confirm: true }),
+    });
+    expect(unavailable.status).toBe(501);
+  });
+
+  test("renders ask buttons on suggested questions only with a provider", () => {
+    const withProvider = renderStudioHtml({
+      ...fixtureSnapshot(),
+      providerReadiness: deriveProviderReadiness({ ANTHROPIC_API_KEY: "sk-test" }),
+    });
+    expect(withProvider).toContain(
+      'data-ask-question="Are SQLite transactions atomic?"',
+    );
+    expect(withProvider).toContain('data-almanac-id="sqlite-demo"');
+    expect(withProvider).toContain("/api/almanacs/");
+
+    const withoutProvider = renderStudioHtml(fixtureSnapshot());
+    expect(withoutProvider).not.toContain('data-ask-question="');
+  });
+
   test("renders the compile action with a run button only when runnable", () => {
     const runnableHtml = renderStudioHtml({
       ...fixtureSnapshot(),

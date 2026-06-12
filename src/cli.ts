@@ -7283,6 +7283,11 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
           confirmed: request.confirmed,
         }),
       loadSetupCompileStatus: () => loadStudioSetupCompileStatus(opts.root),
+      runFirstAnswer: (almanacId, request) =>
+        runStudioFirstAnswer(opts.root, almanacId, request.question, {
+          source: "studio",
+          confirmed: request.confirmed,
+        }),
     });
     const started = {
       schemaVersion: "0.1.0" as const,
@@ -7691,6 +7696,192 @@ async function runGuidedPipelineCompile(
             recovery?.inspectCommand ?? `almanac inspect ${args.almanacId}${rootSuffix}`,
           ],
   };
+}
+
+interface StudioFirstAnswerResult {
+  schemaVersion: "0.1.0";
+  status: string;
+  almanacId: string;
+  question: string;
+  answer: string | null;
+  abstentionReason: string | null;
+  citations: Array<{ sourceId: string; url: string }>;
+  freshness: { class: string; staleness: string } | null;
+  durationMs: number | null;
+  quality: string | null;
+  artifactRelPath: string | null;
+  answerId: string | null;
+  guidance: {
+    summary: string;
+    recovery: {
+      summary: string;
+      nextSteps: string[];
+      nextActions: StudioCommand[];
+    } | null;
+  } | null;
+  summary: string;
+}
+
+function blockedStudioFirstAnswer(
+  almanacId: string,
+  question: string,
+  reason: string,
+): StudioFirstAnswerResult {
+  return {
+    schemaVersion: "0.1.0",
+    status: "blocked",
+    almanacId,
+    question,
+    answer: null,
+    abstentionReason: null,
+    citations: [],
+    freshness: null,
+    durationMs: null,
+    quality: null,
+    artifactRelPath: null,
+    answerId: null,
+    guidance: null,
+    summary: reason,
+  };
+}
+
+async function runStudioFirstAnswer(
+  root: string,
+  almanacId: string,
+  question: string,
+  request: OperationRunRequest,
+): Promise<StudioFirstAnswerResult> {
+  const normalizedQuestion = question.trim();
+  const gateReason = operationGateBlockReason({
+    providerRequired: true,
+    confirmationRequired: true,
+    request,
+    readiness: deriveProviderReadiness(),
+  });
+  if (gateReason !== null) {
+    return blockedStudioFirstAnswer(almanacId, normalizedQuestion, gateReason);
+  }
+  if (normalizedQuestion.length === 0) {
+    return blockedStudioFirstAnswer(
+      almanacId,
+      normalizedQuestion,
+      "question must not be empty",
+    );
+  }
+  const almanacDir = almanacDirPath(root, almanacId);
+  if (!existsSync(almanacDir)) {
+    return blockedStudioFirstAnswer(
+      almanacId,
+      normalizedQuestion,
+      `almanac not found: ${almanacId}`,
+    );
+  }
+  const lockKey = guidedOperationLocks.key(root, almanacId);
+  if (!guidedOperationLocks.tryAcquire(lockKey)) {
+    return blockedStudioFirstAnswer(
+      almanacId,
+      normalizedQuestion,
+      OPERATION_ALREADY_RUNNING_REASON,
+    );
+  }
+  try {
+    const provider = resolveProvider();
+    if (provider === null) {
+      return blockedStudioFirstAnswer(
+        almanacId,
+        normalizedQuestion,
+        "no LLM provider is available in the Studio environment",
+      );
+    }
+    const startedAt = new Date().toISOString();
+    const session = await runAnswerSession({
+      almanacDir,
+      question: normalizedQuestion,
+      provider,
+    });
+    const finishedAt = new Date().toISOString();
+    const exitCode = exitCodeForAnswerSession(session);
+    const saved = await saveAnswerArtifact({
+      almanacDir,
+      question: session.question,
+      status: session.status,
+      exitCode,
+      startedAt,
+      finishedAt,
+      model: session.model,
+      promptVersions: session.promptVersions,
+      ...(session.answer === undefined ? {} : { answer: session.answer }),
+      ...(session.abstentionReason === undefined
+        ? {}
+        : { abstentionReason: session.abstentionReason }),
+      toolCalls: answerToolCallSummaries(session),
+      citations: session.citations,
+      ...(session.freshness === undefined
+        ? {}
+        : { freshness: session.freshness }),
+      usage: session.usage,
+      trace: session.trace,
+      ...(session.error === undefined ? {} : { error: session.error }),
+    });
+    const guidance = buildFirstAnswerGuidance({
+      almanacId,
+      domainSpec: null,
+      rootSuffix: rootArg(root),
+      latestAnswer: firstAnswerHistoryFromArtifact(saved.artifact),
+    });
+    return {
+      schemaVersion: "0.1.0",
+      status: session.status,
+      almanacId,
+      question: session.question,
+      answer: session.answer ?? null,
+      abstentionReason: session.abstentionReason ?? null,
+      citations: session.citations.map((citation) => ({
+        sourceId: citation.sourceId,
+        url: citation.url,
+      })),
+      freshness:
+        session.freshness === undefined
+          ? null
+          : {
+              class: session.freshness.class,
+              staleness: session.freshness.staleness,
+            },
+      durationMs: session.durationMs,
+      quality: formatSavedAnswerQuality(saved.artifact),
+      artifactRelPath: saved.relPath,
+      answerId: saved.artifact.answerId,
+      guidance: {
+        summary: guidance.summary,
+        recovery:
+          guidance.recovery === null
+            ? null
+            : {
+                summary: guidance.recovery.summary,
+                nextSteps: guidance.recovery.nextSteps,
+                nextActions: guidance.recovery.nextActions.map(
+                  studioCommandFromActivationAction,
+                ),
+              },
+      },
+      summary:
+        session.status === "ok"
+          ? `cited answer saved (${session.citations.length} citation(s))`
+          : session.status === "abstained"
+            ? `valid abstention saved: ${session.abstentionReason ?? "no grounded evidence"}`
+            : `answer session ended with status ${session.status}`,
+    };
+  } catch (e) {
+    if (
+      e instanceof AnswerSessionSetupError ||
+      e instanceof AnswerArtifactSetupError
+    ) {
+      return blockedStudioFirstAnswer(almanacId, normalizedQuestion, e.message);
+    }
+    throw e;
+  } finally {
+    guidedOperationLocks.release(lockKey);
+  }
 }
 
 async function loadStudioSetupCompileStatus(root: string): Promise<unknown> {
