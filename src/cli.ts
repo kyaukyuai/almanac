@@ -305,6 +305,12 @@ import {
   type ProviderReadinessReport,
 } from "./manage/provider-readiness.ts";
 import {
+  AlmanacOperationLocks,
+  OPERATION_ALREADY_RUNNING_REASON,
+  operationGateBlockReason,
+  type OperationRunRequest,
+} from "./manage/operation-gate.ts";
+import {
   RefreshStatusError,
   formatRefreshDueHuman,
   getRefreshDueStatus,
@@ -6792,10 +6798,13 @@ async function cmdOperationsRun(
   process.exitCode = result.exitCode;
 }
 
+const guidedOperationLocks = new AlmanacOperationLocks();
+
 async function runGuidedOperationById(
   id: string,
   operationId: string,
   opts: OperationsOptions,
+  request: OperationRunRequest = { source: "cli", confirmed: true },
 ): Promise<GuidedOperationRunResult> {
   const report = await readGuidedOperationListReport(id, opts);
   const operation =
@@ -6810,7 +6819,7 @@ async function runGuidedOperationById(
           operation: null,
           reason: `unknown operation id: ${operationId}`,
         })
-      : await runGuidedProviderFreeOperation(report, operation)
+      : await runGuidedProviderFreeOperation(report, operation, request)
   );
 }
 
@@ -6822,7 +6831,24 @@ function operationsUsageError(message: string): never {
 async function runGuidedProviderFreeOperation(
   report: GuidedOperationListReport,
   operation: GuidedOperation,
+  request: OperationRunRequest,
 ): Promise<GuidedOperationRunResult> {
+  const gateReason = operationGateBlockReason({
+    providerRequired: operation.providerRequired,
+    confirmationRequired: operation.confirmation,
+    request,
+    readiness: deriveProviderReadiness(),
+  });
+  if (gateReason !== null) {
+    return blockedGuidedOperationRun({
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      reason: gateReason,
+    });
+  }
   if (operation.providerRequired) {
     return blockedGuidedOperationRun({
       almanacId: report.almanacId,
@@ -6856,6 +6882,17 @@ async function runGuidedProviderFreeOperation(
     });
   }
 
+  const lockKey = guidedOperationLocks.key(report.root, report.almanacId);
+  if (!guidedOperationLocks.tryAcquire(lockKey)) {
+    return blockedGuidedOperationRun({
+      almanacId: report.almanacId,
+      root: report.root,
+      almanacDir: report.almanacDir,
+      operationId: operation.id,
+      operation,
+      reason: OPERATION_ALREADY_RUNNING_REASON,
+    });
+  }
   const started = new Date();
   const startedAt = started.toISOString();
   try {
@@ -6915,6 +6952,8 @@ async function runGuidedProviderFreeOperation(
       reasons: [unknownErrorMessage(e)],
       nextOperation: report.recommendedOperation,
     };
+  } finally {
+    guidedOperationLocks.release(lockKey);
   }
 }
 
@@ -7203,8 +7242,13 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
       port,
       loadSnapshot: () => buildStudioSnapshot(opts.root),
       loadStatus: (almanacId) => buildStudioStatus(opts.root, almanacId),
-      runOperation: (almanacId, operationId) =>
-        runGuidedOperationById(almanacId, operationId, { root: opts.root }),
+      runOperation: (almanacId, operationId, request) =>
+        runGuidedOperationById(
+          almanacId,
+          operationId,
+          { root: opts.root },
+          { source: "studio", confirmed: request.confirmed },
+        ),
     });
     const started = {
       schemaVersion: "0.1.0" as const,

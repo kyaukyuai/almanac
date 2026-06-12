@@ -4833,6 +4833,51 @@ describe("almanac CLI product onboarding", () => {
     );
   }, { timeout: 20_000 });
 
+  test("operations run gates provider-backed operations on provider readiness", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+
+    const list = runCli(["operations", "sqlite-demo", "--json", "--root", root]);
+    expect(list.status).toBe(0);
+    const report = JSON.parse(list.stdout) as {
+      operations: Array<{
+        id: string;
+        command: string;
+        providerRequired: boolean;
+      }>;
+    };
+    const askOperation = report.operations.find((operation) =>
+      operation.command.startsWith("almanac ask sqlite-demo")
+    );
+    expect(askOperation).toEqual(
+      expect.objectContaining({ providerRequired: true }),
+    );
+
+    const noProvider = runCli(
+      ["operations", "run", "sqlite-demo", askOperation!.id, "--json", "--root", root],
+      { ANTHROPIC_API_KEY: undefined, ALMANAC_LLM: undefined },
+    );
+    expect(noProvider.status).toBe(2);
+    const noProviderResult = JSON.parse(noProvider.stdout) as {
+      status: string;
+      summary: string;
+    };
+    expect(noProviderResult.status).toBe("blocked");
+    expect(noProviderResult.summary).toContain("set ANTHROPIC_API_KEY");
+
+    const mockProvider = runCli(
+      ["operations", "run", "sqlite-demo", askOperation!.id, "--json", "--root", root],
+      { ANTHROPIC_API_KEY: undefined, ALMANAC_LLM: "mock" },
+    );
+    expect(mockProvider.status).toBe(2);
+    const mockResult = JSON.parse(mockProvider.stdout) as {
+      status: string;
+      summary: string;
+    };
+    expect(mockResult.status).toBe("blocked");
+    expect(mockResult.summary).toContain("uses CLI handoff");
+  }, { timeout: 20_000 });
+
   test("status and profile expose first-answer suggested questions", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);
