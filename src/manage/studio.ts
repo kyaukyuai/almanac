@@ -590,16 +590,16 @@ function renderAlmanacCard(
     <div><dt>Latest</dt><dd>${escapeHtml(card.latestHistory.latest)}</dd></div>
   </dl>
   <section>
-    <h3>Activation</h3>
-    ${activation}
-  </section>
-  <section>
     <h3>First Use</h3>
     ${firstUse}
   </section>
   <section>
     <h3>Answer Recovery</h3>
     ${firstAnswerRecovery}
+  </section>
+  <section>
+    <h3>Activation</h3>
+    ${activation}
   </section>
   <section>
     <h3>Next Action</h3>

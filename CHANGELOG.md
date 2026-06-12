@@ -54,6 +54,13 @@ examples for each version. This file is the concise index.
   existing provider-free promotion operations (replay, answer checks,
   readiness evidence). Without a detected provider, suggested questions stay
   copyable CLI handoff. Fifth step of the v0.18 plan.
+- **End-to-end first-use surface.** The full loop — stage references, compile,
+  first answer, replay, promotion into answer checks, answer-check suite, and
+  readiness evidence — is now reachable without leaving Studio, with a
+  confirmation before every provider call and every mutation. The
+  `ask-fixtures add-from-run` promotion became a studio-runnable bounded
+  operation, and almanac cards now lead with First Use and Answer Recovery
+  before lower-level activation detail. Sixth step of the v0.18 plan.
 
 ## [0.17.0] — 2026-06-10
 

@@ -5265,6 +5265,104 @@ describe("almanac CLI product onboarding", () => {
     }
   }, { timeout: 30_000 });
 
+  test("studio reaches a replayable first answer without leaving the browser", async () => {
+    const demo = runCli(["demo", "--root", root]);
+    expect(demo.status).toBe(0);
+    const studio = await startStudioForTest(mockAskProviderEnv());
+
+    const findOperation = async (commandPrefix: string) => {
+      const status = await fetch(
+        `${studio.url}/api/status/sqlite-demo`,
+      ).then(async (response) => (await response.json()) as {
+        firstUse: { stage: string };
+        operations: Array<{
+          id: string;
+          command: string;
+          studioRunnable: boolean;
+        }>;
+      });
+      return {
+        status,
+        operation: status.operations.find((operation) =>
+          operation.command.startsWith(commandPrefix)
+        ),
+      };
+    };
+    const runOperation = async (operationId: string) =>
+      (
+        await postJson(
+          `${studio.url}/api/operations/sqlite-demo/${operationId}/run`,
+          { confirm: true },
+        )
+      ).body as unknown as { status: string; artifactsWritten: string[] };
+
+    try {
+      const asked = await postJson(
+        `${studio.url}/api/almanacs/sqlite-demo/ask`,
+        { question: "Are SQLite transactions atomic?", confirm: true },
+      );
+      expect(asked.body.status).toBe("ok");
+
+      const replayLookup = await findOperation(
+        "almanac ask-replay sqlite-demo --from-runs",
+      );
+      expect(replayLookup.operation).toMatchObject({ studioRunnable: true });
+      const replay = await runOperation(replayLookup.operation!.id);
+      expect(replay.status).toBe("ok");
+
+      const promoteLookup = await findOperation(
+        "almanac ask-fixtures add-from-run sqlite-demo answer-",
+      );
+      expect(promoteLookup.operation).toMatchObject({ studioRunnable: true });
+      const promotion = await runOperation(promoteLookup.operation!.id);
+      expect(promotion.status).toBe("ok");
+      expect(promotion.artifactsWritten).toContain("tests/ask.jsonl");
+      expect(existsSync(join(root, "sqlite-demo", "tests", "ask.jsonl"))).toBe(
+        true,
+      );
+
+      const suiteLookup = await findOperation("almanac ask-suite sqlite-demo");
+      expect(suiteLookup.operation).toMatchObject({ studioRunnable: true });
+      const suite = await runOperation(suiteLookup.operation!.id);
+      expect(suite.status).toBe("ok");
+
+      const evidenceLookup = await findOperation(
+        "almanac refresh run sqlite-demo --from-stage 12-benchmark-run",
+      );
+      expect(evidenceLookup.operation).toMatchObject({ studioRunnable: true });
+      const evidence = await runOperation(evidenceLookup.operation!.id);
+      expect(["ok", "attention"]).toContain(evidence.status);
+      expect(evidence.artifactsWritten[0]).toMatch(/^\.runs\/refresh-/);
+
+      const finalState = await findOperation("almanac status");
+      expect(["replayable", "maintainable"]).toContain(
+        finalState.status.firstUse.stage,
+      );
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 60_000 });
+
+  test("studio renders the empty-root first-use surface without keys", async () => {
+    const studio = await startStudioForTest({
+      ANTHROPIC_API_KEY: undefined,
+      ALMANAC_LLM: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+    });
+    try {
+      const html = await fetch(studio.url).then((response) => response.text());
+      expect(html).toContain("No almanacs found");
+      expect(html).toContain("Plan a new almanac");
+      expect(html).toContain("Providers");
+      expect(html).toContain("compile and answer locked (set ANTHROPIC_API_KEY)");
+      expect(html).toContain("set the almanac goal before compiling");
+      expect(html).not.toContain('data-ask-question="');
+      expect(html).not.toContain("data-setup-compile data-compile-label");
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 30_000 });
+
   test("studio renders abstention recovery for a saved mock abstention", async () => {
     const demo = runCli(["demo", "--root", root]);
     expect(demo.status).toBe(0);

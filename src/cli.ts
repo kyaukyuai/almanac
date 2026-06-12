@@ -4657,6 +4657,11 @@ function guidedOperationStudioRunnable(args: {
   providerRequired: boolean;
 }): boolean {
   if (args.providerRequired) return false;
+  if (args.command.startsWith("almanac ask-fixtures add-from-run ")) {
+    // Bounded almanac-write promotion: appends one fixture derived from a
+    // saved answer artifact. Runs behind confirmation like other mutations.
+    return true;
+  }
   if (args.mutation === "external" || args.mutation === "almanac-write") {
     return false;
   }
@@ -4774,6 +4779,7 @@ type SupportedGuidedOperationKind =
   | "benchmark"
   | "ask-suite"
   | "ask-replay-runs"
+  | "ask-fixtures-add-from-run"
   | "refresh-ask-suite"
   | "maintain-dry-run";
 
@@ -4824,6 +4830,18 @@ function supportedGuidedOperation(
       words,
       label: commandOptionValue(words, "--label") ?? undefined,
     };
+  }
+
+  if (words[1] === "ask-fixtures" && words[2] === "add-from-run") {
+    if (words[3] !== almanacId) return "operation targets a different almanac";
+    const answerId = words[4];
+    if (answerId === undefined || !answerId.startsWith("answer-")) {
+      return "ask-fixtures add-from-run needs a saved answer id";
+    }
+    if (commandHasFlag(words, "--fixture") || commandHasFlag(words, "--fixture-id")) {
+      return "custom fixture paths/ids are outside this runner";
+    }
+    return { kind: "ask-fixtures-add-from-run", words, label: answerId };
   }
 
   if (words[1] === "refresh" && words[2] === "run") {
@@ -6994,6 +7012,9 @@ async function executeGuidedOperation(
   if (supported.kind === "ask-replay-runs") {
     return executeGuidedAskReplay(report, supported.label);
   }
+  if (supported.kind === "ask-fixtures-add-from-run") {
+    return executeGuidedAskFixturePromotion(report, supported.label ?? "");
+  }
   if (supported.kind === "refresh-ask-suite") {
     return executeGuidedRefreshAskSuite(report);
   }
@@ -7082,6 +7103,38 @@ async function executeGuidedAskReplay(
     reasons: exitCode === 0 ? [] : ["ask-replay failed or errored"],
     result: replay,
   };
+}
+
+async function executeGuidedAskFixturePromotion(
+  report: GuidedOperationListReport,
+  answerId: string,
+): Promise<GuidedOperationExecutionResult> {
+  try {
+    const promotion = await addAskFixtureFromRun({
+      almanacDir: report.almanacDir,
+      answerId,
+    });
+    return {
+      status: "ok",
+      exitCode: 0,
+      artifactsWritten: [promotion.relPath],
+      summary: `saved answer promoted into answer checks (${promotion.fixtureCount} fixture(s))`,
+      reasons: [],
+      result: promotion,
+    };
+  } catch (e) {
+    if (e instanceof AskFixtureAuthoringError) {
+      return {
+        status: "blocked",
+        exitCode: 2,
+        artifactsWritten: [],
+        summary: `promotion blocked: ${e.message}`,
+        reasons: [e.message],
+        result: null,
+      };
+    }
+    throw e;
+  }
 }
 
 async function executeGuidedRefreshAskSuite(
