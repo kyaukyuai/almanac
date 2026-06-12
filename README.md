@@ -248,8 +248,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.17.0` is shipped. `v0.18` is in RC validation for Provider-Backed Studio.
-The 12-stage compile pipeline runs end-to-end against
+`v0.18.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -288,12 +287,7 @@ Current shipped lines include:
   confirmation-gated compile and first answer from Studio, and the
   end-to-end first-use loop without leaving the browser
 
-`v0.17.0` turns guided operations toward the first useful personal almanac:
-empty-root start, natural-language setup planning, source checklist handoff,
-first answer promotion, and abstention recovery are surfaced through CLI status
-and Studio before users need to learn the artifact model.
-
-`v0.18` makes Studio provider-backed behind an explicit credential and
+`v0.18.0` makes Studio provider-backed behind an explicit credential and
 confirmation boundary: presence-only provider readiness everywhere, reference
 and goal staging in the browser, compile and first answer through the same
 code paths and artifacts as the CLI, and CLI handoff preserved exactly when

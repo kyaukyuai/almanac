@@ -156,7 +156,10 @@ actions, inline action results, evidence save, and provider handoff in
 [`docs/v0.16-rc-smoke.md`](./v0.16-rc-smoke.md).
 The v0.17 RC smoke validated first-use state, source checklist guidance,
 first-answer promotion, abstention recovery, and Studio recovery visibility in
-[`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md).
+[`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md). The v0.18 RC smoke validated
+provider readiness reporting, Studio reference/goal intake, confirmation-gated
+compile and first answer, and the end-to-end first-use loop in
+[`docs/v0.18-rc-smoke.md`](./v0.18-rc-smoke.md).
 
 ## Registration visibility
 

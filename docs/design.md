@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.17.0 shipped; v0.18 RC** · last updated 2026-06-12.
+Status: **v0.18.0 shipped** · last updated 2026-06-12.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1269,9 +1269,9 @@ See [`docs/v0.17-plan.md`](./v0.17-plan.md) for scope and non-goals. See
 [`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md) for the provider-free and
 Enterprise AI release-candidate smoke sequence.
 
-### v0.18.0 RC — Provider-Backed Studio
+### v0.18.0 — Provider-Backed Studio
 
-v0.18 is validating the Provider-Backed Studio release:
+v0.18.0 shipped the Provider-Backed Studio release:
 
 - A derived provider readiness report (env var names only, never values) is
   shared by `doctor`, `status`, and Studio, listing which operations each
