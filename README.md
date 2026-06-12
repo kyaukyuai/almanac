@@ -248,8 +248,7 @@ serving binary stays generic.
 
 ## Status
 
-`v0.16.0` is shipped. `v0.17` is in RC validation for Guided First Useful
-Almanac. The 12-stage compile pipeline runs end-to-end against
+`v0.17.0` is shipped. The 12-stage compile pipeline runs end-to-end against
 mocked and real Anthropic providers, and the runtime is wired into the MCP
 ecosystem for Claude Code, Claude Desktop, Cursor, and Codex registration.
 
@@ -285,12 +284,7 @@ Current shipped lines include:
   guidance, first-answer promotion, abstention recovery, and Studio first-use
   visibility
 
-`v0.16.0` turns guided activation into guided operations: users can list the
-safe local work available for an almanac, run provider-free bounded operations
-from the CLI or Studio, save answer-readiness evidence, and keep
-provider-backed work as explicit CLI handoff.
-
-`v0.17` turns guided operations toward the first useful personal almanac:
+`v0.17.0` turns guided operations toward the first useful personal almanac:
 empty-root start, natural-language setup planning, source checklist handoff,
 first answer promotion, and abstention recovery are surfaced through CLI status
 and Studio before users need to learn the artifact model.
@@ -305,7 +299,7 @@ end-to-end through the runtime. Latest real-Anthropic smokes at
 
 | domain | version | facts | tools (custom) | passed | citationRate | negatives passed |
 | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-| Enterprise AI | v0.16.0 RC | 374 | 6 (2) | 15/15 | 1.00 | 5/5 |
+| Enterprise AI | v0.17.0 RC | 173 | 6 (2) | 15/15 | 1.00 | 5/5 |
 | sqlite | v0.3.0 | 620 | 2 | 14/15 | 0.90 | 5/5 |
 | Rust | v0.3.10 | 1438 | 3 | 11/15 | 0.60 | 5/5 |
 
@@ -362,6 +356,14 @@ CLI operation runner, answer-readiness evidence save, Studio action API/UI,
 localhost and POST safety checks, maintenance dry-run, Enterprise AI fresh
 compile benchmark at 374 facts and 15/15 fixtures, valid real-provider
 Enterprise AI abstention with quality pass, and saved-run replay pass.
+
+The v0.17.0 RC smoke passed the Guided First Useful Almanac gate on `main`:
+static gates, source and linked CLI sanity, empty-root `start`,
+natural-language first almanac planning, source checklist handoff,
+sqlite-demo provider-free first-answer promotion, abstention recovery, Studio
+first-use/recovery visibility, Enterprise AI fresh compile benchmark at 173
+facts and 15/15 fixtures, valid real-provider Enterprise AI abstention with
+quality pass, and saved-run replay pass.
 
 ## Development
 
