@@ -233,15 +233,19 @@ describe("studio server", () => {
   });
 
   test("serves localhost POST action API through injected runner", async () => {
-    const calls: Array<{ almanacId: string; operationId: string }> = [];
+    const calls: Array<{
+      almanacId: string;
+      operationId: string;
+      confirmed: boolean;
+    }> = [];
     server = startStudioServer({
       host: "127.0.0.1",
       port: 0,
       loadSnapshot: async () => fixtureSnapshot(),
       loadStatus: async (almanacId) =>
         almanacId === "sqlite-demo" ? fixtureCard() : null,
-      runOperation: async (almanacId, operationId) => {
-        calls.push({ almanacId, operationId });
+      runOperation: async (almanacId, operationId, request) => {
+        calls.push({ almanacId, operationId, confirmed: request.confirmed });
         if (operationId === "op-fail") {
           throw new Error("operation exploded");
         }
@@ -262,7 +266,11 @@ describe("studio server", () => {
 
     const action = await fetch(
       `${server.url}/api/operations/sqlite-demo/op-refresh-abcdef1234/run`,
-      { method: "POST" },
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: true }),
+      },
     ).then(async (response) => ({
       status: response.status,
       body: (await response.json()) as {
@@ -283,8 +291,27 @@ describe("studio server", () => {
       }),
     );
     expect(calls).toEqual([
-      { almanacId: "sqlite-demo", operationId: "op-refresh-abcdef1234" },
+      {
+        almanacId: "sqlite-demo",
+        operationId: "op-refresh-abcdef1234",
+        confirmed: true,
+      },
     ]);
+
+    const unconfirmedBodies: Array<RequestInit | undefined> = [
+      undefined,
+      { body: JSON.stringify({ confirm: false }) },
+      { body: "not-json" },
+      { body: JSON.stringify({ confirm: "yes" }) },
+    ];
+    for (const init of unconfirmedBodies) {
+      calls.length = 0;
+      await fetch(
+        `${server.url}/api/operations/sqlite-demo/op-refresh-abcdef1234/run`,
+        { method: "POST", ...init },
+      );
+      expect(calls[0]?.confirmed).toBe(false);
+    }
 
     const failedAction = await fetch(
       `${server.url}/api/operations/sqlite-demo/op-fail/run`,

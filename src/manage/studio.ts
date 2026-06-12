@@ -157,6 +157,11 @@ export interface StudioSnapshot {
   almanacs: StudioAlmanacCard[];
 }
 
+export interface StudioOperationRequest {
+  /** True when the browser collected an explicit user confirmation. */
+  confirmed: boolean;
+}
+
 export interface StartStudioServerOptions {
   host: string;
   port: number;
@@ -165,6 +170,7 @@ export interface StartStudioServerOptions {
   runOperation?: (
     almanacId: string,
     operationId: string,
+    request: StudioOperationRequest,
   ) => Promise<unknown>;
 }
 
@@ -290,8 +296,11 @@ async function handleStudioRequest(
     }
     const almanacId = decodeURIComponent(operationMatch[1] ?? "");
     const operationId = decodeURIComponent(operationMatch[2] ?? "");
+    const operationRequest = await readStudioOperationRequest(request);
     try {
-      return jsonResponse(await options.runOperation(almanacId, operationId));
+      return jsonResponse(
+        await options.runOperation(almanacId, operationId, operationRequest),
+      );
     } catch (cause) {
       return jsonResponse(
         {
@@ -324,6 +333,21 @@ async function handleStudioRequest(
     return jsonResponse(status);
   }
   return jsonResponse({ error: "not-found" }, 404);
+}
+
+/**
+ * Parse the optional JSON body of an operation POST. A missing, empty, or
+ * malformed body counts as unconfirmed — confirmation must be explicit.
+ */
+async function readStudioOperationRequest(
+  request: Request,
+): Promise<StudioOperationRequest> {
+  try {
+    const body = (await request.json()) as { confirm?: unknown } | null;
+    return { confirmed: body !== null && body.confirm === true };
+  } catch {
+    return { confirmed: false };
+  }
 }
 
 function renderAlmanacCard(card: StudioAlmanacCard): string {
@@ -750,7 +774,11 @@ async function runOperation(button) {
     const response = await fetch(
       "/api/operations/" + encodeURIComponent(almanacId) + "/" +
         encodeURIComponent(operationId) + "/run",
-      { method: "POST" }
+      {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ confirm: needsConfirmation })
+      }
     );
     const body = await response.json();
     if (!response.ok && body.status === undefined) {

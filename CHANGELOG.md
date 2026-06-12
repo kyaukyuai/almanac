@@ -19,6 +19,13 @@ examples for each version. This file is the concise index.
   never values) and which operations they unlock — compile, answer, judge,
   web discovery, and vector retrieval. Readiness is derived per request and
   never persisted. First step of the v0.18 Provider-Backed Studio plan.
+- **Confirmation-gated operation runner.** The guided operation runner now
+  enforces an execution gate: Studio POST requests must carry an explicit
+  `{"confirm": true}` body for confirmation-required operations,
+  provider-backed operations are rejected with a readiness reason when no
+  provider is detected, and only one guided operation can run per almanac at
+  a time. CLI invocations count as confirmed by construction; provider-free
+  operation behavior is unchanged. Second step of the v0.18 plan.
 
 ## [0.17.0] — 2026-06-10
 
