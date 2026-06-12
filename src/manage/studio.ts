@@ -1,3 +1,8 @@
+import {
+  summarizeProviderReadiness,
+  type ProviderReadinessReport,
+} from "./provider-readiness.ts";
+
 export type StudioHealth =
   | "ok"
   | "attention"
@@ -138,6 +143,11 @@ export interface StudioSnapshot {
   schemaVersion: "0.1.0";
   root: string;
   generatedAt: string;
+  /**
+   * Derived per request from the Studio server's process environment.
+   * Carries env var names only — never credential values.
+   */
+  providerReadiness: ProviderReadinessReport;
   counts: {
     total: number;
     ok: number;
@@ -253,6 +263,7 @@ export function renderStudioHtml(snapshot: StudioSnapshot): string {
       <div><span>${snapshot.counts.attention}</span><label>Attention</label></div>
       <div><span>${snapshot.counts.broken}</span><label>Broken</label></div>
     </section>
+    ${renderProviderReadiness(snapshot.providerReadiness)}
     <section class="grid" aria-label="Installed almanacs">
       ${cards}
     </section>
@@ -400,6 +411,23 @@ function renderAlmanacCard(card: StudioAlmanacCard): string {
     ${commands}
   </section>
 </article>`;
+}
+
+function renderProviderReadiness(readiness: ProviderReadinessReport): string {
+  const chips = readiness.capabilities
+    .map(
+      (capability) =>
+        `<li data-capability-status="${escapeAttribute(capability.status)}" title="${escapeAttribute(capability.detail)}">${escapeHtml(capability.label)}: ${escapeHtml(capability.status)}</li>`,
+    )
+    .join("");
+  return `<section class="providers" aria-label="Provider readiness">
+  <div class="providers-head">
+    <strong>Providers</strong>
+    <span>${escapeHtml(summarizeProviderReadiness(readiness))}</span>
+  </div>
+  <ul class="capabilities">${chips}</ul>
+  <p class="muted">Detected from the Studio server environment. Keys are never shown or stored; locked operations stay copyable CLI handoff.</p>
+</section>`;
 }
 
 function renderActivation(activation: StudioActivationSummary): string {
@@ -627,6 +655,14 @@ main{padding:24px 32px}
 .summary div{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:14px}
 .summary span{display:block;font-size:26px;font-weight:700}
 .summary label{font-size:12px;color:#526064}
+.providers{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:14px;margin-bottom:20px}
+.providers-head{display:flex;gap:12px;align-items:baseline;flex-wrap:wrap}
+.providers-head span{font-size:12px;color:#526064}
+.providers .muted{font-size:12px;margin-top:8px}
+.capabilities{display:flex;gap:6px;flex-wrap:wrap;list-style:none;margin:10px 0 0;padding:0}
+.capabilities li{border:1px solid #b8c1c4;border-radius:999px;padding:3px 9px;font-size:12px;color:#526064}
+.capabilities [data-capability-status="unlocked"]{border-color:#5e8f63;color:#27632d;background:#edf7ee}
+.capabilities [data-capability-status="mock-only"]{border-color:#9d8358;color:#704d18;background:#fff7e8}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
 .card{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px;display:flex;flex-direction:column;gap:16px}
 .card-header{display:flex;justify-content:space-between;gap:12px}
@@ -666,7 +702,7 @@ button[disabled]{cursor:not-allowed;opacity:.65}
 .operation-result[data-status="failed"],.operation-result[data-status="blocked"]{border-color:#b66a67;background:#fff5f4}
 .empty{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px}
 @media (max-width:720px){header{align-items:flex-start;flex-direction:column;padding:22px 18px}.root{text-align:left}main{padding:18px}.grid{grid-template-columns:1fr}.meta{grid-template-columns:1fr}}
-@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty{background:#182023;border-color:#334044}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p,.activation p,.activation-head span{color:#a8b4b8}.command,.question,.activation{background:#151c1f;border-color:#334044}.command-meta strong,.activation-head strong{color:#edf1f2}.milestones li{border-color:#334044;color:#a8b4b8}.milestones [data-state="done"]{background:#152916;color:#8dd394;border-color:#47794d}.milestones [data-state="next"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}.operation-result{background:#182023;border-color:#334044}.operation-result[data-status="ok"]{background:#142417;border-color:#47794d}.operation-result[data-status="attention"]{background:#2b2416;border-color:#8b6b35}.operation-result[data-status="failed"],.operation-result[data-status="blocked"]{background:#2d1716;border-color:#8c4e4a}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
+@media (prefers-color-scheme:dark){:root{background:#111618;color:#edf1f2}header,.summary div,.card,.empty,.providers{background:#182023;border-color:#334044}.providers-head span{color:#a8b4b8}.capabilities li{border-color:#334044;color:#a8b4b8}.capabilities [data-capability-status="unlocked"]{background:#152916;color:#8dd394;border-color:#47794d}.capabilities [data-capability-status="mock-only"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}.root,.eyebrow,.summary label,h3,dt,.muted,.card-header p,.command-meta,.command p,.question p,.activation p,.activation-head span{color:#a8b4b8}.command,.question,.activation{background:#151c1f;border-color:#334044}.command-meta strong,.activation-head strong{color:#edf1f2}.milestones li{border-color:#334044;color:#a8b4b8}.milestones [data-state="done"]{background:#152916;color:#8dd394;border-color:#47794d}.milestones [data-state="next"]{background:#2c2415;color:#e4c07d;border-color:#8b6b35}pre{background:#0e1315}button{background:#1d272a;color:#edf1f2;border-color:#59686d}.operation-result{background:#182023;border-color:#334044}.operation-result[data-status="ok"]{background:#142417;border-color:#47794d}.operation-result[data-status="attention"]{background:#2b2416;border-color:#8b6b35}.operation-result[data-status="failed"],.operation-result[data-status="blocked"]{background:#2d1716;border-color:#8c4e4a}[data-health="ok"] .badge{background:#152916;color:#8dd394;border-color:#47794d}[data-health="broken"] .badge,[data-health="failed"] .badge{background:#321a19;color:#e19a96;border-color:#8c4e4a}}
 `;
 }
 

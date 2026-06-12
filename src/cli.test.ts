@@ -1386,6 +1386,55 @@ describe("almanac CLI legacy artifact counts", () => {
     );
   });
 
+  test("doctor reports provider readiness without leaking key values", async () => {
+    const secret = "sk-ant-doctor-secret-0123456789";
+    const lockedEnv = {
+      ANTHROPIC_API_KEY: undefined,
+      ALMANAC_LLM: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+      VOYAGE_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+      ALMANAC_EMBEDDINGS: undefined,
+    };
+
+    const locked = runCli(["doctor", "--json", "--root", root], lockedEnv);
+    expect(locked.status).toBe(0);
+    const lockedReadiness = (
+      JSON.parse(locked.stdout) as {
+        providerReadiness: {
+          llm: { presence: string; detectedEnv: string[] };
+          capabilities: Array<{
+            id: string;
+            status: string;
+            unlockEnv: string[];
+          }>;
+        };
+      }
+    ).providerReadiness;
+    expect(lockedReadiness.llm).toEqual({ presence: "absent", detectedEnv: [] });
+    expect(lockedReadiness.capabilities).toContainEqual(
+      expect.objectContaining({
+        id: "compile",
+        status: "locked",
+        unlockEnv: ["ANTHROPIC_API_KEY"],
+      }),
+    );
+    expect(lockedReadiness.capabilities).toContainEqual(
+      expect.objectContaining({ id: "answer", status: "locked" }),
+    );
+
+    const unlocked = runCli(["doctor", "--root", root], {
+      ...lockedEnv,
+      ANTHROPIC_API_KEY: secret,
+    });
+    expect(unlocked.status).toBe(0);
+    expect(unlocked.stdout).toContain("providers:");
+    expect(unlocked.stdout).toContain("llm              anthropic (ANTHROPIC_API_KEY)");
+    expect(unlocked.stdout).toContain("unlocked   compile");
+    expect(unlocked.stdout).toContain("unlocked   answer");
+    expect(unlocked.stdout).not.toContain(secret);
+  });
+
   test("doctor detects MCP registrations orphaned from the selected root", async () => {
     const almanacRoot = join(root, "almanacs");
     const home = join(root, "home");
@@ -1618,6 +1667,48 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(status.runs.latest).toBeNull();
     expect(status.runs.byKind.answer).toBeNull();
     expect(status.runs.readError).toBeNull();
+  });
+
+  test("status reports provider readiness without leaking key values", async () => {
+    await writeLegacyCountFixture({ completed: true });
+    const secret = "sk-ant-status-secret-0123456789";
+    const lockedEnv = {
+      ANTHROPIC_API_KEY: undefined,
+      ALMANAC_LLM: undefined,
+      BRAVE_SEARCH_API_KEY: undefined,
+      VOYAGE_API_KEY: undefined,
+      OPENAI_API_KEY: undefined,
+      ALMANAC_EMBEDDINGS: undefined,
+    };
+
+    const locked = runCli(
+      ["status", "legacy", "--json", "--root", root],
+      lockedEnv,
+    );
+    expect(locked.status).toBe(0);
+    const lockedReadiness = (
+      JSON.parse(locked.stdout) as {
+        providerReadiness: {
+          llm: { presence: string; detectedEnv: string[] };
+          capabilities: Array<{ id: string; status: string }>;
+        };
+      }
+    ).providerReadiness;
+    expect(lockedReadiness.llm).toEqual({ presence: "absent", detectedEnv: [] });
+    expect(lockedReadiness.capabilities).toContainEqual(
+      expect.objectContaining({ id: "compile", status: "locked" }),
+    );
+
+    const unlocked = runCli(["status", "legacy", "--root", root], {
+      ...lockedEnv,
+      ANTHROPIC_API_KEY: secret,
+    });
+    expect(unlocked.status).toBe(0);
+    expect(unlocked.stdout).toContain(
+      "providers     llm anthropic, web search unset,",
+    );
+    expect(unlocked.stdout).toContain("compile and answer unlocked");
+    expect(unlocked.stdout).not.toContain(secret);
   });
 
   test("status human output uses guided terminology", async () => {

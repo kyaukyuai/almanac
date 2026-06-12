@@ -299,6 +299,12 @@ import {
   getRetrievalReadiness,
 } from "./manage/retrieval-readiness.ts";
 import {
+  deriveProviderReadiness,
+  formatProviderReadinessLines,
+  summarizeProviderReadiness,
+  type ProviderReadinessReport,
+} from "./manage/provider-readiness.ts";
+import {
   RefreshStatusError,
   formatRefreshDueHuman,
   getRefreshDueStatus,
@@ -2233,6 +2239,7 @@ interface AlmanacStatusReport {
   manifest: AlmanacManifest | null;
   status: LifecycleOverallStatus;
   usability: LifecycleUsability;
+  providerReadiness: ProviderReadinessReport;
   sourceChecklist: SourceChecklistReport;
   activation: ActivationReport;
   firstUse: FirstUseReport;
@@ -2699,6 +2706,7 @@ async function readAlmanacStatusReport(
     manifest: item.manifest,
     status: item.lifecycle.status,
     usability: lifecycleUsability(item),
+    providerReadiness: deriveProviderReadiness(),
     sourceChecklist,
     activation,
     firstUse,
@@ -6604,6 +6612,9 @@ async function cmdStatus(id: string, opts: StatusOptions): Promise<void> {
     `  usability     ${report.usability.status} - ${formatGuidedIssue(report.usability.reason)}\n`,
   );
   process.stdout.write(
+    `  providers     ${summarizeProviderReadiness(report.providerReadiness)}\n`,
+  );
+  process.stdout.write(
     `  activation    ${formatActivationReport(report.activation)}\n`,
   );
   process.stdout.write(`  first use     ${report.firstUse.summary}\n`);
@@ -7257,6 +7268,7 @@ async function buildStudioSnapshot(root: string): Promise<StudioSnapshot> {
     schemaVersion: "0.1.0",
     root,
     generatedAt: new Date().toISOString(),
+    providerReadiness: deriveProviderReadiness(),
     counts: {
       total: almanacs.length,
       ok,
@@ -12293,8 +12305,9 @@ async function cmdDoctor(
 
   const bunVersion = (process.versions as { bun?: string }).bun;
   const rootSuffix = rootArg(opts.root);
-  const hasAnthropic = Boolean(process.env["ANTHROPIC_API_KEY"]);
-  const hasMockProvider = process.env["ALMANAC_LLM"] === "mock";
+  const providerReadiness = deriveProviderReadiness();
+  const hasAnthropic = providerReadiness.llm.presence === "anthropic";
+  const hasMockProvider = providerReadiness.llm.presence === "mock";
   add(
     bunVersion ? "ok" : "fail",
     "runtime",
@@ -12618,6 +12631,7 @@ async function cmdDoctor(
         {
           summary,
           checks,
+          providerReadiness,
           readiness,
           ...(rootHygiene === null ? {} : { rootHygiene }),
         },
@@ -12634,6 +12648,10 @@ async function cmdDoctor(
       process.stdout.write(
         `  ${check.level.padEnd(4)} ${check.name.padEnd(24)} ${check.message}\n`,
       );
+    }
+    process.stdout.write("\nproviders:\n");
+    for (const line of formatProviderReadinessLines(providerReadiness)) {
+      process.stdout.write(`${line}\n`);
     }
     process.stdout.write("\nreadiness:\n");
     for (const item of readiness) {

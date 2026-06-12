@@ -10,6 +10,7 @@ import {
   type StudioSnapshot,
   type StudioServerHandle,
 } from "./studio.ts";
+import { deriveProviderReadiness } from "./provider-readiness.ts";
 
 let server: StudioServerHandle | null = null;
 
@@ -61,6 +62,23 @@ describe("studio server", () => {
     expect(html).toContain("/tmp/&lt;root&gt;");
     expect(html).toContain("almanac status sqlite-demo --note &quot;&lt;x&gt;&quot;");
     expect(html).not.toContain("SQLite <Demo>");
+  });
+
+  test("renders provider readiness without leaking credential values", () => {
+    const secret = "sk-ant-studio-secret-0123456789";
+    const html = renderStudioHtml({
+      ...fixtureSnapshot(),
+      providerReadiness: deriveProviderReadiness({ ANTHROPIC_API_KEY: secret }),
+    });
+
+    expect(html).toContain("Provider readiness");
+    expect(html).toContain("compile and answer unlocked");
+    expect(html).toContain('data-capability-status="unlocked"');
+    expect(html).not.toContain(secret);
+
+    const lockedHtml = renderStudioHtml(fixtureSnapshot());
+    expect(lockedHtml).toContain("compile and answer locked");
+    expect(lockedHtml).toContain('data-capability-status="locked"');
   });
 
   test("renders answer recovery details", () => {
@@ -146,6 +164,10 @@ describe("studio server", () => {
       }),
     );
     expect(inventory.status).toBe(200);
+    expect(inventory.body.providerReadiness.llm).toEqual({
+      presence: "absent",
+      detectedEnv: [],
+    });
     expect(inventory.body.almanacs[0]?.almanacId).toBe("sqlite-demo");
     expect(inventory.body.almanacs[0]?.activation).toEqual(
       expect.objectContaining({
@@ -284,6 +306,7 @@ function fixtureSnapshot(): StudioSnapshot {
     schemaVersion: "0.1.0",
     root: "/tmp/almanac-root",
     generatedAt: "2026-01-01T00:00:00.000Z",
+    providerReadiness: deriveProviderReadiness({}),
     counts: { total: 1, ok: 1, attention: 0, broken: 0 },
     almanacs: [fixtureCard()],
   };
