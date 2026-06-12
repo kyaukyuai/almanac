@@ -99,6 +99,64 @@ function runCliExecutable(
   };
 }
 
+interface StudioTestServer {
+  proc: ReturnType<typeof Bun.spawn>;
+  url: string;
+  stop: () => void;
+}
+
+async function startStudioForTest(
+  envOverrides: Record<string, string | undefined>,
+): Promise<StudioTestServer> {
+  const cliPath = join(import.meta.dirname, "cli.ts");
+  const env: Record<string, string> = {};
+  for (const [key, value] of Object.entries({ ...process.env, ...envOverrides })) {
+    if (value !== undefined) env[key] = value;
+  }
+  const proc = Bun.spawn(
+    ["bun", cliPath, "studio", "--root", root, "--port", "0", "--json"],
+    {
+      cwd: join(import.meta.dirname, ".."),
+      env,
+      stdout: "pipe",
+      stderr: "pipe",
+    },
+  );
+  const reader = proc.stdout.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  const deadline = Date.now() + 15_000;
+  for (;;) {
+    const { value, done } = await reader.read();
+    if (value !== undefined) buffer += decoder.decode(value);
+    try {
+      const started = JSON.parse(buffer) as { url: string };
+      reader.releaseLock();
+      return { proc, url: started.url, stop: () => proc.kill() };
+    } catch {
+      if (done || Date.now() > deadline) {
+        proc.kill();
+        throw new Error(`studio server did not report a URL; output: ${buffer}`);
+      }
+    }
+  }
+}
+
+async function postJson(
+  url: string,
+  body: unknown,
+): Promise<{ status: number; body: Record<string, unknown> }> {
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(body),
+  });
+  return {
+    status: response.status,
+    body: (await response.json()) as Record<string, unknown>,
+  };
+}
+
 function mockAskProviderEnv(): Record<string, string | undefined> {
   return {
     ALMANAC_LLM: "mock",
@@ -1097,6 +1155,40 @@ describe("almanac CLI legacy artifact counts", () => {
     expect(parsed.goalDraft.applyCommand).toContain(
       "--source https://github.com/example/governance-repo https://docs.example.com/staged-guide",
     );
+  });
+
+  test("start without goal arguments uses the Studio-staged goal", async () => {
+    await writeFile(
+      join(root, "setup-references.json"),
+      JSON.stringify({
+        schemaVersion: "0.1.0",
+        goal: "Build an almanac for production AI governance checks",
+        references: [
+          {
+            url: "https://docs.example.com/staged-guide",
+            addedAt: "2026-06-12T00:00:00.000Z",
+            via: "studio",
+          },
+        ],
+      }),
+      "utf8",
+    );
+
+    const result = runCli(["start", "--json", "--root", root], {
+      ANTHROPIC_API_KEY: "dummy",
+      BRAVE_SEARCH_API_KEY: undefined,
+    });
+
+    expect(result.status).toBe(0);
+    const parsed = JSON.parse(result.stdout) as {
+      status: string;
+      goalDraft: { goal: string; sourceChecklist: { acceptedCount: number } };
+    };
+    expect(parsed.status).toBe("planning");
+    expect(parsed.goalDraft.goal).toBe(
+      "Build an almanac for production AI governance checks",
+    );
+    expect(parsed.goalDraft.sourceChecklist.acceptedCount).toBe(1);
   });
 
   test("start with a natural-language goal is readable in human output", () => {
@@ -4938,6 +5030,185 @@ describe("almanac CLI product onboarding", () => {
     expect(mockResult.status).toBe("blocked");
     expect(mockResult.summary).toContain("uses CLI handoff");
   }, { timeout: 20_000 });
+
+  test("studio runs a confirmed mock-provider compile from staged setup", async () => {
+    const sourcePath = join(root, "tiny-guided.md");
+    await writeFile(
+      sourcePath,
+      "# Tiny Guided Domain\n\nTiny Guided Domain supports guided activation workflows.\n",
+      "utf8",
+    );
+    const sourceUrl = pathToFileURL(sourcePath).href;
+    const studio = await startStudioForTest(guidedCreateMockEnv(sourceUrl));
+
+    try {
+      const goal = await postJson(`${studio.url}/api/setup/goal`, {
+        goal: "Build an almanac for Tiny Guided Domain",
+      });
+      expect(goal.body.status).toBe("saved");
+
+      const reference = await postJson(`${studio.url}/api/setup/references`, {
+        url: sourceUrl,
+      });
+      expect(reference.body.status).toBe("accepted");
+      expect(
+        (reference.body.setupIntake as { compile: { state: string } }).compile
+          .state,
+      ).toBe("runnable");
+
+      const unconfirmed = await postJson(`${studio.url}/api/setup/compile`, {});
+      expect(unconfirmed.body.status).toBe("blocked");
+      expect(String(unconfirmed.body.summary)).toContain("confirmation");
+
+      const compiled = await postJson(`${studio.url}/api/setup/compile`, {
+        confirm: true,
+      });
+      expect(compiled.status).toBe(200);
+      expect(compiled.body).toMatchObject({
+        status: "ok",
+        mode: "create",
+        almanacId: "tiny-guided-domain",
+        recovery: null,
+      });
+      expect(
+        existsSync(join(root, "tiny-guided-domain", "manifest.json")),
+      ).toBe(true);
+
+      const progress = await fetch(
+        `${studio.url}/api/setup/compile/status`,
+      ).then(async (response) => (await response.json()) as {
+        exists: boolean;
+        almanacId: string;
+        counts: { completed: number; failed: number; total: number };
+        failedStages: string[];
+      });
+      expect(progress.exists).toBe(true);
+      expect(progress.almanacId).toBe("tiny-guided-domain");
+      expect(progress.counts.failed).toBe(0);
+      expect(progress.failedStages).toEqual([]);
+      expect(progress.counts.completed).toBeGreaterThan(0);
+
+      const inventory = await fetch(`${studio.url}/api/inventory`).then(
+        async (response) => (await response.json()) as {
+          almanacs: Array<{ almanacId: string }>;
+          setupIntake: { compile: { state: string; reason: string } };
+        },
+      );
+      expect(inventory.almanacs.map((card) => card.almanacId)).toContain(
+        "tiny-guided-domain",
+      );
+      expect(inventory.setupIntake.compile.state).toBe("blocked");
+      expect(inventory.setupIntake.compile.reason).toContain("already exists");
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 60_000 });
+
+  test("studio compile reports a failed stage and resumes behind a fresh confirmation", async () => {
+    const sourcePath = join(root, "tiny-guided.md");
+    await writeFile(
+      sourcePath,
+      "# Tiny Guided Domain\n\nTiny Guided Domain supports guided activation workflows.\n",
+      "utf8",
+    );
+    const sourceUrl = pathToFileURL(sourcePath).href;
+    const fullEnv = guidedCreateMockEnv(sourceUrl);
+    const responses = JSON.parse(
+      fullEnv["ALMANAC_MOCK_RESPONSES"] as string,
+    ) as Record<string, unknown>;
+    delete responses["11-benchmark-gen@v3"];
+    const brokenEnv = {
+      ...fullEnv,
+      ALMANAC_MOCK_RESPONSES: JSON.stringify(responses),
+    };
+
+    const broken = await startStudioForTest(brokenEnv);
+    try {
+      await postJson(`${broken.url}/api/setup/goal`, {
+        goal: "Build an almanac for Tiny Guided Domain",
+      });
+      await postJson(`${broken.url}/api/setup/references`, { url: sourceUrl });
+      const failed = await postJson(`${broken.url}/api/setup/compile`, {
+        confirm: true,
+      });
+      expect(failed.body).toMatchObject({
+        status: "failed",
+        mode: "create",
+        almanacId: "tiny-guided-domain",
+      });
+      const recovery = failed.body.recovery as {
+        stageId: string;
+        resumeCommand: string;
+      };
+      expect(recovery.stageId).toBe("11-benchmark-gen");
+      expect(recovery.resumeCommand).toContain(
+        "almanac update tiny-guided-domain --from-stage=11-benchmark-gen",
+      );
+    } finally {
+      broken.stop();
+    }
+
+    const repaired = await startStudioForTest(fullEnv);
+    try {
+      const intake = await fetch(`${repaired.url}/api/inventory`).then(
+        async (response) => (await response.json()) as {
+          setupIntake: { compile: { state: string; label: string } };
+        },
+      );
+      expect(intake.setupIntake.compile).toMatchObject({
+        state: "runnable",
+        label: "Resume compile",
+      });
+
+      const unconfirmed = await postJson(`${repaired.url}/api/setup/compile`, {});
+      expect(unconfirmed.body.status).toBe("blocked");
+
+      const resumed = await postJson(`${repaired.url}/api/setup/compile`, {
+        confirm: true,
+      });
+      expect(resumed.body).toMatchObject({
+        status: "ok",
+        mode: "resume",
+        almanacId: "tiny-guided-domain",
+        recovery: null,
+      });
+      expect(
+        existsSync(join(root, "tiny-guided-domain", "manifest.json")),
+      ).toBe(true);
+    } finally {
+      repaired.stop();
+    }
+  }, { timeout: 60_000 });
+
+  test("studio compile blocks on provider readiness without keys", async () => {
+    const studio = await startStudioForTest({
+      ANTHROPIC_API_KEY: undefined,
+      ALMANAC_LLM: undefined,
+    });
+    try {
+      await postJson(`${studio.url}/api/setup/goal`, {
+        goal: "Build an almanac for Tiny Guided Domain",
+      });
+      await postJson(`${studio.url}/api/setup/references`, {
+        url: "https://docs.example.com/guide",
+      });
+      const inventory = await fetch(`${studio.url}/api/inventory`).then(
+        async (response) => (await response.json()) as {
+          setupIntake: { compile: { state: string } };
+        },
+      );
+      expect(inventory.setupIntake.compile.state).toBe("handoff");
+
+      const compile = await postJson(`${studio.url}/api/setup/compile`, {
+        confirm: true,
+      });
+      expect(compile.body.status).toBe("blocked");
+      expect(String(compile.body.summary)).toContain("set ANTHROPIC_API_KEY");
+      expect(existsSync(join(root, "tiny-guided-domain"))).toBe(false);
+    } finally {
+      studio.stop();
+    }
+  }, { timeout: 30_000 });
 
   test("status and profile expose first-answer suggested questions", async () => {
     const demo = runCli(["demo", "--root", root]);

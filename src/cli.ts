@@ -285,6 +285,7 @@ import {
   type StudioAlmanacCard,
   type StudioCommand,
   type StudioHistorySummary,
+  type StudioSetupCompileAction,
   type StudioSetupIntake,
   type StudioSnapshot,
   type StudioSourceChecklistSummary,
@@ -315,6 +316,7 @@ import {
 import {
   addSetupReference,
   readSetupReferences,
+  setSetupGoal,
 } from "./manage/setup-references.ts";
 import {
   RefreshStatusError,
@@ -5471,8 +5473,8 @@ async function buildStartReport(
 ): Promise<StartReport> {
   const items = await readLifecycleInventory(opts.root);
   const provider = startProviderStatus();
-  const goal = normalizeStartGoal(goalParts);
   const staged = await readSetupReferences(opts.root);
+  const goal = normalizeStartGoal(goalParts) ?? staged.goal;
   const sources = uniqueStrings([
     ...normalizeStartSources(opts.source),
     ...staged.references.map((reference) => reference.url),
@@ -7270,6 +7272,17 @@ async function cmdStudio(opts: StudioOptions): Promise<void> {
         const intake = await buildStudioSetupIntake(opts.root);
         return { ...result, setupIntake: intake };
       },
+      setSetupGoal: async (goal) => {
+        const result = await setSetupGoal({ root: opts.root, goal });
+        const intake = await buildStudioSetupIntake(opts.root);
+        return { ...result, setupIntake: intake };
+      },
+      runSetupCompile: (request) =>
+        runStudioSetupCompile(opts.root, {
+          source: "studio",
+          confirmed: request.confirmed,
+        }),
+      loadSetupCompileStatus: () => loadStudioSetupCompileStatus(opts.root),
     });
     const started = {
       schemaVersion: "0.1.0" as const,
@@ -7347,14 +7360,379 @@ async function buildStudioSnapshot(root: string): Promise<StudioSnapshot> {
 
 async function buildStudioSetupIntake(root: string): Promise<StudioSetupIntake> {
   const staged = await readSetupReferences(root);
-  const checklist = buildStartSourceChecklist(
-    staged.references.map((reference) => reference.url),
-    root,
-  );
+  const urls = staged.references.map((reference) => reference.url);
+  const checklist = buildStartSourceChecklist(urls, root);
+  const draft =
+    staged.goal === null
+      ? null
+      : buildStartGoalDraft(staged.goal, root, startProviderStatus(), urls);
   return {
+    goal: staged.goal,
+    slug: draft?.slug ?? null,
     references: staged.references,
     checklist: studioSourceChecklistSummary(checklist),
+    compile: await deriveStudioSetupCompileAction({ root, staged, draft }),
   };
+}
+
+async function deriveStudioSetupCompileAction(args: {
+  root: string;
+  staged: Awaited<ReturnType<typeof readSetupReferences>>;
+  draft: StartGoalDraft | null;
+}): Promise<StudioSetupCompileAction> {
+  const rootSuffix = rootArg(args.root);
+  if (args.draft === null) {
+    return {
+      state: "blocked",
+      label: "Compile new almanac",
+      reason: "set the almanac goal before compiling",
+      command: `almanac start "<goal>"${rootSuffix}`,
+    };
+  }
+  if (args.staged.references.length === 0) {
+    return {
+      state: "blocked",
+      label: "Compile new almanac",
+      reason: "stage at least one trusted reference before compiling",
+      command: args.draft.applyCommand,
+    };
+  }
+  const almanacDir = almanacDirPath(args.root, args.draft.slug);
+  if (existsSync(almanacDir)) {
+    try {
+      const state = await readCompileState(almanacDir);
+      const recovery = buildStageFailureRecovery({
+        almanacId: args.draft.slug,
+        root: args.root,
+        almanacDir,
+        state,
+      });
+      if (recovery !== null) {
+        return {
+          state:
+            deriveProviderReadiness().llm.presence === "absent"
+              ? "handoff"
+              : "runnable",
+          label: "Resume compile",
+          reason: `stage ${recovery.stageId} failed; ${recovery.guidance}`,
+          command: recovery.resumeCommand,
+        };
+      }
+      return {
+        state: "blocked",
+        label: "Compile new almanac",
+        reason: `almanac ${args.draft.slug} already exists; use its guided operations`,
+        command: `almanac status ${args.draft.slug}${rootSuffix}`,
+      };
+    } catch {
+      return {
+        state: "blocked",
+        label: "Compile new almanac",
+        reason: `directory ${args.draft.slug} exists but its compile state is unreadable`,
+        command: `almanac doctor ${args.draft.slug}${rootSuffix}`,
+      };
+    }
+  }
+  if (deriveProviderReadiness().llm.presence === "absent") {
+    return {
+      state: "handoff",
+      label: "Compile new almanac",
+      reason:
+        "no provider detected; run the command below with ANTHROPIC_API_KEY, or restart Studio with the key to compile here",
+      command: args.draft.applyCommand,
+    };
+  }
+  return {
+    state: "runnable",
+    label: "Compile new almanac",
+    reason:
+      "runs the provider-backed compile pipeline over the staged references after explicit confirmation",
+    command: args.draft.applyCommand,
+  };
+}
+
+interface StudioSetupCompileResult {
+  schemaVersion: "0.1.0";
+  status: "ok" | "failed" | "blocked";
+  mode: "create" | "resume" | null;
+  almanacId: string | null;
+  almanacDir: string | null;
+  summary: string;
+  reasons: string[];
+  stages: { succeeded: number; skipped: number; failed: string[] } | null;
+  recovery: {
+    stageId: string;
+    guidance: string;
+    resumeCommand: string;
+    inspectCommand: string;
+  } | null;
+  nextActions: string[];
+}
+
+function blockedStudioSetupCompile(
+  reason: string,
+  nextActions: string[] = [],
+): StudioSetupCompileResult {
+  return {
+    schemaVersion: "0.1.0",
+    status: "blocked",
+    mode: null,
+    almanacId: null,
+    almanacDir: null,
+    summary: reason,
+    reasons: [reason],
+    stages: null,
+    recovery: null,
+    nextActions,
+  };
+}
+
+async function runStudioSetupCompile(
+  root: string,
+  request: OperationRunRequest,
+): Promise<StudioSetupCompileResult> {
+  const gateReason = operationGateBlockReason({
+    providerRequired: true,
+    confirmationRequired: true,
+    request,
+    readiness: deriveProviderReadiness(),
+  });
+  if (gateReason !== null) {
+    return blockedStudioSetupCompile(gateReason);
+  }
+  const staged = await readSetupReferences(root);
+  if (staged.goal === null) {
+    return blockedStudioSetupCompile("set the almanac goal before compiling", [
+      `almanac start "<goal>"${rootArg(root)}`,
+    ]);
+  }
+  if (staged.references.length === 0) {
+    return blockedStudioSetupCompile(
+      "stage at least one trusted reference before compiling",
+    );
+  }
+  const urls = staged.references.map((reference) => reference.url);
+  const draft = buildStartGoalDraft(staged.goal, root, startProviderStatus(), urls);
+  const almanacDir = almanacDirPath(root, draft.slug);
+  const lockKey = guidedOperationLocks.key(root, draft.slug);
+  if (!guidedOperationLocks.tryAcquire(lockKey)) {
+    return blockedStudioSetupCompile(OPERATION_ALREADY_RUNNING_REASON);
+  }
+  try {
+    if (existsSync(almanacDir)) {
+      const state = await readCompileState(almanacDir);
+      const recovery = buildStageFailureRecovery({
+        almanacId: draft.slug,
+        root,
+        almanacDir,
+        state,
+      });
+      if (recovery === null) {
+        return blockedStudioSetupCompile(
+          `almanac ${draft.slug} already exists; use its guided operations`,
+          [`almanac status ${draft.slug}${rootArg(root)}`],
+        );
+      }
+      return await runGuidedPipelineCompile({
+        mode: "resume",
+        almanacId: draft.slug,
+        root,
+        almanacDir,
+        fromStage: recovery.stageId,
+      });
+    }
+    return await runGuidedPipelineCompile({
+      mode: "create",
+      almanacId: draft.slug,
+      root,
+      almanacDir,
+      draft,
+    });
+  } catch (e) {
+    return {
+      schemaVersion: "0.1.0",
+      status: "failed",
+      mode: existsSync(almanacDir) ? "resume" : "create",
+      almanacId: draft.slug,
+      almanacDir,
+      summary: `compile failed before the pipeline could finish: ${unknownErrorMessage(e)}`,
+      reasons: [unknownErrorMessage(e)],
+      stages: null,
+      recovery: null,
+      nextActions: [`almanac doctor ${draft.slug}${rootArg(root)}`],
+    };
+  } finally {
+    guidedOperationLocks.release(lockKey);
+  }
+}
+
+/**
+ * Run the compile pipeline for the staged setup without exiting the process.
+ * Composes the same library entrypoints as `almanac new` (create) and
+ * `almanac update --from-stage --no-bump` (resume): bootstrap or stage
+ * reset, then `runPipeline` with the same persistence hooks.
+ */
+async function runGuidedPipelineCompile(
+  args:
+    | {
+        mode: "create";
+        almanacId: string;
+        root: string;
+        almanacDir: string;
+        draft: StartGoalDraft;
+      }
+    | {
+        mode: "resume";
+        almanacId: string;
+        root: string;
+        almanacDir: string;
+        fromStage: StageId;
+      },
+): Promise<StudioSetupCompileResult> {
+  let manifest: AlmanacManifest;
+  let state: CompileState;
+  if (args.mode === "create") {
+    const compileOptions: CompileOptions = {
+      depth: args.draft.depth,
+      sourcesHint: args.draft.reviewedReferences,
+      scopeHint: args.draft.scope,
+      target: "both",
+      autoApprove: true,
+      language: "ts",
+    };
+    const bootstrapped = bootstrapAlmanac({
+      almanacId: args.almanacId,
+      domain: args.draft.domain,
+      displayName: args.draft.displayName,
+      freshnessProfileId: args.draft.profile,
+      runId: generateRunId(),
+      forgerVersion: FORGER_VERSION,
+      options: compileOptions,
+    });
+    manifest = bootstrapped.manifest;
+    await ensureAlmanacLayout(args.almanacDir);
+    await writeManifest(args.almanacDir, manifest);
+    const stage0Hash = sha256Hex(
+      JSON.stringify(manifest) + "\n" + JSON.stringify(bootstrapped.compileState),
+    );
+    state = markStageCompleted(
+      bootstrapped.compileState,
+      "00-bootstrap",
+      new Date(),
+      { outputHash: stage0Hash },
+    );
+    await writeCompileState(args.almanacDir, state);
+  } else {
+    const prevManifest = await readManifest(args.almanacDir);
+    manifest = { ...prevManifest, forgerVersion: FORGER_VERSION };
+    state = resetStagesForUpdate(await readCompileState(args.almanacDir), args.fromStage, {
+      runId: generateRunId(),
+      now: new Date(),
+    });
+    await writeManifest(args.almanacDir, manifest);
+    await writeCompileState(args.almanacDir, state);
+  }
+
+  const { runners } = buildRunners();
+  const result = await runPipeline({
+    almanacDir: args.almanacDir,
+    state,
+    manifest,
+    runners,
+    persistState: (s) => writeCompileState(args.almanacDir, s),
+    persistManifest: (m) => writeManifestWithActualCounts(args.almanacDir, m),
+    log: () => {},
+  });
+  const recovery =
+    result.failed.length === 0
+      ? null
+      : buildStageFailureRecovery({
+          almanacId: args.almanacId,
+          root: args.root,
+          almanacDir: args.almanacDir,
+          state: result.state,
+          failedStages: result.failed,
+        });
+  const rootSuffix = rootArg(args.root);
+  return {
+    schemaVersion: "0.1.0",
+    status: result.failed.length === 0 ? "ok" : "failed",
+    mode: args.mode,
+    almanacId: args.almanacId,
+    almanacDir: args.almanacDir,
+    summary:
+      result.failed.length === 0
+        ? `compile completed: ${result.succeeded.length} succeeded, ${result.skipped.length} skipped`
+        : `compile halted at stage ${result.failed[0]}`,
+    reasons:
+      recovery === null ? [] : [`${recovery.stageId}: ${recovery.guidance}`],
+    stages: {
+      succeeded: result.succeeded.length,
+      skipped: result.skipped.length,
+      failed: [...result.failed],
+    },
+    recovery:
+      recovery === null
+        ? null
+        : {
+            stageId: recovery.stageId,
+            guidance: recovery.guidance,
+            resumeCommand: recovery.resumeCommand,
+            inspectCommand: recovery.inspectCommand,
+          },
+    nextActions:
+      result.failed.length === 0
+        ? [
+            `almanac status ${args.almanacId}${rootSuffix}`,
+            `almanac inspect ${args.almanacId}${rootSuffix}`,
+          ]
+        : [
+            recovery?.resumeCommand ?? `almanac doctor ${args.almanacId}${rootSuffix}`,
+            recovery?.inspectCommand ?? `almanac inspect ${args.almanacId}${rootSuffix}`,
+          ],
+  };
+}
+
+async function loadStudioSetupCompileStatus(root: string): Promise<unknown> {
+  const staged = await readSetupReferences(root);
+  if (staged.goal === null) {
+    return { exists: false, almanacId: null, reason: "no goal staged" };
+  }
+  const draft = buildStartGoalDraft(
+    staged.goal,
+    root,
+    startProviderStatus(),
+    staged.references.map((reference) => reference.url),
+  );
+  const almanacDir = almanacDirPath(root, draft.slug);
+  if (!existsSync(almanacDir)) {
+    return { exists: false, almanacId: draft.slug, reason: "compile has not started" };
+  }
+  try {
+    const state = await readCompileState(almanacDir);
+    const counts = stageStatusCounts(state);
+    const currentStage =
+      (STAGE_IDS as readonly StageId[]).find(
+        (stageId) => state.stages[stageId].status === "running",
+      ) ?? null;
+    const failedStages = (STAGE_IDS as readonly StageId[]).filter(
+      (stageId) => state.stages[stageId].status === "failed",
+    );
+    return {
+      exists: true,
+      almanacId: draft.slug,
+      counts: { ...counts, total: STAGE_IDS.length },
+      currentStage,
+      failedStages,
+    };
+  } catch (e) {
+    return {
+      exists: true,
+      almanacId: draft.slug,
+      unreadable: true,
+      reason: unknownErrorMessage(e),
+    };
+  }
 }
 
 function studioSourceChecklistSummary(

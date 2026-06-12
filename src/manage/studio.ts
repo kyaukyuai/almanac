@@ -145,14 +145,25 @@ export interface StudioSetupReference {
   via: string;
 }
 
+export interface StudioSetupCompileAction {
+  state: "runnable" | "handoff" | "blocked";
+  label: string;
+  reason: string;
+  /** CLI fallback command; always copyable regardless of state. */
+  command: string;
+}
+
 /**
- * Staged references for the next almanac in this root, plus the source
- * checklist they currently satisfy. Mirrors the state `almanac start`
- * planning reads.
+ * Staged goal and references for the next almanac in this root, plus the
+ * source checklist they currently satisfy and the derived compile action.
+ * Mirrors the state `almanac start` planning reads.
  */
 export interface StudioSetupIntake {
+  goal: string | null;
+  slug: string | null;
   references: StudioSetupReference[];
   checklist: StudioSourceChecklistSummary;
+  compile: StudioSetupCompileAction;
 }
 
 export interface StudioSnapshot {
@@ -191,6 +202,16 @@ export interface StartStudioServerOptions {
   ) => Promise<unknown>;
   /** Stage a reference for the next almanac. Staging only — never fetches. */
   addSetupReference?: (url: string) => Promise<unknown>;
+  /** Stage the natural-language goal for the next almanac. */
+  setSetupGoal?: (goal: string) => Promise<unknown>;
+  /**
+   * Run (or resume) the provider-backed compile for the staged setup. The
+   * handler must enforce confirmation, provider readiness, and
+   * single-flight; Studio only transports the request.
+   */
+  runSetupCompile?: (request: StudioOperationRequest) => Promise<unknown>;
+  /** Read derived per-stage compile progress for the staged setup. */
+  loadSetupCompileStatus?: () => Promise<unknown>;
 }
 
 export interface StudioServerHandle {
@@ -309,7 +330,7 @@ async function handleStudioRequest(
       if (options.addSetupReference === undefined) {
         return jsonResponse({ error: "setup-intake-unavailable" }, 501);
       }
-      const referenceUrl = await readStudioReferenceSubmission(request);
+      const referenceUrl = await readStudioStringField(request, "url");
       if (referenceUrl === null) {
         return jsonResponse(
           {
@@ -325,6 +346,46 @@ async function handleStudioRequest(
         return jsonResponse(
           {
             error: "reference-intake-failed",
+            message: (cause as Error).message,
+          },
+          500,
+        );
+      }
+    }
+    if (url.pathname === "/api/setup/goal") {
+      if (options.setSetupGoal === undefined) {
+        return jsonResponse({ error: "setup-intake-unavailable" }, 501);
+      }
+      const goal = await readStudioStringField(request, "goal");
+      if (goal === null) {
+        return jsonResponse(
+          {
+            error: "invalid-goal-request",
+            message: 'request body must be JSON like {"goal": "Build an almanac for ..."}',
+          },
+          400,
+        );
+      }
+      try {
+        return jsonResponse(await options.setSetupGoal(goal));
+      } catch (cause) {
+        return jsonResponse(
+          { error: "goal-intake-failed", message: (cause as Error).message },
+          500,
+        );
+      }
+    }
+    if (url.pathname === "/api/setup/compile") {
+      if (options.runSetupCompile === undefined) {
+        return jsonResponse({ error: "setup-compile-unavailable" }, 501);
+      }
+      const operationRequest = await readStudioOperationRequest(request);
+      try {
+        return jsonResponse(await options.runSetupCompile(operationRequest));
+      } catch (cause) {
+        return jsonResponse(
+          {
+            error: "setup-compile-failed",
             message: (cause as Error).message,
           },
           500,
@@ -369,6 +430,12 @@ async function handleStudioRequest(
   if (url.pathname === "/api/inventory") {
     return jsonResponse(await options.loadSnapshot());
   }
+  if (url.pathname === "/api/setup/compile/status") {
+    if (options.loadSetupCompileStatus === undefined) {
+      return jsonResponse({ error: "setup-compile-unavailable" }, 501);
+    }
+    return jsonResponse(await options.loadSetupCompileStatus());
+  }
   const statusMatch = url.pathname.match(/^\/api\/status\/([^/]+)$/);
   if (statusMatch !== null) {
     const almanacId = decodeURIComponent(statusMatch[1] ?? "");
@@ -396,14 +463,16 @@ async function readStudioOperationRequest(
   }
 }
 
-/** Parse a reference submission body; null when it is not a usable request. */
-async function readStudioReferenceSubmission(
+/** Parse a string field from a JSON body; null when it is not usable. */
+async function readStudioStringField(
   request: Request,
+  field: string,
 ): Promise<string | null> {
   try {
-    const body = (await request.json()) as { url?: unknown } | null;
-    if (body === null || typeof body.url !== "string") return null;
-    return body.url;
+    const body = (await request.json()) as Record<string, unknown> | null;
+    if (body === null) return null;
+    const value = body[field];
+    return typeof value === "string" ? value : null;
   } catch {
     return null;
   }
@@ -530,11 +599,19 @@ function renderSetupIntake(intake: StudioSetupIntake): string {
           .slice(0, 3)
           .map((gap) => `<li>${escapeHtml(gap)}</li>`)
           .join("")}</ul>`;
+  const compileButton =
+    intake.compile.state === "runnable"
+      ? `<button type="button" data-setup-compile data-compile-label="${escapeAttribute(intake.compile.label)}">${escapeHtml(intake.compile.label)}</button>`
+      : "";
   return `<section class="providers setup-intake" aria-label="Reference intake">
   <div class="providers-head">
     <strong>Plan a new almanac</strong>
     <span data-setup-checklist-status="${escapeAttribute(intake.checklist.status)}">${escapeHtml(intake.checklist.summary)}</span>
   </div>
+  <form data-setup-goal-form>
+    <input type="text" name="goal" placeholder="Build an almanac for ..." aria-label="Almanac goal" value="${escapeAttribute(intake.goal ?? "")}" required>
+    <button type="submit">${intake.goal === null ? "Set goal" : "Update goal"}</button>
+  </form>
   <form data-setup-reference-form>
     <input type="url" name="url" placeholder="https://docs.example.com/... or /path/to/notes.md" aria-label="Reference URL or file path" required>
     <button type="submit">Add reference</button>
@@ -542,6 +619,20 @@ function renderSetupIntake(intake: StudioSetupIntake): string {
   <div class="setup-intake-result" data-setup-reference-result role="status" aria-live="polite"></div>
   <ul class="setup-references">${references}</ul>
   ${gaps}
+  <div class="setup-compile" data-compile-state="${escapeAttribute(intake.compile.state)}">
+    <div class="command-meta">
+      <strong>${escapeHtml(intake.compile.label)}</strong>
+      <span>provider key</span>
+      <span>${escapeHtml(intake.compile.state)}</span>
+    </div>
+    <p>${escapeHtml(intake.compile.reason)}</p>
+    <pre><code>${escapeHtml(intake.compile.command)}</code></pre>
+    <div class="command-actions">
+      ${compileButton}
+      <button type="button" data-copy="${escapeAttribute(intake.compile.command)}">Copy</button>
+    </div>
+    <div class="setup-intake-result" data-setup-compile-result role="status" aria-live="polite"></div>
+  </div>
   <p class="muted">Staged references feed the source checklist that <code>almanac start</code> reads. Nothing is fetched until a provider-backed compile runs.</p>
 </section>`;
 }
@@ -787,6 +878,10 @@ main{padding:24px 32px}
 .setup-intake-result{border:1px solid #d9dedf;border-radius:6px;margin-top:8px;padding:8px;font-size:12px}
 .setup-intake-result[data-status="rejected"],.setup-intake-result[data-status="error"]{border-color:#b66a67;background:#fff0ef}
 .setup-intake-result[data-status="duplicate"]{border-color:#9d8358;background:#fff7e8}
+.setup-intake-result[data-status="failed"],.setup-intake-result[data-status="blocked"]{border-color:#b66a67;background:#fff0ef}
+.setup-compile{border:1px solid #d9dedf;border-radius:8px;padding:10px;background:#fbfcfc;margin-top:10px}
+.setup-compile[data-compile-state="runnable"]{border-color:#5e8f63}
+.setup-compile p{font-size:12px;color:#526064;margin-top:6px}
 .grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(340px,1fr));gap:16px}
 .card{background:#ffffff;border:1px solid #d9dedf;border-radius:8px;padding:18px;display:flex;flex-direction:column;gap:16px}
 .card-header{display:flex;justify-content:space-between;gap:12px}
@@ -833,29 +928,33 @@ button[disabled]{cursor:not-allowed;opacity:.65}
 function studioJs(): string {
   return `
 document.addEventListener("submit", async (event) => {
-  const form = event.target.closest("form[data-setup-reference-form]");
-  if (!form) return;
+  const referenceForm = event.target.closest("form[data-setup-reference-form]");
+  const goalForm = event.target.closest("form[data-setup-goal-form]");
+  if (!referenceForm && !goalForm) return;
   event.preventDefault();
-  const input = form.querySelector("input[name=url]");
   const result = document.querySelector("[data-setup-reference-result]");
-  const url = input && input.value ? input.value.trim() : "";
-  if (!url) return;
+  const endpoint = referenceForm ? "/api/setup/references" : "/api/setup/goal";
+  const field = referenceForm ? "url" : "goal";
+  const form = referenceForm || goalForm;
+  const input = form.querySelector("input[name=" + field + "]");
+  const value = input && input.value ? input.value.trim() : "";
+  if (!value) return;
   try {
-    const response = await fetch("/api/setup/references", {
+    const response = await fetch(endpoint, {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ url })
+      body: JSON.stringify({ [field]: value })
     });
     const body = await response.json();
-    if (body.status === "accepted") {
+    if (body.status === "accepted" || body.status === "saved") {
       window.location.reload();
       return;
     }
     setSetupResult(result, body.status || "error",
-      body.reason || body.message || "Reference was not staged.");
+      body.reason || body.message || "Input was not staged.");
   } catch (error) {
     setSetupResult(result, "error",
-      error && error.message ? error.message : "Reference intake failed.");
+      error && error.message ? error.message : "Setup intake failed.");
   }
 });
 
@@ -865,7 +964,62 @@ function setSetupResult(container, status, message) {
   container.textContent = status + ": " + message;
 }
 
+async function runSetupCompile(button) {
+  const label = button.getAttribute("data-compile-label") || "Compile";
+  const confirmed = window.confirm(
+    label + "?\\n\\nThis calls your configured AI provider (it may incur cost), " +
+    "reads the staged references through the compile pipeline, and writes " +
+    "almanac files under this root."
+  );
+  if (!confirmed) return;
+  const result = document.querySelector("[data-setup-compile-result]");
+  button.disabled = true;
+  const originalText = button.textContent;
+  button.textContent = "Compiling";
+  setSetupResult(result, "running", "Compile started; watching stage progress.");
+  const progress = setInterval(async () => {
+    try {
+      const response = await fetch("/api/setup/compile/status");
+      const body = await response.json();
+      if (body && body.exists && body.counts) {
+        setSetupResult(result, "running",
+          "stage progress: " + body.counts.completed + "/" + body.counts.total +
+          " completed" + (body.currentStage ? ", running " + body.currentStage : ""));
+      }
+    } catch {}
+  }, 2000);
+  try {
+    const response = await fetch("/api/setup/compile", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ confirm: true })
+    });
+    const body = await response.json();
+    if (body.status === "ok") {
+      window.location.reload();
+      return;
+    }
+    setSetupResult(result, body.status || "error",
+      (body.summary || body.message || "Compile did not complete.") +
+      (body.recovery && body.recovery.resumeCommand
+        ? " — resume: " + body.recovery.resumeCommand
+        : ""));
+  } catch (error) {
+    setSetupResult(result, "error",
+      error && error.message ? error.message : "Compile request failed.");
+  } finally {
+    clearInterval(progress);
+    button.disabled = false;
+    button.textContent = originalText;
+  }
+}
+
 document.addEventListener("click", async (event) => {
+  const compileButton = event.target.closest("button[data-setup-compile]");
+  if (compileButton) {
+    await runSetupCompile(compileButton);
+    return;
+  }
   const runButton = event.target.closest("button[data-run-operation]");
   if (runButton) {
     await runOperation(runButton);

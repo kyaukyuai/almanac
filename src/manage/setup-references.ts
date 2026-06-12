@@ -22,6 +22,8 @@ export interface SetupReference {
 
 export interface SetupReferencesFile {
   schemaVersion: "0.1.0";
+  /** Natural-language goal for the next almanac; null until staged. */
+  goal: string | null;
   references: SetupReference[];
 }
 
@@ -30,6 +32,12 @@ export type SetupReferenceAddResult =
   | { status: "duplicate"; reference: SetupReference }
   | { status: "rejected"; url: string; reason: string };
 
+export type SetupGoalResult =
+  | { status: "saved"; goal: string }
+  | { status: "rejected"; reason: string };
+
+const SETUP_GOAL_MAX_LENGTH = 300;
+
 export function setupReferencesPath(root: string): string {
   return join(root, "setup-references.json");
 }
@@ -37,19 +45,28 @@ export function setupReferencesPath(root: string): string {
 export async function readSetupReferences(
   root: string,
 ): Promise<SetupReferencesFile> {
+  const empty: SetupReferencesFile = {
+    schemaVersion: "0.1.0",
+    goal: null,
+    references: [],
+  };
   let raw: string;
   try {
     raw = await readFile(setupReferencesPath(root), "utf8");
   } catch {
-    return { schemaVersion: "0.1.0", references: [] };
+    return empty;
   }
   try {
     const parsed = JSON.parse(raw) as SetupReferencesFile;
     if (!Array.isArray(parsed.references)) {
-      return { schemaVersion: "0.1.0", references: [] };
+      return empty;
     }
     return {
       schemaVersion: "0.1.0",
+      goal:
+        typeof parsed.goal === "string" && parsed.goal.trim().length > 0
+          ? parsed.goal
+          : null,
       references: parsed.references.filter(
         (reference): reference is SetupReference =>
           typeof reference === "object" &&
@@ -59,7 +76,7 @@ export async function readSetupReferences(
       ),
     };
   } catch {
-    return { schemaVersion: "0.1.0", references: [] };
+    return empty;
   }
 }
 
@@ -122,15 +139,40 @@ export async function addSetupReference(args: {
     addedAt: (args.now ?? new Date()).toISOString(),
     via: args.via,
   };
-  const next: SetupReferencesFile = {
-    schemaVersion: "0.1.0",
+  await writeSetupReferences(args.root, {
+    ...file,
     references: [...file.references, reference],
-  };
-  await mkdir(args.root, { recursive: true });
+  });
+  return { status: "accepted", reference };
+}
+
+export async function setSetupGoal(args: {
+  root: string;
+  goal: string;
+}): Promise<SetupGoalResult> {
+  const goal = args.goal.trim().replace(/\s+/g, " ");
+  if (goal.length === 0) {
+    return { status: "rejected", reason: "goal is empty" };
+  }
+  if (goal.length > SETUP_GOAL_MAX_LENGTH) {
+    return {
+      status: "rejected",
+      reason: `goal is longer than ${SETUP_GOAL_MAX_LENGTH} characters`,
+    };
+  }
+  const file = await readSetupReferences(args.root);
+  await writeSetupReferences(args.root, { ...file, goal });
+  return { status: "saved", goal };
+}
+
+async function writeSetupReferences(
+  root: string,
+  file: SetupReferencesFile,
+): Promise<void> {
+  await mkdir(root, { recursive: true });
   await writeFile(
-    setupReferencesPath(args.root),
-    JSON.stringify(next, null, 2) + "\n",
+    setupReferencesPath(root),
+    JSON.stringify(file, null, 2) + "\n",
     "utf8",
   );
-  return { status: "accepted", reference };
 }
