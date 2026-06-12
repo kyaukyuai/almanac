@@ -1,6 +1,6 @@
 # almanac — Design Document
 
-Status: **v0.17.0 shipped** · last updated 2026-06-10.
+Status: **v0.17.0 shipped; v0.18 RC** · last updated 2026-06-12.
 
 This document is the single source for the architectural and pipeline design of
 `almanac`. It supersedes the original `savant-forge` README spec and the prior
@@ -1269,7 +1269,34 @@ See [`docs/v0.17-plan.md`](./v0.17-plan.md) for scope and non-goals. See
 [`docs/v0.17-rc-smoke.md`](./v0.17-rc-smoke.md) for the provider-free and
 Enterprise AI release-candidate smoke sequence.
 
-### v0.18+ (long-tail)
+### v0.18.0 RC — Provider-Backed Studio
+
+v0.18 is validating the Provider-Backed Studio release:
+
+- A derived provider readiness report (env var names only, never values) is
+  shared by `doctor`, `status`, and Studio, listing which operations each
+  detected credential unlocks.
+- Guided operations run behind an execution gate: Studio POSTs must carry an
+  explicit confirmation, provider-backed operations require detected
+  readiness, and one operation runs per almanac at a time.
+- Studio stages the next almanac's goal and trusted references in
+  `setup-references.json`; the same state feeds `almanac start` planning.
+- Confirmation-gated compile and first answer run from Studio through the
+  same library entrypoints and artifacts as the CLI (`runPipeline`,
+  `runAnswerSession`, `saveAnswerArtifact`), with pollable stage progress and
+  failed-stage resume behind a fresh confirmation.
+- The end-to-end first-use loop — intake, compile, first answer, replay,
+  promotion into answer checks, suite, and readiness evidence — is reachable
+  without leaving Studio; without a detected provider every step renders the
+  v0.17 CLI handoff.
+- Studio remains localhost-only, mutation-free on GET, and free of credential
+  input or echo.
+
+See [`docs/v0.18-plan.md`](./v0.18-plan.md) for scope and non-goals. See
+[`docs/v0.18-rc-smoke.md`](./v0.18-rc-smoke.md) for the provider-free and
+Enterprise AI release-candidate smoke sequence.
+
+### v0.19+ (long-tail)
 
 - Hosted refresh scheduler / resident daemon built on the v0.6 CLI contract.
 - Slack adapter
